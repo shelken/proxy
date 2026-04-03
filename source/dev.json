@@ -1,0 +1,24 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        "brew.sh",
+        "iterm2.com",
+        "rockylinux.org",
+        "npmjs.org",
+        "nixos.org",
+        "determinate.systems",
+        "github.com",
+        "githubusercontent.com",
+        "githubassets.com",
+        "docker.io",
+        "lscr.io",
+        "ghcr.io",
+        "gcr.io",
+        "quay.io",
+        "registry.k8s.io"
+      ]
+    }
+  ]
+}

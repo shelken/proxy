@@ -1,0 +1,36 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "ai.google.dev"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "aistudio.google.com",
+        "makersuite.google.com",
+        "generativelanguage.googleapis.com",
+        "bard.google.com",
+        "deepmind.com",
+        "deepmind.google",
+        "gemini.google.com",
+        "generativeai.google",
+        "proactivebackend-pa.googleapis.com",
+        "developerprofiles-pa.googleapis.com",
+        "clients6.google.com",
+        "cloudcode-pa.googleapis.com",
+        "play.googleapis.com",
+        "notebooklm.google",
+        "notebooklm.google.com",
+        "nanobanana.ai"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "developerprofiles",
+        "generativelanguage"
+      ]
+    }
+  ]
+}

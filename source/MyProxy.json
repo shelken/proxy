@@ -1,0 +1,54 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        "poe.com",
+        "fastgpt.run",
+        "huggingface.co",
+        "arc.net",
+        "arcboosts.com",
+        "bybits.org",
+        "bybit.biz",
+        "byapps.net",
+        "bycsi.com",
+        "static.cloudflareinsights.com",
+        "metamask.io",
+        "moomoo.com",
+        "futunn.com",
+        "futufin.com",
+        "gstatic.com",
+        "seagm.com",
+        "pokemon-webapi.appspot.com",
+        "gift.pokemontcgpocket.com",
+        "parsec.app",
+        "redd.it",
+        "reddit.com",
+        "redditstatic.com",
+        "redditmedia.com",
+        "hk",
+        "todoist.com",
+        "raycast.com",
+        "wikimedia.org",
+        "wikipedia.org",
+        "nodeseek.com",
+        "imgur.com",
+        "api.revenuecat.com",
+        "v2ex.com"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "bybit",
+        "miaona"
+      ]
+    },
+    {
+      "ip_cidr": [
+        "1.1.1.1/32",
+        "8.8.8.8/32",
+        "8.8.4.4/32"
+      ]
+    }
+  ]
+}

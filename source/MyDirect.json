@@ -1,0 +1,79 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "🎈.com"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "qwer-cn.top",
+        "kelee.one",
+        "amazon.com.cn",
+        "amazonaws.com.cn",
+        "zajourney.com",
+        "za.group",
+        "hsbc.com.hk",
+        "hdslb.com",
+        "bochk.com",
+        "cup.com.cn",
+        "95516.com",
+        "store.epicgames.com",
+        "steamserver.net",
+        "icloud.com.cn",
+        "ipinfo.io",
+        "ip.sb",
+        "ident.me",
+        "myip.com",
+        "ipapi.co",
+        "ip-api.com",
+        "ipwho.is",
+        "ipw.cn",
+        "hotmail.com",
+        "139.com",
+        "live.com",
+        "ooooo.space",
+        "yoooo.xyz",
+        "mirrorify.net",
+        "m.daocloud.io",
+        "daocloud.io",
+        "gh-proxy.org",
+        "ghproxy.link",
+        "ghfast.top",
+        "plex.direct",
+        "plex.tv",
+        "cn",
+        "lan",
+        "local",
+        "netbird.io",
+        "ocsp.digicert.com",
+        "gitee.io",
+        "avbase.net",
+        "miaona.tv",
+        "meituan.net",
+        "cloudflare.182682.xyz"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "icloud"
+      ]
+    },
+    {
+      "process_name": [
+        "tailscale",
+        "tailscaled",
+        "zerotier-one",
+        "parsecd"
+      ]
+    },
+    {
+      "ip_cidr": [
+        "240e::/18",
+        "2409:8000::/20",
+        "2408:8000::/20"
+      ]
+    }
+  ]
+}

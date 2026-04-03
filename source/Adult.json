@@ -1,0 +1,176 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "s.dsqcjk.com",
+        "cdn.avfever.net",
+        "hot-box-gen.mushroomtrack.com"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "javdb.com",
+        "jdbstatic.com",
+        "njav.tv",
+        "jable.tv",
+        "hanime1.me",
+        "javlibrary.com",
+        "javbus.com",
+        "javplayer.me",
+        "motv.app",
+        "javtrailers.com",
+        "tktube.com",
+        "fpo.xxx",
+        "ggjav.com",
+        "hohoj.tv",
+        "7mmtv.sx",
+        "4hu.tv",
+        "5masterzzz.site",
+        "jvrlibrary.com",
+        "24av.net",
+        "jdforrepam.com",
+        "btyjscl.com",
+        "czssdgz.com",
+        "cmastd.com",
+        "avfever.net",
+        "skyearth.xyz",
+        "vdownload.hembed.com",
+        "phncdn.com",
+        "phprcdn.com",
+        "mushroomtrack.com",
+        "surrit.com",
+        "xvideos-cdn.com",
+        "cdn-centaurus.com",
+        "mxcontent.net",
+        "sacdnssedge.com",
+        "sp1111ce.cloudatacdn.com",
+        "pornhub.com",
+        "xvv1deos.com",
+        "xvideos.com",
+        "dirtyship.com",
+        "dczssdgz.com",
+        "spankbang.com",
+        "sb-cd.com",
+        "4k2.com",
+        "magi.com",
+        "k2s.cc",
+        "pornolab.net",
+        "plab.site",
+        "fastpic.org"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "porn",
+        "jav",
+        "fc2",
+        "hentai",
+        "xvideo",
+        "javmost",
+        "missav",
+        "123av",
+        "goodav",
+        "javdh",
+        "surrit",
+        "skyearth"
+      ]
+    },
+    {
+      "type": "logical",
+      "mode": "and",
+      "rules": [
+        {
+          "type": "logical",
+          "mode": "or",
+          "rules": [
+            {
+              "domain_suffix": [
+                "online"
+              ]
+            },
+            {
+              "domain_suffix": [
+                "site"
+              ]
+            }
+          ]
+        },
+        {
+          "domain_keyword": [
+            "assets-"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "logical",
+      "mode": "and",
+      "rules": [
+        {
+          "domain_suffix": [
+            "store"
+          ]
+        },
+        {
+          "type": "logical",
+          "mode": "or",
+          "rules": [
+            {
+              "domain_keyword": [
+                "trendcart"
+              ]
+            },
+            {
+              "domain_keyword": [
+                "freshvibe"
+              ]
+            },
+            {
+              "domain_keyword": [
+                "urbanhaze"
+              ]
+            },
+            {
+              "domain_keyword": [
+                "green-leaf"
+              ]
+            },
+            {
+              "domain_keyword": [
+                "red-stone"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "logical",
+      "mode": "and",
+      "rules": [
+        {
+          "domain_suffix": [
+            "space"
+          ]
+        },
+        {
+          "type": "logical",
+          "mode": "or",
+          "rules": [
+            {
+              "domain_keyword": [
+                "radiantflow"
+              ]
+            },
+            {
+              "domain_keyword": [
+                "clear-water"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

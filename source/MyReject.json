@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "msmp.abchina.com.cn"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "loggw-ex.alipay.com",
+        "mum.alibabachengdun.com",
+        "dataflow.biliapi.com",
+        "api.liquidlink.cn",
+        "tracking.miui.com",
+        "mumu.nie.netease.com",
+        "pingma.qq.com",
+        "sentry.io",
+        "spider-tracker.xiaohongshu.com",
+        "apm-native.xiaohongshu.com",
+        "unityads.unity3d.com",
+        "cdn.iads.unitychina.cn",
+        "iads.unity3d.com",
+        "estimatedeferbulk.com"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "analytics-api"
+      ]
+    }
+  ]
+}

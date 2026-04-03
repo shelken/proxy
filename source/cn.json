@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "kind": "external_rule_set",
+  "references": [
+    {
+      "type": "geoip",
+      "value": "cn",
+      "tag": "geoip-cn",
+      "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"
+    }
+  ]
+}
