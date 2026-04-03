@@ -1,0 +1,26 @@
+# tag|policy|url|source
+Advertising|REJECT|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Advertising/Advertising.list|loon
+Apple.list|DIRECT|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Apple/Apple_Domain.list|loon
+ChinaMax.list|DIRECT|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/ChinaMax/ChinaMax.list|loon
+Facebook|Twitter|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Facebook/Facebook.list|loon
+GEOIP_CN|DIRECT|https://raw.githubusercontent.com/Loon0x00/LoonLiteRules/main/direct/cn.list|loon
+Global|Available|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Proxy/Proxy_All.list|loon
+Global_Loon|Available|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Global/Global.list|loon
+Hijacking|REJECT|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list|loon
+Instagram|Twitter|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Instagram/Instagram.list|loon
+Lan.list|DIRECT|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Lan/Lan.list|loon
+mine-AdultNSFW|AdultNSFW|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/Adult.list|loon
+mine-AppleAI|OpenAI|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/Apple-AI.list|loon
+mine-dev|DEV|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/dev.list|loon
+mine-direct|DIRECT|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/MyDirect.list|loon
+mine-gemini|Gemini|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/Gemini.list|loon
+mine-openai|OpenAI|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/OpenAI.list|loon
+mine-proxy|Available|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/MyProxy.list|loon
+mine-ptcg|ntd|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/ptcg.list|loon
+mine-reject|REJECT|https://raw.githubusercontent.com/shelken/subconverter/refs/heads/master/custom/MyReject.list|loon
+Privacy|REJECT|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list|loon
+Spotify|Spotify|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Loon/Spotify/Spotify.list|loon
+Telegram|Telegram|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Telegram/Telegram.list|loon
+TikTok|TikTok|https://raw.githubusercontent.com/Semporia/TikTok-Unlock/master/Loon/TikTok.list|loon
+Twitter/X|Twitter|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/63bc79ab90647613b9f2df80389caf133e4b6214/rule/Loon/Twitter/Twitter.list|loon
+YouTube|YouTube|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/YouTube/YouTube.list|loon

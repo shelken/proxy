@@ -1,0 +1,79 @@
+name: build-singbox-rule-sets
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - "sing-box-rules"
+    paths:
+      - "config/sing-box/rules/lists/remote.txt"
+      - "scripts/singbox_rules.py"
+      - ".github/workflows/build-singbox-rule-sets.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install sing-box
+        shell: bash
+        run: |
+          curl -fsSL https://sing-box.app/install.sh | sudo sh
+          sing-box version
+
+      - name: Build all rule-sets
+        run: uv run python -B scripts/singbox_rules.py build --all
+
+      - name: Prepare publish tree
+        shell: bash
+        run: |
+          rm -rf publish
+          mkdir -p publish/source publish/srs
+          cp config/sing-box/rules/source/generated/*.json publish/source/
+          cp config/sing-box/rules/srs/generated/*.srs publish/srs/
+
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-rule-sets
+          path: publish
+          if-no-files-found: error
+
+      - name: Publish latest artifacts to branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          rm -rf publish-repo
+          mkdir publish-repo
+          cd publish-repo
+          git init
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch --depth=1 origin sing-box-rules; then
+            git checkout -B sing-box-rules FETCH_HEAD
+          else
+            git checkout --orphan sing-box-rules
+          fi
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R ../publish/. .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No artifact changes to publish"
+            exit 0
+          fi
+          TREE_ID="$(git write-tree)"
+          COMMIT_ID="$(printf '%s\n' 'build: update sing-box rules' | git commit-tree "${TREE_ID}")"
+          git reset --hard "${COMMIT_ID}"
+          git push --force origin HEAD:sing-box-rules
