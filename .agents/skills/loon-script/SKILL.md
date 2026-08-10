@@ -135,6 +135,7 @@ const obj = raw ? JSON.parse(raw) : {};
 - **调试**：`console.log($request)` 打印完整结构；`$loon` 可输出 Loon 版本/判断运行环境；改完先日志面板看输出再收尾
 - **插件规则限制**：.lpx 内 `[Rule]` 只能用 DIRECT / REJECT 系 / PROXY，不能引用用户策略组
 - **上游同步**：从上游拉 .lpx 时保留 `#!author` 等元信息，只按项目约束调整 `#!homepage`/`#!icon`
+- **资源链接必须校验**：插件内所有 URL（`#!icon`、`#!homepage`、`script-path` 远程脚本、README 里的引入链接）交付前必须逐个 HTTP 校验状态码（`curl -sI -o /dev/null -w "%{http_code}" <url>`，期望 200；GitHub raw 404 常见原因是文件名/大小写/路径不匹配，用 GitHub API 树接口查真实路径再改）
 
 ## 验证清单（交付前）
 
@@ -146,4 +147,5 @@ const obj = raw ? JSON.parse(raw) : {};
 - [ ] JSON.parse 有 try/catch，失败原样放行
 - [ ] 跨脚本共享数据用显式 key 读写（非默认脚本名 hash），key 带插件名前缀
 - [ ] 涉及登录态/UA 的脚本，header 尽量动态获取（捕获时存持久化，签到读），不全部写死
+- [ ] 插件内所有资源链接（icon/homepage/script-path/README 引入链接）已逐个 HTTP 校验，返回 200
 - [ ] 在 Loon 日志面板实测命中并输出预期

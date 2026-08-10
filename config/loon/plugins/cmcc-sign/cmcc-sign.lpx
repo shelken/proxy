@@ -4,7 +4,7 @@
 #!system=iOS, iPadOS, macOS
 #!loon_version=3.2.1(733)
 #!homepage=https://github.com/shelken/proxy/blob/main/README.md
-#!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/10086.png
+#!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/ChinaMobile.png
 #!tag=签到
 
 [Argument]
