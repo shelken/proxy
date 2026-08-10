@@ -1,5 +1,5 @@
 #!name=中国移动签到有礼
-#!desc=自动提取中国移动APP「签到有礼」活动的登录凭据并每日自动签到。进入中国移动APP活动页后自动提取 QWHD_SESSION_TOKEN，每日 cron 自动签到并通知本月已签天数；凭据失效时通知重新进入 APP。需要 Loon 开启 MITM 并信任证书。
+#!desc=自动提取中国移动APP「签到有礼」活动的登录凭据并每日自动签到。首次进入中国移动APP活动页后自动保存长效登录凭据，每日 cron 自动续期并签到、通知本月已签天数；登录态失效时通知重新进入 APP。需要 Loon 开启 MITM 并信任证书。
 #!author=shelken
 #!system=iOS, iPadOS, macOS
 #!loon_version=3.2.1(733)
@@ -12,8 +12,8 @@ signTime=input,"30 7 * * *",tag=签到时间,desc=每日签到 cron 表达式（
 notify=switch,true,tag=签到结果通知,desc=关闭后不再发送通知
 
 [Script]
-http-response ^https:\/\/wx\.10086\.cn\/qwhdhub\/api\/mark\/user\/info script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/capture.js, requires-body=true, tag=移动签到有礼-提取凭据
+http-request ^https:\/\/client\.app\.coc\.10086\.cn\/biz-orange\/DN\/(refreshSession|documentSharing\/getDocumentSharingByFuncId) script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/capture.js, tag=移动签到有礼-提取凭据
 cron {signTime} script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/sign.js, argument=[{notify}], tag=移动签到有礼-每日签到
 
 [MITM]
-hostname=wx.10086.cn
+hostname=wx.10086.cn, client.app.coc.10086.cn

@@ -1,5 +1,5 @@
 // 中国移动签到有礼 sign.js 测试（bun:test）
-// seams: parseUserInfo / parseDomark / parseMarkstatus / runSign / shouldSign / markSigned
+// seams: parseSid / parseAppToken / parseUserInfo / parseDomark / parseMarkstatus / buildHeaders / runSign / shouldSign / markSigned
 // 运行: just test sign  或  bun test config/loon/plugins/cmcc-sign/sign.test.js
 
 import { test, expect } from "bun:test";
@@ -11,12 +11,29 @@ import { join } from "node:path";
 const src = readFileSync(join(__dirname, "sign.js"), "utf8");
 const pure = src.split("// ===== Loon 环境适配 =====")[0];
 
-// 供测试使用的依赖注入环境
-global.$notification = { post: () => {} };
-global.$done = () => {};
-// eval 声明在模块作用域不暴露，用 new Function 求值并返回函数
-const factory = new Function(pure + "\nreturn { parseUserInfo, parseDomark, parseMarkstatus, runSign, buildHeaders, shouldSign, markSigned };");
-const { parseUserInfo, parseDomark, parseMarkstatus, runSign, buildHeaders, shouldSign, markSigned } = factory();
+const factory = new Function(pure + "\nreturn { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned };");
+const { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned } = factory();
+// ===== parseSid: 从登录页 HTML 解析 sid =====
+test("parseSid: 从 HTML 提取 sid", () => {
+  const html = '<script>var loginPath = "/appTokenLogin?sid=SID20260811T004612625TEST1021122301abc123"</script>';
+  expect(parseSid(html)).toBe("SID20260811T004612625TEST1021122301abc123");
+});
+
+test("parseSid: 无 sid 返回空串", () => {
+  expect(parseSid("<html>no sid</html>")).toBe("");
+});
+
+// ===== parseAppToken: appTokenLogin 响应解析 =====
+test("parseAppToken: SUCCESS 返回 url", () => {
+  const r = parseAppToken('{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=ABC"}}');
+  expect(r.ok).toBe(true);
+  expect(r.url).toContain("token=ABC");
+});
+
+test("parseAppToken: 失败/异常返回 not ok", () => {
+  expect(parseAppToken('{"code":"FAILED"}').ok).toBe(false);
+  expect(parseAppToken("bad").ok).toBe(false);
+});
 
 // ===== parseUserInfo: user/info 响应解析 + 登录态判断 =====
 test("parseUserInfo: SUCCESS 返回已登录+昵称", () => {
@@ -78,64 +95,91 @@ test("parseMarkstatus: 无 markstatus 或解析失败返回 0", () => {
   expect(parseMarkstatus("bad")).toBe(0);
 });
 
-// ===== buildHeaders: 动态 header 优先 + fallback + token 覆盖 =====
-test("buildHeaders: 动态 header 存在时优先使用", () => {
-  const saved = { "User-Agent": "UA-FROM-CAPTURE", "Origin": "https://wx.10086.cn", "login-check": "1" };
-  const h = buildHeaders("TOKEN1", saved);
-  expect(h["User-Agent"]).toBe("UA-FROM-CAPTURE");
-  expect(h["login-check"]).toBe("1");
-});
-
-test("buildHeaders: 动态 header 缺失时 fallback 写死值", () => {
-  const h = buildHeaders("TOKEN1", null);
-  expect(h["User-Agent"]).toContain("iPhone");
-  expect(h["login-check"]).toBe("1");
-});
-
-test("buildHeaders: fallback UA 不含真实设备信息（无 iOS 版本号）", () => {
-  const h = buildHeaders("TOKEN1", null);
+// ===== buildHeaders: 完整 cookie jar + leadeon UA + Referer =====
+test("buildHeaders: 含 yx+session cookie、leadeon UA、完整 Referer", () => {
+  const h = buildHeaders("yx=123; QWHD_SESSION_TOKEN=S1", "https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=ABC");
+  expect(h["Cookie"]).toContain("QWHD_SESSION_TOKEN=S1");
+  expect(h["Cookie"]).toContain("yx=123");
+  expect(h["Referer"]).toContain("token=ABC");
   expect(h["User-Agent"]).not.toMatch(/iOS \d+_\d+/);
-  expect(h["User-Agent"]).not.toContain("leadeon");
-  expect(h["User-Agent"]).not.toContain("CMCCIT");
-});
-
-test("buildHeaders: 动态 header 中 Cookie 被最新 token 覆盖", () => {
-  const saved = { "Cookie": "QWHD_SESSION_TOKEN=OLD; yx=1", "User-Agent": "UA" };
-  const h = buildHeaders("NEWTOKEN", saved);
-  expect(h["Cookie"]).toBe("QWHD_SESSION_TOKEN=NEWTOKEN");
-});
-
-test("buildHeaders: 部分缺字段时合并 fallback", () => {
-  const saved = { "User-Agent": "UA2" };
-  const h = buildHeaders("T", saved);
-  expect(h["User-Agent"]).toBe("UA2");
+  expect(h["User-Agent"]).not.toContain("CMCCIT/12");
   expect(h["login-check"]).toBe("1");
-  expect(h["Content-Type"]).toContain("json");
 });
 
-// ===== runSign: 编排（domark 调用次数）=====
+// ===== runSign: 编排（完整链路调用顺序） =====
 function makeApi() {
   const calls = [];
-  return {
-    calls,
-    api: (url, headers, body, cb) => {
-      calls.push({ url, headers, body });
-      // 默认响应：按 url 路由
-      if (url.includes("user/info")) cb(null, {}, '{"code":"SUCCESS","data":{"nickName":"测试"}}');
-      else if (url.includes("domark")) cb(null, {}, '{"code":"SUCCESS","msg":"成功"}');
-      else if (url.includes("markstatus")) cb(null, {}, '{"code":"SUCCESS","data":{"markstatus":[]}}');
-      else cb("unknown", null, "");
-    },
+  const api = (url, headers, body, cb) => {
+    calls.push({ url, headers, body });
+    if (url.includes("qwhdsso/login")) {
+      cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    } else if (url.includes("appTokenLogin")) {
+      cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
+    } else if (url.includes("qwhdmark/1021122301?token=") && !url.includes("/api/")) {
+      cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
+    } else if (url.includes("user/info")) {
+      cb(null, {}, '{"code":"SUCCESS","data":{"nickName":"测试"}}');
+    } else if (url.includes("domark")) {
+      cb(null, {}, '{"code":"SUCCESS","msg":"成功"}');
+    } else if (url.includes("markstatus")) {
+      cb(null, {}, '{"code":"SUCCESS","data":{"markstatus":[]}}');
+    } else {
+      cb("unknown", null, "");
+    }
   };
+  return { calls, api };
 }
 
-test("runSign: 成功时 domark 恰好调用 1 次", (done) => {
-  const { api, calls } = makeApi();
+test("runSign: 完整链路按序调用 login→appToken→活动页→info→domark→markstatus", (done) => {
+  const { calls, api } = makeApi();
   const notifs = [];
-  runSign(api, "TOKEN", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
-    const domarks = calls.filter((c) => c.url.includes("domark"));
-    expect(domarks.length).toBe(1);
-    expect(domarks[0].body.date).toBe("20260810");
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+    const urls = calls.map((c) => c.url);
+    expect(urls[0]).toContain("qwhdsso/login");
+    expect(urls[1]).toContain("appTokenLogin?sid=SID123");
+    expect(urls[2]).toContain("qwhdmark/1021122301?token=");
+    expect(urls[3]).toContain("user/info");
+    expect(urls[4]).toContain("domark");
+    expect(urls[5]).toContain("markstatus");
+    // appTokenLogin body 只含 token（app 域登录态）
+    expect(calls[1].body.token).toBe("APP_COOKIE");
+    // domark body 日期正确
+    expect(calls[4].body.date).toBe("20260810");
+    // 业务请求 cookie 含 yx + session
+    expect(calls[3].headers.Cookie).toContain("yx=123");
+    expect(calls[3].headers.Cookie).toContain("QWHD_SESSION_TOKEN=SESSION1");
+    done();
+  });
+});
+
+test("runSign: 解析 sid 失败时不再继续（appToken 不被调用）", (done) => {
+  const calls = [];
+  const api = (url, h, b, cb) => {
+    calls.push(url);
+    if (url.includes("qwhdsso/login")) cb(null, {}, "<html>no sid</html>");
+    else cb(null, {}, "{}");
+  };
+  const notifs = [];
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+    expect(calls.length).toBe(1);
+    expect(notifs.length).toBe(1);
+    expect(notifs[0][1]).toContain("自动续期失败");
+    done();
+  });
+});
+
+test("runSign: appToken 失败时通知登录态失效", (done) => {
+  const calls = [];
+  const api = (url, h, b, cb) => {
+    calls.push(url);
+    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"FAILED","msg":"失败"}');
+    else cb(null, {}, "{}");
+  };
+  const notifs = [];
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+    expect(calls.length).toBe(2);
+    expect(notifs[0][1]).toContain("自动续期失败");
     done();
   });
 });
@@ -143,12 +187,15 @@ test("runSign: 成功时 domark 恰好调用 1 次", (done) => {
 test("runSign: user/info 失败时 domark 调用 0 次", (done) => {
   let domarkCalls = 0;
   const api = (url, h, b, cb) => {
-    if (url.includes("user/info")) cb(null, {}, '{"code":"FAILED","msg":"登录失效"}');
+    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
+    else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
+    else if (url.includes("user/info")) cb(null, {}, '{"code":"FAILED","msg":"登录失效"}');
     else if (url.includes("domark")) { domarkCalls++; cb(null, {}, '{"code":"SUCCESS"}'); }
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "TOKEN", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
     expect(domarkCalls).toBe(0);
     done();
   });
@@ -156,15 +203,82 @@ test("runSign: user/info 失败时 domark 调用 0 次", (done) => {
 
 test("runSign: 成功时通知包含本月已签天数", (done) => {
   const api = (url, h, b, cb) => {
-    if (url.includes("user/info")) cb(null, {}, '{"code":"SUCCESS","data":{"nickName":"测试"}}');
+    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
+    else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
+    else if (url.includes("user/info")) cb(null, {}, '{"code":"SUCCESS","data":{"nickName":"测试"}}');
     else if (url.includes("domark")) cb(null, {}, '{"code":"SUCCESS"}');
     else if (url.includes("markstatus")) cb(null, {}, '{"code":"SUCCESS","data":{"markstatus":[{"status":"1"},{"status":"1"},{"status":"0"}]}}');
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "TOKEN", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs.length).toBe(1);
     expect(notifs[0][2]).toContain("本月已签 2 天");
+    expect(r.signed).toBe(true);
+    done();
+  });
+});
+
+test("runSign: 网络错误（login 超时）不崩溃且不标记已签到", (done) => {
+  const api = (url, h, b, cb) => {
+    cb("timeout", null, undefined);  // 模拟 $httpClient 网络失败
+  };
+  const notifs = [];
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+    expect(notifs.length).toBe(1);
+    expect(notifs[0][1]).toContain("自动续期失败");
+    expect(r.signed).toBe(false);
+    done();
+  });
+});
+
+test("runSign: 活动页缺 yx cookie 时终止且不标记已签到", (done) => {
+  const api = (url, h, b, cb) => {
+    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
+    else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");  // 缺 yx
+    else cb(null, {}, "{}");
+  };
+  const notifs = [];
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+    expect(notifs[0][1]).toContain("自动续期失败");
+    expect(r.signed).toBe(false);
+    done();
+  });
+});
+
+test("runSign: user/info 网络错误时终止且不标记已签到", (done) => {
+  const api = (url, h, b, cb) => {
+    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
+    else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
+    else if (url.includes("user/info")) cb("timeout", null, undefined);
+    else cb(null, {}, "{}");
+  };
+  const notifs = [];
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+    expect(notifs[0][1]).toContain("签到失败");
+    expect(r.signed).toBe(false);
+    done();
+  });
+});
+
+test("runSign: Set-Cookie 为字符串格式（非数组）也能解析", (done) => {
+  const api = (url, h, b, cb) => {
+    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
+    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
+    else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": "yx=123;Max-Age=300;path=/, QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly" } }, "");
+    else if (url.includes("user/info")) cb(null, {}, '{"code":"SUCCESS","data":{"nickName":"测试"}}');
+    else if (url.includes("domark")) cb(null, {}, '{"code":"SUCCESS"}');
+    else if (url.includes("markstatus")) cb(null, {}, '{"code":"SUCCESS","data":{"markstatus":[]}}');
+    else cb(null, {}, "{}");
+  };
+  const notifs = [];
+  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+    expect(notifs.length).toBe(1);
+    expect(notifs[0][2]).toContain("本月已签 0 天");
+    expect(r.signed).toBe(true);
     done();
   });
 });

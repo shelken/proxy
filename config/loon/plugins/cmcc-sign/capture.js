@@ -1,61 +1,56 @@
-// 中国移动签到有礼 - 凭据读取脚本
-// 匹配 user/info 请求，提取 QWHD_SESSION_TOKEN 及完整请求头并持久化（供 sign.js 动态复用）
-// 幂等：token 未变化时仅静默更新 headers，不重复写 token、不重复通知；token 变化（重新登录）才通知
-const STORE_KEY = "cmcc_sign_token";
-const HEADERS_KEY = "cmcc_sign_headers";
+// 中国移动签到有礼 - 长效凭据捕获脚本
+// 捕获 client.app.coc.10086.cn 请求头中的 app 域登录态 cookie（JSESSIONID/UID/ticketID），持久化供 sign.js 自动刷新会话使用。
+// app 域 cookie 是长效登录态（与 APP 登录态同寿命），sign.js 每次签到前用它换新的 QWHD_SESSION_TOKEN。
+// 幂等：cookie 串未变化时静默，变化（重新登录）才通知。
+
+const APP_COOKIE_KEY = "cmcc_app_cookie";
+
+// 关键登录态 cookie 名（app 域登录所需。实测 Comment=SessionServer-unity 必需，Secure/Path/HTTPOnly 可去）
+const KEY_COOKIES = ["JSESSIONID", "UID", "Comment", "ticketID"];
 
 // ===== 纯函数（无 Loon 依赖，可单测） =====
 
-// 判断是否值得更新并通知：token 为空或与旧值不同才需要（同值说明是同一会话的重复触发，静默）
-function shouldUpdateToken(newToken, oldToken) {
-  return !!newToken && newToken !== oldToken;
+// 从请求头对象提取 app 域登录态 cookie 串（仅保留 JSESSIONID/UID/ticketID，按固定顺序，其余无关 cookie 丢弃）
+function extractAppCookie(headers) {
+  if (!headers) return "";
+  const map = {};
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === "cookie") {
+      const v = String(headers[k] || "");
+      // 按 "; " 拆分成独立 cookie（避免误拆 Path=/;HttpOnly 这类无空格分号）
+      for (const seg of v.split("; ")) {
+        const s = seg.trim();
+        const eq = s.indexOf("=");
+        if (eq > 0) {
+          const name = s.slice(0, eq).trim();
+          if (KEY_COOKIES.includes(name)) map[name] = s;
+        }
+      }
+    }
+  }
+  // 按固定顺序组装，保证相同登录态的 cookie 串恒定（语义幂等）
+  return KEY_COOKIES.filter((n) => map[n]).map((n) => map[n]).join("; ");
+}
+
+// 判断是否值得更新：cookie 非空且与旧值不同
+function shouldUpdateCookie(newCookie, oldCookie) {
+  return !!newCookie && newCookie !== oldCookie;
 }
 
 // ===== Loon 环境适配 =====
 
-// 大小写不敏感查找 Cookie（Loon 键名可能为小写 cookie）
-const rawCookie = (() => {
-  const headers = $request.headers || {};
-  for (const k of Object.keys(headers)) {
-    if (k.toLowerCase() === "cookie") return headers[k] || "";
-  }
-  return "";
-})();
-
-const m = rawCookie.match(/QWHD_SESSION_TOKEN=([^;\s]+)/);
-if (m && m[1]) {
-  const token = m[1];
-  const oldToken = $persistentStore.read(STORE_KEY);
-  // 存完整请求头（去掉 Cookie，token 单独维护；去空值键）——无论 token 变没变都刷新 headers（UA 等可能更新）
-  const headers = {};
-  if ($request.headers) {
-    for (const k of Object.keys($request.headers)) {
-      const v = $request.headers[k];
-      if (v !== undefined && v !== null && v !== "" && k.toLowerCase() !== "cookie") {
-        headers[k] = String(v);
-      }
-    }
-  }
-  $persistentStore.write(JSON.stringify(headers), HEADERS_KEY);
-  if (shouldUpdateToken(token, oldToken)) {
-    $persistentStore.write(token, STORE_KEY);
-    const nick = ($response && $response.body) ? (() => {
-      try {
-        const obj = JSON.parse($response.body);
-        return obj.data && obj.data.nickName ? obj.data.nickName : "";
-      } catch (e) { return ""; }
-    })() : "";
-    $notification.post(
-      "中国移动签到有礼",
-      "凭据已更新",
-      (nick ? nick + " 已" : "") + "自动提取最新凭据，每日将自动签到"
-    );
-    console.log("cmcc-sign: 提取凭据成功 token=" + token + " nick=" + nick);
+const cookie = extractAppCookie($request.headers);
+if (cookie) {
+  const oldCookie = $persistentStore.read(APP_COOKIE_KEY);
+  if (shouldUpdateCookie(cookie, oldCookie)) {
+    $persistentStore.write(cookie, APP_COOKIE_KEY);
+    $notification.post("中国移动签到有礼", "凭据已更新", "已保存登录凭据，签到将自动续期，无需频繁打开APP");
+    console.log("cmcc-sign: 捕获 app 域登录态成功");
   } else {
-    console.log("cmcc-sign: token 未变化，静默更新 headers");
+    console.log("cmcc-sign: app 域登录态未变化，静默");
   }
 } else {
-  console.log("cmcc-sign: user/info 请求头中未找到 QWHD_SESSION_TOKEN，跳过");
+  console.log("cmcc-sign: 请求头无 Cookie，跳过");
 }
 
 // 原样放行
