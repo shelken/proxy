@@ -8,8 +8,7 @@ test_files := `find . -name "*.test.js" -not -path "./.git/*" -not -path "./node
 
 # 运行全部测试
 test:
-    @if [ -z "{{test_files}}" ]; then echo "未找到任何 *.test.js"; exit 1; fi
-    bun test --test-specifier {{test_files}}
+    @just run-test test
 
 # 运行指定测试（按关键字过滤，如 just run-test cmcc）
 run-test name:
