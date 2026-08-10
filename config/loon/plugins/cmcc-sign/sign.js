@@ -4,8 +4,22 @@
 
 const STORE_KEY = "cmcc_sign_token";
 const HEADERS_KEY = "cmcc_sign_headers";
+const LAST_SIGN_KEY = "cmcc_sign_last";
 
 // ===== 纯函数（无 Loon 依赖，可单测） =====
+
+// 幂等判断：同一天已签则跳过本次签到。
+// store 注入读写接口 { read(key), write(value, key) }，便于测试；返回 { skip, reason }。
+function shouldSign(dateStr, store) {
+  const last = store.read(LAST_SIGN_KEY);
+  if (last === dateStr) return { skip: true, reason: "今日已签到，跳过" };
+  return { skip: false, reason: "" };
+}
+
+// 记录本次已签日期
+function markSigned(dateStr, store) {
+  store.write(dateStr, LAST_SIGN_KEY);
+}
 
 // 解析 user/info 响应：返回 { ok: 是否已登录, nick: 昵称 }
 function parseUserInfo(body) {
@@ -145,6 +159,14 @@ function main() {
     console.log("cmcc-sign: 无凭据");
     return $done();
   }
+  const dateStr = today();
+  // 幂等：同一天已签则直接跳过，避免 cron 重复触发造成重复签到
+  const guard = shouldSign(dateStr, { read: (k) => $persistentStore.read(k), write: (v, k) => $persistentStore.write(v, k) });
+  if (guard.skip) {
+    if (notifyEnabled) $notification.post("中国移动签到有礼", "今日已签到", "无需重复签到");
+    console.log("cmcc-sign: " + guard.reason);
+    return $done();
+  }
   // 读提取时存的完整请求头（无则 fallback 写死）
   let savedHeaders = null;
   try {
@@ -155,9 +177,13 @@ function main() {
   runSign(
     requestPost,
     token,
-    today(),
+    dateStr,
     { notify: (t, s, c) => { if (notifyEnabled) $notification.post(t, s, c); }, savedHeaders: savedHeaders },
-    () => $done()
+    () => {
+      // 无论签到成功/已签/失败，都记录当日已执行，避免 cron 重复触发
+      markSigned(dateStr, { read: (k) => $persistentStore.read(k), write: (v, k) => $persistentStore.write(v, k) });
+      $done();
+    }
   );
 }
 

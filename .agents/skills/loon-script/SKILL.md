@@ -96,6 +96,27 @@ $httpClient.get('https://api.example.com/check', (err, resp, data) => {
 1. **观测脚本**（http-response 匹配登录态相关请求）：把**完整请求头存持久化**（JSON.stringify，去掉 Cookie 键、去空值键），同时单独提取并存储登录凭据（如 token/cookie）
 2. **业务脚本**（cron 定时任务）：读取存储的请求头，**优先用动态头，缺失字段 fallback 写死值；认证凭据永远用最新值覆盖**（如 Cookie 用新 token 重建）
 
+## 幂等与防重复执行
+
+Loon **无内置防重入机制**：cron 到点即触发，重复执行（多触发、手动补跑、配置刷新重跑）由脚本自己保证幂等。对签到/领奖/打卡等“一天一次”类任务，最低限度必须做到**同一天只执行一次**：
+
+1. **存上次执行日期**：`$persistentStore` 存 `YYYYMMDD`（key 带插件名前缀，如 `cmcc_sign_last`）
+2. **执行前判断**：读存储日期 == 今天 → 跳过本次，通知/日志说明“今日已执行”，不再调接口
+3. **执行后落盘**：无论成功/失败，都写今日日期（失败也记录，避免当日反复重试刷接口）
+4. **判断逻辑写成纯函数**（如 `shouldSign(dateStr, store)` + `markSigned(dateStr, store)`，store 注入读写接口），可单测：首次不跳过 / 同日跳过 / 跨天不跳过
+
+参考实现：`config/loon/plugins/cmcc-sign/sign.js`。
+
+**捕获类（http-request/http-response）脚本同样要幂等**：这类脚本每次请求/响应都会触发，用户反复进出页面会重复执行。对“提取凭据/存 cookie”类脚本，副作用必须幂等：
+
+- **token/凭据去重**：提取前先读旧值，`newToken === oldToken` 时静默更新（仍刷新 headers，但不再写 token、不再发通知）；仅当值变化（重新登录）才写 + 通知
+- **判断写成纯函数**（如 `shouldUpdateToken(newToken, oldToken)`），可单测：首次更新 / 同值不更新 / 变化才更新
+- 触发本身无法从配置层减少（http-response 每次命中必执行），只能保证每次执行的副作用幂等
+
+参考实现：`config/loon/plugins/cmcc-sign/capture.js`。
+
+> 若需防“同脚本并发重入”（上一轮未结束下一轮开始），Loon 无全局锁 API，可记录 `startTime` 到 `$persistentStore` 做粗略互斥（如 5 分钟内不重入），但准确性与一致性有限，仅作兜底。
+
 ## 变量获取与设置（跨脚本共享）
 
 脚本里的变量有三个来源，先判断属于哪类再选 API：
@@ -147,5 +168,6 @@ const obj = raw ? JSON.parse(raw) : {};
 - [ ] JSON.parse 有 try/catch，失败原样放行
 - [ ] 跨脚本共享数据用显式 key 读写（非默认脚本名 hash），key 带插件名前缀
 - [ ] 涉及登录态/UA 的脚本，header 尽量动态获取（捕获时存持久化，签到读），不全部写死
+- [ ] cron/签到类脚本有幂等保证：同日去重（存上次执行日期，同天跳过），执行后写日期
 - [ ] 插件内所有资源链接（icon/homepage/script-path/README 引入链接）已逐个 HTTP 校验，返回 200
 - [ ] 在 Loon 日志面板实测命中并输出预期

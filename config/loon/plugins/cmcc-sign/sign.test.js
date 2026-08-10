@@ -1,5 +1,5 @@
 // 中国移动签到有礼 sign.js 测试（bun:test）
-// seams: parseUserInfo / parseDomark / parseMarkstatus / runSign
+// seams: parseUserInfo / parseDomark / parseMarkstatus / runSign / shouldSign / markSigned
 // 运行: just test sign  或  bun test config/loon/plugins/cmcc-sign/sign.test.js
 
 import { test, expect } from "bun:test";
@@ -15,8 +15,8 @@ const pure = src.split("// ===== Loon 环境适配 =====")[0];
 global.$notification = { post: () => {} };
 global.$done = () => {};
 // eval 声明在模块作用域不暴露，用 new Function 求值并返回函数
-const factory = new Function(pure + "\nreturn { parseUserInfo, parseDomark, parseMarkstatus, runSign, buildHeaders };");
-const { parseUserInfo, parseDomark, parseMarkstatus, runSign, buildHeaders } = factory();
+const factory = new Function(pure + "\nreturn { parseUserInfo, parseDomark, parseMarkstatus, runSign, buildHeaders, shouldSign, markSigned };");
+const { parseUserInfo, parseDomark, parseMarkstatus, runSign, buildHeaders, shouldSign, markSigned } = factory();
 
 // ===== parseUserInfo: user/info 响应解析 + 登录态判断 =====
 test("parseUserInfo: SUCCESS 返回已登录+昵称", () => {
@@ -167,4 +167,38 @@ test("runSign: 成功时通知包含本月已签天数", (done) => {
     expect(notifs[0][2]).toContain("本月已签 2 天");
     done();
   });
+});
+
+// ===== shouldSign / markSigned: 同日幂等去重 =====
+function makeStore(init) {
+  const data = { ...init };
+  return {
+    read: (k) => (k in data ? data[k] : null),
+    write: (v, k) => { data[k] = v; },
+    data,
+  };
+}
+
+test("shouldSign: 首次（无记录）不跳过", () => {
+  const store = makeStore({});
+  const r = shouldSign("20260810", store);
+  expect(r.skip).toBe(false);
+});
+
+test("shouldSign: 同日已签则跳过", () => {
+  const store = makeStore({ cmcc_sign_last: "20260810" });
+  const r = shouldSign("20260810", store);
+  expect(r.skip).toBe(true);
+});
+
+test("shouldSign: 非同日（跨天）不跳过", () => {
+  const store = makeStore({ cmcc_sign_last: "20260809" });
+  const r = shouldSign("20260810", store);
+  expect(r.skip).toBe(false);
+});
+
+test("markSigned: 写入当日日期", () => {
+  const store = makeStore({});
+  markSigned("20260810", store);
+  expect(store.read("cmcc_sign_last")).toBe("20260810");
 });
