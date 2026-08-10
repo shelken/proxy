@@ -3,7 +3,18 @@
 const STORE_KEY = "cmcc_sign_token";
 const HEADERS_KEY = "cmcc_sign_headers";
 
-const rawCookie = ($request.headers && $request.headers["Cookie"]) || "";
+// 调试：打印 Loon 实际给的请求头键名，确认 Cookie 字段形态
+console.log("cmcc-sign: 请求头 keys=" + JSON.stringify(Object.keys($request.headers || {})));
+
+// 大小写不敏感查找 Cookie（Loon 键名可能为小写 cookie）
+const rawCookie = (() => {
+  const headers = $request.headers || {};
+  for (const k of Object.keys(headers)) {
+    if (k.toLowerCase() === "cookie") return headers[k] || "";
+  }
+  return "";
+})();
+
 const m = rawCookie.match(/QWHD_SESSION_TOKEN=([^;\s]+)/);
 if (m && m[1]) {
   const token = m[1];
