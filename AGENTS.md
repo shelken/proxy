@@ -15,6 +15,10 @@
 - `scripts/`: 构建等脚本
 - `.github/workflows/`: CI 工作流
 
+## 基本原则
+
+- 优先从github进行搜索类似需求的代码, 参考实现, 根据用户需求进行规划; 详情参考ponytail原则
+
 ## 开发约束
 
 - 项目开源, 在不暴露隐私且脚本插件正常运行的前提下进行代码编写
@@ -23,7 +27,6 @@
 - 对于目标网站的接口调用, 除非用户允许, 否则不要使用穷举探测的方式进行处理
 - 所有脚本tdd, 在对应的脚本同目录下写对应的`*.test.js`; 高内聚低耦合
 - 测试统一用 bun 运行，入口为 `justfile`：`just test` 跑全部，`just run-test <关键字>` 按名过滤，`just test-sign` 为指定插件快捷方式；运行 `just test` 前确保 `bun test` 可用
-- Python 依赖用 uv 管理，lint 用 ruff；脚本保持纯标准库实现（`urllib`/`json`/`argparse`），不引入第三方依赖
 
 ## 文档规范
 
