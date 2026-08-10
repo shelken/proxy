@@ -8,7 +8,7 @@ Loon 插件：进入中国移动 APP「签到有礼」活动页后自动保存�
 
 ```
 [Plugin]
-https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign.lpx, enabled=true
+https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/cmcc-sign.lpx, enabled=true
 ```
 
 ## 使用
