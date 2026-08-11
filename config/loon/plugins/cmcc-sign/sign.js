@@ -127,7 +127,8 @@ function runSign(api, appCookie, dateStr, env, onDone) {
         if (err2) return fail("自动续期失败", "网络异常，请稍后重试");
         const at = parseAppToken(data2);
         if (!at.ok) {
-          console.log("cmcc-sign: appTokenLogin 失败");
+          // 打印响应体前 200 字符（不含 cookie 值），定位失败原因
+          console.log("cmcc-sign: appTokenLogin 失败 resp=" + String(data2).slice(0, 200) + " status=" + (resp2 && resp2.status));
           return fail("自动续期失败", "登录态已失效，请打开中国移动APP重新登录");
         }
 
