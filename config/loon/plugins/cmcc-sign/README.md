@@ -21,7 +21,9 @@ https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-si
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `signTime` | `30 7 * * *` | 每日签到时间（cron 表达式） |
+| `captureEnabled` | `true` | 是否自动提取凭据 |
+| `signEnabled` | `true` | 是否执行定时签到 |
+| `signTime` | `30 0,1 * * *` | 0:30 签到，1:30 自动补试 |
 | `notify` | `true` | 是否发送签到结果通知 |
 
 ## 测试
@@ -32,6 +34,7 @@ just test-sign
 
 ## 注意
 
-- 首次需打开中国移动 APP 完成凭据保存；之后凭据长期有效，无需频繁打开
+- 首次需打开中国移动 APP 完成凭据保存；快照冷却满 60 分钟后可用于签到
+- 自动保留最近 3 条快照；若首次执行仍在冷却，下一次定时任务会自动补试
 - 若重新登录 APP 或凭据失效，重新打开 APP 即可自动更新
 - 若 APP 更新活动接口，需重新观测确认

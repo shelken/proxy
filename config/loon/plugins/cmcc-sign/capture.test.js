@@ -11,8 +11,8 @@ import { join } from "node:path";
 const src = readFileSync(join(__dirname, "capture.js"), "utf8");
 const pure = src.split("// ===== Loon 环境适配 =====")[0];
 
-const factory = new Function(pure + "\nreturn { extractAutoLoginSnapshot, shouldUpdateSnapshot };");
-const { extractAutoLoginSnapshot, shouldUpdateSnapshot } = factory();
+const factory = new Function(pure + "\nreturn { extractAutoLoginSnapshot, addSnapshot };");
+const { extractAutoLoginSnapshot, addSnapshot } = factory();
 
 // ===== extractAutoLoginSnapshot: 从请求上下文提取可重放快照 =====
 test("extractAutoLoginSnapshot: 保留关键签名头与 body", () => {
@@ -48,24 +48,31 @@ test("extractAutoLoginSnapshot: 无 url 或 headers 返回 null", () => {
   expect(extractAutoLoginSnapshot("https://x.com", null, "")).toBeNull();
 });
 
-// ===== shouldUpdateSnapshot: 去重（防重复通知） =====
-test("shouldUpdateSnapshot: 首次（无旧快照）需要更新", () => {
+// ===== addSnapshot: 去重并保留最近 3 条 =====
+test("addSnapshot: 新快照写入捕获时间", () => {
   const snap = { url: "https://x.com", headers: {}, body: "b" };
-  expect(shouldUpdateSnapshot(snap, null)).toBe(true);
+  const result = addSnapshot(snap, null, 3_600_000);
+  expect(result.updated).toBe(true);
+  expect(result.snapshots).toEqual([{ ...snap, capturedAt: 3_600_000 }]);
 });
 
-test("shouldUpdateSnapshot: 与旧快照相同则不更新（静默）", () => {
+test("addSnapshot: 相同快照静默", () => {
   const snap = { url: "https://x.com", headers: { "x-sign": "s" }, body: "b" };
-  expect(shouldUpdateSnapshot(snap, JSON.parse(JSON.stringify(snap)))).toBe(false);
+  const result = addSnapshot(snap, [{ ...snap, capturedAt: 1_000 }], 2_000);
+  expect(result.updated).toBe(false);
+  expect(result.snapshots).toEqual([{ ...snap, capturedAt: 1_000 }]);
 });
 
-test("shouldUpdateSnapshot: 与旧快照不同则更新（重新登录）", () => {
-  const snap = { url: "https://x.com", headers: { "x-sign": "s2" }, body: "b" };
-  const old = { url: "https://x.com", headers: { "x-sign": "s1" }, body: "b" };
-  expect(shouldUpdateSnapshot(snap, old)).toBe(true);
+test("addSnapshot: 只保留最近 3 条", () => {
+  let stored = null;
+  for (let i = 1; i <= 4; i++) {
+    stored = addSnapshot({ url: "https://x.com", headers: {}, body: "b" + i }, stored, i * 1_000).snapshots;
+  }
+  expect(stored.map((item) => item.body)).toEqual(["b4", "b3", "b2"]);
 });
 
-test("shouldUpdateSnapshot: 空快照不更新", () => {
-  expect(shouldUpdateSnapshot(null, {})).toBe(false);
-  expect(shouldUpdateSnapshot({ url: "", headers: {}, body: "" }, {})).toBe(false);
+test("addSnapshot: 兼容旧的单快照格式", () => {
+  const old = { url: "https://x.com", headers: { "x-time": "1000" }, body: "old" };
+  const result = addSnapshot({ url: "https://x.com", headers: {}, body: "new" }, old, 2_000);
+  expect(result.snapshots.map((item) => [item.body, item.capturedAt])).toEqual([["new", 2_000], ["old", 1_000]]);
 });

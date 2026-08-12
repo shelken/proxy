@@ -11,8 +11,8 @@ import { join } from "node:path";
 const src = readFileSync(join(__dirname, "sign.js"), "utf8");
 const pure = src.split("// ===== Loon 环境适配 =====")[0];
 
-const factory = new Function(pure + "\nreturn { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned, parseSessionCookie };");
-const { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned, parseSessionCookie } = factory();
+const factory = new Function(pure + "\nreturn { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned, parseSessionCookie, selectMatureSnapshot, clearLegacyKeys };");
+const { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned, parseSessionCookie, selectMatureSnapshot, clearLegacyKeys } = factory();
 // ===== parseSid: 从登录页 HTML 解析 sid =====
 test("parseSid: 从 HTML 提取 sid", () => {
   const html = '<script>var loginPath = "/appTokenLogin?sid=SID20260811T004612625TEST1021122301abc123"</script>';
@@ -135,6 +135,31 @@ test("parseSessionCookie: 空/无关键 cookie 返回空串", () => {
   expect(parseSessionCookie(["yx=1;Path=/", "QWHD_SESSION_TOKEN=t;Path=/"])).toBe("");
 });
 
+// ===== 快照冷却与旧缓存清理 =====
+test("selectMatureSnapshot: 选择最新且已冷却 60 分钟的快照", () => {
+  const snapshots = [
+    { url: "https://x.com", body: "fresh", capturedAt: 3_900_000 },
+    { url: "https://x.com", body: "mature-new", capturedAt: 300_000 },
+    { url: "https://x.com", body: "mature-old", capturedAt: 100_000 },
+  ];
+  expect(selectMatureSnapshot(snapshots, 4_000_000).body).toBe("mature-new");
+});
+
+test("selectMatureSnapshot: 无已冷却快照返回 null", () => {
+  expect(selectMatureSnapshot([{ url: "https://x.com", body: "fresh", capturedAt: 3_900_000 }], 4_000_000)).toBeNull();
+});
+
+test("selectMatureSnapshot: 兼容带 x-time 的旧单快照", () => {
+  const old = { url: "https://x.com", headers: { "x-time": "100000" }, body: "old" };
+  expect(selectMatureSnapshot(old, 4_000_000).body).toBe("old");
+});
+
+test("clearLegacyKeys: 清空全部历史废弃 key", () => {
+  const store = makeStore({ cmcc_app_cookie: "a", cmcc_sign_headers: "b", cmcc_sign_token: "c", cmcc_sign_last: "20260810" });
+  expect(clearLegacyKeys(store)).toEqual(["cmcc_app_cookie", "cmcc_sign_headers", "cmcc_sign_token"]);
+  expect(store.data).toEqual({ cmcc_app_cookie: "", cmcc_sign_headers: "", cmcc_sign_token: "", cmcc_sign_last: "20260810" });
+});
+
 // ===== runSign: 编排（完整链路调用顺序） =====
 function makeApi() {
   const calls = [];
@@ -183,6 +208,21 @@ test("runSign: 完整链路按序调用 autoLogin→login→appToken→活动页
     // 业务请求 cookie 含 yx + session
     expect(calls[4].headers.Cookie).toContain("yx=123");
     expect(calls[4].headers.Cookie).toContain("QWHD_SESSION_TOKEN=SESSION1");
+    done();
+  });
+});
+
+test("runSign: X-ERROR 950501 视为冷却中且不立即重试", (done) => {
+  const calls = [];
+  const api = (url, h, b, cb) => {
+    calls.push(url);
+    cb(null, { status: 200, headers: { "X-ERROR": "950501" } }, "{}");
+  };
+  const notifs = [];
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (result) => {
+    expect(calls).toHaveLength(1);
+    expect(result).toEqual({ signed: false, retryable: true });
+    expect(notifs[0][1]).toBe("凭据冷却中");
     done();
   });
 });

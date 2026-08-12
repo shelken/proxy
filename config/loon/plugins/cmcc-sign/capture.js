@@ -25,21 +25,48 @@ function extractAutoLoginSnapshot(url, headers, body) {
   return { url: url, headers: keep, body: body ? String(body) : "" };
 }
 
-// 判断快照是否值得更新：非空且与旧快照 JSON 不同
-function shouldUpdateSnapshot(newSnap, oldSnap) {
-  if (!newSnap || !newSnap.url) return false;
-  return JSON.stringify(newSnap) !== JSON.stringify(oldSnap);
+// 兼容旧版单快照格式；旧数据用 x-time 还原捕获时间。
+function normalizeSnapshotHistory(stored) {
+  const list = Array.isArray(stored) ? stored : stored ? [stored] : [];
+  return list
+    .filter((item) => item && item.url && item.body)
+    .map((item) => {
+      if (Number.isFinite(item.capturedAt)) return item;
+      const headers = item.headers || {};
+      const timeKey = Object.keys(headers).find((key) => key.toLowerCase() === "x-time");
+      const capturedAt = timeKey ? Number(headers[timeKey]) : 0;
+      return Object.assign({}, item, { capturedAt: Number.isFinite(capturedAt) ? capturedAt : 0 });
+    })
+    .sort((a, b) => b.capturedAt - a.capturedAt);
+}
+
+// 新快照入队，完整重复的请求不刷新冷却时间；最多保留最近 3 条。
+function addSnapshot(newSnap, stored, capturedAt) {
+  const snapshots = normalizeSnapshotHistory(stored);
+  if (!newSnap || !newSnap.url || !newSnap.body) return { updated: false, snapshots };
+  const serialized = JSON.stringify(newSnap);
+  if (snapshots.some((item) => JSON.stringify({ url: item.url, headers: item.headers, body: item.body }) === serialized)) {
+    return { updated: false, snapshots };
+  }
+  return {
+    updated: true,
+    snapshots: [Object.assign({}, newSnap, { capturedAt }), ...snapshots].slice(0, 3),
+  };
 }
 
 // ===== Loon 环境适配 =====
 
 const snap = extractAutoLoginSnapshot($request.url, $request.headers, $request.body);
 if (snap) {
-  const oldSnap = (() => {
+  const stored = (() => {
     try { return JSON.parse($persistentStore.read(SNAPSHOT_KEY) || "null"); } catch (e) { return null; }
   })();
-  if (shouldUpdateSnapshot(snap, oldSnap)) {
-    $persistentStore.write(JSON.stringify(snap), SNAPSHOT_KEY);
+  const result = addSnapshot(snap, stored, Date.now());
+  // 顺便把旧版单快照迁移为历史数组，不因此重复通知。
+  if (result.updated || !Array.isArray(stored)) {
+    $persistentStore.write(JSON.stringify(result.snapshots), SNAPSHOT_KEY);
+  }
+  if (result.updated) {
     $notification.post("中国移动签到有礼", "凭据已更新", "已保存自动登录凭据，签到将自动续期，无需频繁打开APP");
     console.log("cmcc-sign: 捕获 autoLogin 快照成功");
   } else {

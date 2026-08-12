@@ -8,12 +8,14 @@
 #!tag=签到
 
 [Argument]
-signTime=input,"30 7 * * *",tag=签到时间,desc=每日签到 cron 表达式（分 时 日 月 周）
+captureEnabled=switch,true,tag=自动提取凭据,desc=关闭后不再捕获自动登录请求
+signEnabled=switch,true,tag=每日签到,desc=关闭后不再执行定时签到
+signTime=input,"30 0,1 * * *",tag=签到时间,desc=默认 0:30 签到，1:30 自动补试
 notify=switch,true,tag=签到结果通知,desc=关闭后不再发送通知
 
 [Script]
-http-request ^https:\/\/client\.app\.coc\.10086\.cn\/biz-orange\/LN\/uamonekeylogin\/autoLogin script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/capture.js, requires-body=true, tag=移动签到有礼-提取凭据
-cron {signTime} script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/sign.js, argument=[{notify}], tag=移动签到有礼-每日签到
+http-request ^https:\/\/client\.app\.coc\.10086\.cn\/biz-orange\/LN\/uamonekeylogin\/autoLogin script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/capture.js, requires-body=true, enable={captureEnabled}, tag=移动签到有礼-提取凭据
+cron {signTime} script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/sign.js, argument=[{notify}], enable={signEnabled}, tag=移动签到有礼-每日签到
 
 [MITM]
 hostname=wx.10086.cn, client.app.coc.10086.cn

@@ -5,6 +5,8 @@
 
 const SNAPSHOT_KEY = "cmcc_autologin";
 const LAST_SIGN_KEY = "cmcc_sign_last";
+const SNAPSHOT_COOLDOWN_MS = 60 * 60 * 1000;
+const LEGACY_KEYS = ["cmcc_app_cookie", "cmcc_sign_headers", "cmcc_sign_token"];
 
 const LOGIN_URL = "https://wx.10086.cn/qwhdsso/login?dlwmh=true&actUrl=" +
   encodeURIComponent("https://wx.10086.cn/qwhdhub/qwhdmark/1021122301");
@@ -17,6 +19,40 @@ const CHANNEL_ID = "P00000057578";
 const DEFAULT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148/wkwebview leadeon/CMCCIT";
 
 // ===== 纯函数（无 Loon 依赖，可单测） =====
+
+// 从历史中选择最新且已冷却满 60 分钟的快照；兼容旧版单快照格式。
+function selectMatureSnapshot(stored, now) {
+  const list = Array.isArray(stored) ? stored : stored ? [stored] : [];
+  return list
+    .filter((item) => item && item.url && item.body)
+    .map((item) => {
+      if (Number.isFinite(item.capturedAt)) return item;
+      const headers = item.headers || {};
+      const timeKey = Object.keys(headers).find((key) => key.toLowerCase() === "x-time");
+      const capturedAt = timeKey ? Number(headers[timeKey]) : 0;
+      return Object.assign({}, item, { capturedAt: Number.isFinite(capturedAt) ? capturedAt : 0 });
+    })
+    .sort((a, b) => b.capturedAt - a.capturedAt)
+    .find((item) => now - item.capturedAt >= SNAPSHOT_COOLDOWN_MS) || null;
+}
+
+// Loon 没有按 key 删除 API；逐项写空可安全清除历史数据，不能使用会清空全部脚本数据的 remove()。
+function clearLegacyKeys(store) {
+  const cleared = [];
+  for (const key of LEGACY_KEYS) {
+    const value = store.read(key);
+    if (value !== null && value !== "") {
+      store.write("", key);
+      cleared.push(key);
+    }
+  }
+  return cleared;
+}
+
+function getHeader(headers, name) {
+  const key = Object.keys(headers || {}).find((item) => item.toLowerCase() === name.toLowerCase());
+  return key ? headers[key] : "";
+}
 
 // 幂等判断：同一天已签则跳过本次签到。
 function shouldSign(dateStr, store) {
@@ -138,10 +174,17 @@ function runSign(api, snapshot, dateStr, env, onDone) {
   // 0. 原样重放 autoLogin 请求，拿全新会话（Set-Cookie）
   api(snapshot.url, snapshot.headers, snapshot.body, (err0, resp0, data0) => {
     if (err0) return fail("自动续期", err0, resp0, data0, "网络异常");
-    const sc = resp0 && resp0.headers && (resp0.headers["Set-Cookie"] || resp0.headers["set-cookie"]);
+    const responseHeaders = resp0 && resp0.headers;
+    const replayCode = getHeader(responseHeaders, "x-error");
+    if (String(replayCode) === "950501") {
+      console.log("cmcc-sign: [autoLogin 重放] 快照仍在冷却 X-ERROR=950501");
+      notify("中国移动签到有礼", "凭据冷却中", "将在下一次定时任务自动重试");
+      return onDone({ signed: false, retryable: true });
+    }
+    const sc = getHeader(responseHeaders, "set-cookie");
     const appCookie = parseSessionCookie(sc);
     if (!appCookie) {
-      console.log("cmcc-sign: [autoLogin 重放] 未返回会话 cookie Set-Cookie=" + String(sc || "").slice(0, 200));
+      console.log("cmcc-sign: [autoLogin 重放] 未返回会话 cookie X-ERROR=" + String(replayCode || "-") + " Set-Cookie=" + String(sc || "").slice(0, 200));
       return fail("自动续期", null, resp0, data0, "未返回会话 cookie，请重新打开中国移动APP");
     }
 
@@ -290,17 +333,23 @@ function today() {
 }
 
 function main() {
-  const snapshotRaw = $persistentStore.read(SNAPSHOT_KEY);
-  let snapshot = null;
-  try { snapshot = snapshotRaw ? JSON.parse(snapshotRaw) : null; } catch (e) { snapshot = null; }
-  if (!snapshot || !snapshot.url || !snapshot.body) {
-    if (notifyEnabled)
-      $notification.post("中国移动签到有礼", "未获取到凭据", "请打开中国移动APP进入「签到有礼」活动页后重试");
-    console.log("cmcc-sign: 无 autoLogin 快照");
+  const store = { read: (k) => $persistentStore.read(k), write: (v, k) => $persistentStore.write(v, k) };
+  const cleared = clearLegacyKeys(store);
+  if (cleared.length) console.log("cmcc-sign: 已清理历史缓存 " + cleared.join(","));
+
+  const snapshotRaw = store.read(SNAPSHOT_KEY);
+  let stored = null;
+  try { stored = snapshotRaw ? JSON.parse(snapshotRaw) : null; } catch (e) { stored = null; }
+  const snapshot = selectMatureSnapshot(stored, Date.now());
+  if (!snapshot) {
+    if (notifyEnabled) {
+      if (stored) $notification.post("中国移动签到有礼", "凭据冷却中", "将在下一次定时任务自动重试");
+      else $notification.post("中国移动签到有礼", "未获取到凭据", "请打开中国移动APP进入「签到有礼」活动页后重试");
+    }
+    console.log("cmcc-sign: 无已冷却的 autoLogin 快照");
     return $done();
   }
   const dateStr = today();
-  const store = { read: (k) => $persistentStore.read(k), write: (v, k) => $persistentStore.write(v, k) };
   const guard = shouldSign(dateStr, store);
   if (guard.skip) {
     if (notifyEnabled) $notification.post("中国移动签到有礼", "今日已签到", "无需重复签到");
