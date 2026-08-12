@@ -11,8 +11,8 @@ import { join } from "node:path";
 const src = readFileSync(join(__dirname, "sign.js"), "utf8");
 const pure = src.split("// ===== Loon 环境适配 =====")[0];
 
-const factory = new Function(pure + "\nreturn { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned };");
-const { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned } = factory();
+const factory = new Function(pure + "\nreturn { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned, parseSessionCookie };");
+const { parseSid, parseAppToken, parseUserInfo, parseDomark, parseMarkstatus, buildHeaders, runSign, shouldSign, markSigned, parseSessionCookie } = factory();
 // ===== parseSid: 从登录页 HTML 解析 sid =====
 test("parseSid: 从 HTML 提取 sid", () => {
   const html = '<script>var loginPath = "/appTokenLogin?sid=SID20260811T004612625TEST1021122301abc123"</script>';
@@ -106,12 +106,43 @@ test("buildHeaders: 含 yx+session cookie、leadeon UA、完整 Referer", () => 
   expect(h["login-check"]).toBe("1");
 });
 
+// ===== parseSessionCookie: 从 autoLogin 响应 Set-Cookie 提取会话 =====
+const SNAPSHOT = {
+  url: "https://client.app.coc.10086.cn/biz-orange/LN/uamonekeylogin/autoLogin",
+  headers: { "x-sign": "SIGN", "x-token": "TOKEN", "content-type": "application/Json" },
+  body: "ENCRYPTED_BODY",
+};
+
+test("parseSessionCookie: 提取 JSESSIONID/UID/Comment/ticketID 并按固定顺序", () => {
+  const sc = [
+    "JSESSIONID=abc; Path=/;HTTPOnly; Secure",
+    "UID=def; Path=/;HTTPOnly",
+    "Comment=SessionServer-unity; Path=/;HTTPOnly",
+    "ticketID=POD9; Path=/",
+  ];
+  const c = parseSessionCookie(sc);
+  expect(c).toBe("JSESSIONID=abc; UID=def; Comment=SessionServer-unity; ticketID=POD9");
+});
+
+test("parseSessionCookie: 字符串格式也能解析（含 Path 逗号分隔）", () => {
+  const sc = "JSESSIONID=abc;Path=/;HTTPOnly, UID=def;Path=/";
+  expect(parseSessionCookie(sc)).toBe("JSESSIONID=abc; UID=def");
+});
+
+test("parseSessionCookie: 空/无关键 cookie 返回空串", () => {
+  expect(parseSessionCookie(null)).toBe("");
+  expect(parseSessionCookie("")).toBe("");
+  expect(parseSessionCookie(["yx=1;Path=/", "QWHD_SESSION_TOKEN=t;Path=/"])).toBe("");
+});
+
 // ===== runSign: 编排（完整链路调用顺序） =====
 function makeApi() {
   const calls = [];
   const api = (url, headers, body, cb) => {
     calls.push({ url, headers, body });
-    if (url.includes("qwhdsso/login")) {
+    if (url.includes("uamonekeylogin/autoLogin")) {
+      cb(null, { headers: { "Set-Cookie": "JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; Path=/;HTTPOnly; ticketID=POD9; Secure" } }, "");
+    } else if (url.includes("qwhdsso/login")) {
       cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
     } else if (url.includes("appTokenLogin")) {
       cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
@@ -130,56 +161,53 @@ function makeApi() {
   return { calls, api };
 }
 
-test("runSign: 完整链路按序调用 login→appToken→活动页→info→domark→markstatus", (done) => {
+test("runSign: 完整链路按序调用 autoLogin→login→appToken→活动页→info→domark→markstatus", (done) => {
   const { calls, api } = makeApi();
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
     const urls = calls.map((c) => c.url);
-    expect(urls[0]).toContain("qwhdsso/login");
-    expect(urls[1]).toContain("appTokenLogin?sid=SID123");
-    expect(urls[2]).toContain("qwhdmark/1021122301?token=");
-    expect(urls[3]).toContain("user/info");
-    expect(urls[4]).toContain("domark");
-    expect(urls[5]).toContain("markstatus");
-    // appTokenLogin body 只含 token（app 域登录态）
-    expect(calls[1].body.token).toBe("APP_COOKIE");
+    expect(urls[0]).toContain("uamonekeylogin/autoLogin");
+    expect(urls[1]).toContain("qwhdsso/login");
+    expect(urls[2]).toContain("appTokenLogin?sid=SID123");
+    expect(urls[3]).toContain("qwhdmark/1021122301?token=");
+    expect(urls[4]).toContain("user/info");
+    expect(urls[5]).toContain("domark");
+    expect(urls[6]).toContain("markstatus");
+    // autoLogin 重放：原样带签名头和加密 body
+    expect(calls[0].headers["x-sign"]).toBe("SIGN");
+    expect(calls[0].body).toBe("ENCRYPTED_BODY");
+    // appTokenLogin body 用重放拿到的全新会话
+    expect(calls[2].body.token).toBe("JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; ticketID=POD9");
     // domark body 日期正确
-    expect(calls[4].body.date).toBe("20260810");
+    expect(calls[5].body.date).toBe("20260810");
     // 业务请求 cookie 含 yx + session
-    expect(calls[3].headers.Cookie).toContain("yx=123");
-    expect(calls[3].headers.Cookie).toContain("QWHD_SESSION_TOKEN=SESSION1");
+    expect(calls[4].headers.Cookie).toContain("yx=123");
+    expect(calls[4].headers.Cookie).toContain("QWHD_SESSION_TOKEN=SESSION1");
     done();
   });
 });
 
-test("runSign: 解析 sid 失败时不再继续（appToken 不被调用）", (done) => {
+test("runSign: autoLogin 重放失败（无会话 cookie）时终止", (done) => {
   const calls = [];
   const api = (url, h, b, cb) => {
     calls.push(url);
-    if (url.includes("qwhdsso/login")) cb(null, {}, "<html>no sid</html>");
+    if (url.includes("uamonekeylogin/autoLogin")) cb(null, { headers: {} }, "");
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
     expect(calls.length).toBe(1);
-    expect(notifs.length).toBe(1);
     expect(notifs[0][1]).toContain("自动续期失败");
     done();
   });
 });
 
-test("runSign: appToken 失败时通知登录态失效", (done) => {
-  const calls = [];
-  const api = (url, h, b, cb) => {
-    calls.push(url);
-    if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
-    else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"FAILED","msg":"失败"}');
-    else cb(null, {}, "{}");
-  };
+test("runSign: autoLogin 网络错误时终止且不标记已签到", (done) => {
+  const api = (url, h, b, cb) => { cb("timeout", null, undefined); };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
-    expect(calls.length).toBe(2);
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs[0][1]).toContain("自动续期失败");
+    expect(r.signed).toBe(false);
     done();
   });
 });
@@ -187,6 +215,7 @@ test("runSign: appToken 失败时通知登录态失效", (done) => {
 test("runSign: user/info 失败时 domark 调用 0 次", (done) => {
   let domarkCalls = 0;
   const api = (url, h, b, cb) => {
+    if (url.includes("uamonekeylogin/autoLogin")) return cb(null, { headers: { "Set-Cookie": "JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; Path=/;HTTPOnly; ticketID=POD9; Secure" } }, "");
     if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
     else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
     else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
@@ -195,7 +224,7 @@ test("runSign: user/info 失败时 domark 调用 0 次", (done) => {
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, () => {
     expect(domarkCalls).toBe(0);
     done();
   });
@@ -203,6 +232,7 @@ test("runSign: user/info 失败时 domark 调用 0 次", (done) => {
 
 test("runSign: 成功时通知包含本月已签天数", (done) => {
   const api = (url, h, b, cb) => {
+    if (url.includes("uamonekeylogin/autoLogin")) return cb(null, { headers: { "Set-Cookie": "JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; Path=/;HTTPOnly; ticketID=POD9; Secure" } }, "");
     if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
     else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
     else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
@@ -212,7 +242,7 @@ test("runSign: 成功时通知包含本月已签天数", (done) => {
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs.length).toBe(1);
     expect(notifs[0][2]).toContain("本月已签 2 天");
     expect(r.signed).toBe(true);
@@ -225,7 +255,7 @@ test("runSign: 网络错误（login 超时）不崩溃且不标记已签到", (d
     cb("timeout", null, undefined);  // 模拟 $httpClient 网络失败
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs.length).toBe(1);
     expect(notifs[0][1]).toContain("自动续期失败");
     expect(r.signed).toBe(false);
@@ -235,13 +265,14 @@ test("runSign: 网络错误（login 超时）不崩溃且不标记已签到", (d
 
 test("runSign: 活动页缺 yx cookie 时终止且不标记已签到", (done) => {
   const api = (url, h, b, cb) => {
+    if (url.includes("uamonekeylogin/autoLogin")) return cb(null, { headers: { "Set-Cookie": "JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; Path=/;HTTPOnly; ticketID=POD9; Secure" } }, "");
     if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
     else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
     else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");  // 缺 yx
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs[0][1]).toContain("自动续期失败");
     expect(r.signed).toBe(false);
     done();
@@ -250,6 +281,7 @@ test("runSign: 活动页缺 yx cookie 时终止且不标记已签到", (done) =>
 
 test("runSign: user/info 网络错误时终止且不标记已签到", (done) => {
   const api = (url, h, b, cb) => {
+    if (url.includes("uamonekeylogin/autoLogin")) return cb(null, { headers: { "Set-Cookie": "JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; Path=/;HTTPOnly; ticketID=POD9; Secure" } }, "");
     if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
     else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
     else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": ["yx=123;Max-Age=300;path=/", "QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly"] } }, "");
@@ -257,7 +289,7 @@ test("runSign: user/info 网络错误时终止且不标记已签到", (done) => 
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs[0][1]).toContain("签到失败");
     expect(r.signed).toBe(false);
     done();
@@ -266,6 +298,7 @@ test("runSign: user/info 网络错误时终止且不标记已签到", (done) => 
 
 test("runSign: Set-Cookie 为字符串格式（非数组）也能解析", (done) => {
   const api = (url, h, b, cb) => {
+    if (url.includes("uamonekeylogin/autoLogin")) return cb(null, { headers: { "Set-Cookie": "JSESSIONID=NEW; UID=NEWUID; Comment=SessionServer-unity; Path=/;HTTPOnly; ticketID=POD9; Secure" } }, "");
     if (url.includes("qwhdsso/login")) cb(null, {}, '<script>loginPath="/appTokenLogin?sid=SID123"</script>');
     else if (url.includes("appTokenLogin")) cb(null, {}, '{"code":"SUCCESS","data":{"url":"https://wx.10086.cn/qwhdhub/qwhdmark/1021122301?token=QWHDSSOX"}}');
     else if (url.includes("qwhdmark/1021122301?token=")) cb(null, { headers: { "set-cookie": "yx=123;Max-Age=300;path=/, QWHD_SESSION_TOKEN=SESSION1;Max-Age=1800;path=/;HttpOnly" } }, "");
@@ -275,7 +308,7 @@ test("runSign: Set-Cookie 为字符串格式（非数组）也能解析", (done)
     else cb(null, {}, "{}");
   };
   const notifs = [];
-  runSign(api, "APP_COOKIE", "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
+  runSign(api, SNAPSHOT, "20260810", { notify: (t, s, c) => notifs.push([t, s, c]) }, (r) => {
     expect(notifs.length).toBe(1);
     expect(notifs[0][2]).toContain("本月已签 0 天");
     expect(r.signed).toBe(true);

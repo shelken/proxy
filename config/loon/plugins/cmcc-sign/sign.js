@@ -1,9 +1,9 @@
 // 中国移动签到有礼 - 每日签到脚本
-// 流程：读 app 域登录态 → 动态获取 sid → appTokenLogin 换会话 → GET 活动页拿 QWHD_SESSION_TOKEN/yx → user/info 校验 → domark 签到 → markstatus 统计 → 通知
-// app 域登录态（cmcc_app_cookie）是长效凭据，每次签到前用它自动换取 30 分钟会话 token，无需手动打开 APP。
-// 纯函数部分（parseSid/parseAppToken/parseUserInfo/parseDomark/parseMarkstatus/runSign）可被同目录 sign.test.js 直接提取测试
+// 流程：重放 autoLogin 请求拿全新会话 → 动态获取 sid → appTokenLogin 换会话 → GET 活动页拿 QWHD_SESSION_TOKEN/yx → user/info 校验 → domark 签到 → markstatus 统计 → 通知
+// autoLogin 快照（cmcc_autologin，含 x-token 长期设备凭据）由 capture.js 捕获，原样重放即可换取新会话，无需手动打开 APP。
+// 纯函数部分（parseSid/parseAppToken/parseUserInfo/parseDomark/parseMarkstatus/runSign/parseSessionCookie）可被同目录 sign.test.js 直接提取测试
 
-const APP_COOKIE_KEY = "cmcc_app_cookie";
+const SNAPSHOT_KEY = "cmcc_autologin";
 const LAST_SIGN_KEY = "cmcc_sign_last";
 
 const LOGIN_URL = "https://wx.10086.cn/qwhdsso/login?dlwmh=true&actUrl=" +
@@ -86,6 +86,27 @@ function parseMarkstatus(body) {
   }
 }
 
+// 从 autoLogin 响应 Set-Cookie 提取全新会话 cookie 串（JSESSIONID/UID/Comment/ticketID，按固定顺序）
+// 兼容数组（Loon 多行 Set-Cookie）与单字符串（每段以 ; 或 , 分隔）两种形态
+function parseSessionCookie(setCookieHeader) {
+  if (!setCookieHeader) return "";
+  const map = {};
+  const list = Array.isArray(setCookieHeader) ? setCookieHeader : String(setCookieHeader).split(",");
+  for (const part of list) {
+    const segs = String(part).split(";");
+    for (const seg of segs) {
+      const m = seg.trim().match(/^([^=]+)=(.+)$/);
+      if (m && ["JSESSIONID", "UID", "Comment", "ticketID"].includes(m[1].trim())) {
+        map[m[1].trim()] = m[1].trim() + "=" + m[2].trim();
+      }
+    }
+  }
+  return ["JSESSIONID", "UID", "Comment", "ticketID"]
+    .filter((n) => map[n])
+    .map((n) => map[n])
+    .join("; ");
+}
+
 // 组装业务请求头：完整 cookie jar（yx + QWHD_SESSION_TOKEN）+ leadeon UA + 完整 Referer
 function buildHeaders(sessionCookie, referer) {
   return {
@@ -99,24 +120,38 @@ function buildHeaders(sessionCookie, referer) {
   };
 }
 
-// 编排：换会话 → 校验登录态 → 签到 → 统计天数 → 通知。
+// 编排：重放 autoLogin 换会话 → 校验登录态 → 签到 → 统计天数 → 通知。
 // api 为注入的请求函数 (url, headers, body, cb)，便于测试；notify 注入通知函数；onDone 收尾（参数 { signed } 表示本次是否完成签到）。
-function runSign(api, appCookie, dateStr, env, onDone) {
+// snapshot 为 capture.js 捕获的 autoLogin 请求快照 { url, headers, body }。
+function runSign(api, snapshot, dateStr, env, onDone) {
   const notify = env.notify;
 
-  // 网络失败统一处理：通知 + 收尾
-  const fail = (sub, msg) => {
-    notify("中国移动签到有礼", sub, msg);
+  // 统一失败处理：console 打印完整诊断（含状态码/响应体片段），通知只发简洁提示
+  const fail = (step, err, resp, data, hint) => {
+    const status = resp && resp.status;
+    const body = data ? String(data).slice(0, 200) : "";
+    console.log("cmcc-sign: [" + step + "] 失败 err=" + (err || "-") + " status=" + (status || "-") + " resp=" + body);
+    notify("中国移动签到有礼", step + "失败", hint || "请查看 Loon 日志定位问题");
     onDone({ signed: false });
   };
 
-  // 1. GET 登录页拿 sid
-  api(LOGIN_URL, null, null, (err1, resp1, data1) => {
-    if (err1) return fail("自动续期失败", "网络异常，请稍后重试");
+  // 0. 原样重放 autoLogin 请求，拿全新会话（Set-Cookie）
+  api(snapshot.url, snapshot.headers, snapshot.body, (err0, resp0, data0) => {
+    if (err0) return fail("自动续期", err0, resp0, data0, "网络异常");
+    const sc = resp0 && resp0.headers && (resp0.headers["Set-Cookie"] || resp0.headers["set-cookie"]);
+    const appCookie = parseSessionCookie(sc);
+    if (!appCookie) {
+      console.log("cmcc-sign: [autoLogin 重放] 未返回会话 cookie Set-Cookie=" + String(sc || "").slice(0, 200));
+      return fail("自动续期", null, resp0, data0, "未返回会话 cookie，请重新打开中国移动APP");
+    }
+
+    // 1. GET 登录页拿 sid
+    api(LOGIN_URL, null, null, (err1, resp1, data1) => {
+    if (err1) return fail("获取登录票据", err1, resp1, data1, "网络异常");
     const sid = parseSid(data1);
     if (!sid) {
-      console.log("cmcc-sign: 解析 sid 失败");
-      return fail("自动续期失败", "无法获取登录票据，请打开中国移动APP");
+      console.log("cmcc-sign: [解析 sid] 失败，登录页响应=" + String(data1 || "").slice(0, 200) + " status=" + (resp1 && resp1.status));
+      return fail("自动续期", null, resp1, data1, "无法获取登录票据");
     }
 
     // 2. appTokenLogin 用 app 域登录态换会话（url）
@@ -124,12 +159,12 @@ function runSign(api, appCookie, dateStr, env, onDone) {
       { "Content-Type": "application/json;charset=UTF-8", "Origin": "https://wx.10086.cn", "User-Agent": DEFAULT_UA },
       { token: appCookie },
       (err2, resp2, data2) => {
-        if (err2) return fail("自动续期失败", "网络异常，请稍后重试");
+        if (err2) return fail("自动续期", err2, resp2, data2, "网络异常");
         const at = parseAppToken(data2);
         if (!at.ok) {
           // 打印响应体前 200 字符（不含 cookie 值），定位失败原因
-          console.log("cmcc-sign: appTokenLogin 失败 resp=" + String(data2).slice(0, 200) + " status=" + (resp2 && resp2.status));
-          return fail("自动续期失败", "登录态已失效，请打开中国移动APP重新登录");
+          console.log("cmcc-sign: [appTokenLogin] 失败 resp=" + String(data2).slice(0, 200) + " status=" + (resp2 && resp2.status));
+          return fail("自动续期", null, resp2, data2, "登录态已失效");
         }
 
         // 3. GET 活动页（拼 channelId + yx，拿 Set-Cookie 的 yx + QWHD_SESSION_TOKEN）
@@ -137,11 +172,13 @@ function runSign(api, appCookie, dateStr, env, onDone) {
         const sep = at.url.includes("?") ? "&" : "?";
         const fullUrl = at.url + sep + "channelId=" + CHANNEL_ID + "&yx=" + yx;
         api(fullUrl, null, null, (err3, resp3, data3) => {
-          if (err3) return fail("自动续期失败", "网络异常，请稍后重试");
+          if (err3) return fail("自动续期", err3, resp3, data3, "网络异常");
           // 从响应头提取 Set-Cookie（yx + QWHD_SESSION_TOKEN）。Loon 的 set-cookie 可能是字符串或数组。
           let sessionCookie = "";
+          let rawSc = "";
           if (resp3 && resp3.headers) {
             const sc = resp3.headers["Set-Cookie"] || resp3.headers["set-cookie"] || "";
+            rawSc = String(Array.isArray(sc) ? sc.join(" | ") : sc);
             const scList = Array.isArray(sc) ? sc : String(sc).split(",");
             const cookies = {};
             for (const part of scList) {
@@ -154,28 +191,30 @@ function runSign(api, appCookie, dateStr, env, onDone) {
             }
           }
           if (!sessionCookie) {
-            console.log("cmcc-sign: 未获取完整会话 cookie（需 yx + QWHD_SESSION_TOKEN），status=" + (resp3 && resp3.status));
-            return fail("自动续期失败", "未获取到会话，请打开中国移动APP");
+            console.log("cmcc-sign: [活动页] 未获取完整会话 cookie status=" + (resp3 && resp3.status) + " Set-Cookie=" + rawSc.slice(0, 200));
+            return fail("自动续期", null, resp3, data3, "未获取到会话");
           }
 
           // 4. user/info 校验登录态 + 拿昵称
           api(API_BASE + "/mark/user/info", buildHeaders(sessionCookie, fullUrl),
             { appVersion: "", miniVersion: "" },
             (err4, resp4, data4) => {
-              if (err4) return fail("签到失败", "网络异常，请稍后重试");
+              if (err4) return fail("签到", err4, resp4, data4, "网络异常");
               const info = parseUserInfo(data4);
               if (!info.ok) {
-                console.log("cmcc-sign: user/info 登录态校验失败");
-                return fail("凭据已失效", "请打开中国移动APP重新进入活动页");
+                console.log("cmcc-sign: [user/info] 登录态校验失败 resp=" + String(data4 || "").slice(0, 200));
+                return fail("凭据校验", null, resp4, data4, "登录态校验失败");
               }
 
               // 5. 签到（恰好一次）
               api(API_BASE + "/mark/mark31/domark", buildHeaders(sessionCookie, fullUrl),
                 { date: dateStr },
                 (err5, resp5, data5) => {
-                  if (err5) return fail("签到失败", "网络异常，请稍后重试");
+                  if (err5) return fail("签到", err5, resp5, data5, "网络异常");
                   const signResult = parseDomark(data5);
-                  if (signResult === "fail") console.log("cmcc-sign: domark 失败");
+                  if (signResult === "fail") {
+                    console.log("cmcc-sign: [domark] 失败 resp=" + String(data5 || "").slice(0, 200));
+                  }
 
                   // 6. 统计本月已签天数
                   api(API_BASE + "/mark/mark31/markstatus", buildHeaders(sessionCookie, fullUrl),
@@ -183,8 +222,8 @@ function runSign(api, appCookie, dateStr, env, onDone) {
                     (err6, resp6, data6) => {
                       if (err6) {
                         // 签到已发生，仅统计失败：仍算已完成签到
-                        notify("中国移动签到有礼", signResult === "success" ? "签到成功" : signResult === "marked" ? "今日已签到" : "签到失败", "统计失败，详见日志");
-                        console.log("cmcc-sign: markstatus 网络失败");
+                        console.log("cmcc-sign: [markstatus] 网络失败 err=" + err6 + " status=" + (resp6 && resp6.status));
+                        notify("中国移动签到有礼", signResult === "success" ? "签到成功" : signResult === "marked" ? "今日已签到" : "签到失败", "统计失败｜HTTP " + (resp6 && resp6.status || "-") + "｜" + (err6 || ""));
                         return onDone({ signed: signResult !== "fail" });
                       }
                       const markedCount = parseMarkstatus(data6);
@@ -215,6 +254,7 @@ function runSign(api, appCookie, dateStr, env, onDone) {
       }
     );
   });
+  });
 }
 
 // ===== Loon 环境适配 =====
@@ -229,7 +269,10 @@ function requestGet(url, headers, cb) {
 function requestPost(url, headers, body, cb) {
   const merged = Object.assign({ "User-Agent": DEFAULT_UA }, headers || {});
   const opts = { url: url, headers: merged, timeout: 20000 };
-  if (body !== null && body !== undefined) opts.body = JSON.stringify(body);
+  if (body !== null && body !== undefined) {
+    // autoLogin 重放时 body 是原始加密串，必须原样发送；业务接口传对象时序列化为 JSON
+    opts.body = typeof body === "string" ? body : JSON.stringify(body);
+  }
   $httpClient.post(opts, (err, resp, data) => cb(err, resp, data));
 }
 
@@ -247,11 +290,13 @@ function today() {
 }
 
 function main() {
-  const appCookie = $persistentStore.read(APP_COOKIE_KEY);
-  if (!appCookie) {
+  const snapshotRaw = $persistentStore.read(SNAPSHOT_KEY);
+  let snapshot = null;
+  try { snapshot = snapshotRaw ? JSON.parse(snapshotRaw) : null; } catch (e) { snapshot = null; }
+  if (!snapshot || !snapshot.url || !snapshot.body) {
     if (notifyEnabled)
       $notification.post("中国移动签到有礼", "未获取到凭据", "请打开中国移动APP进入「签到有礼」活动页后重试");
-    console.log("cmcc-sign: 无 app 域登录态");
+    console.log("cmcc-sign: 无 autoLogin 快照");
     return $done();
   }
   const dateStr = today();
@@ -264,7 +309,7 @@ function main() {
   }
   runSign(
     request,
-    appCookie,
+    snapshot,
     dateStr,
     { notify: (t, s, c) => { if (notifyEnabled) $notification.post(t, s, c); } },
     (result) => {

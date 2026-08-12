@@ -1,5 +1,5 @@
 // 中国移动签到有礼 capture.js 测试（bun:test）
-// seams: extractAppCookie / shouldUpdateCookie
+// seams: extractAutoLoginSnapshot / shouldUpdateSnapshot
 // 运行: just test capture  或  bun test config/loon/plugins/cmcc-sign/capture.test.js
 
 import { test, expect } from "bun:test";
@@ -11,52 +11,61 @@ import { join } from "node:path";
 const src = readFileSync(join(__dirname, "capture.js"), "utf8");
 const pure = src.split("// ===== Loon 环境适配 =====")[0];
 
-const factory = new Function(pure + "\nreturn { extractAppCookie, shouldUpdateCookie };");
-const { extractAppCookie, shouldUpdateCookie } = factory();
+const factory = new Function(pure + "\nreturn { extractAutoLoginSnapshot, shouldUpdateSnapshot };");
+const { extractAutoLoginSnapshot, shouldUpdateSnapshot } = factory();
 
-// ===== extractAppCookie: 从请求头提取 app 域登录态 cookie =====
-test("extractAppCookie: 合并多个 cookie 行且只保留登录态 cookie", () => {
-  const headers = {
-    "cookie": "JSESSIONID=abc; UID=def; yx=999; gdp_session_id=xyz",
-    "Cookie": "Comment=SessionServer-unity; ticketID=POD9",
-  };
-  const c = extractAppCookie(headers);
-  expect(c).toContain("JSESSIONID=abc");
-  expect(c).toContain("UID=def");
-  expect(c).toContain("Comment=SessionServer-unity");
-  expect(c).toContain("ticketID=POD9");
-  // 无关 cookie 被过滤
-  expect(c).not.toContain("yx");
-  expect(c).not.toContain("gdp_session_id");
+// ===== extractAutoLoginSnapshot: 从请求上下文提取可重放快照 =====
+test("extractAutoLoginSnapshot: 保留关键签名头与 body", () => {
+  const snap = extractAutoLoginSnapshot(
+    "https://client.app.coc.10086.cn/biz-orange/LN/uamonekeylogin/autoLogin",
+    {
+      "Content-Type": "application/Json",
+      "x-qen": "14",
+      "xs": "abc",
+      "x-sign": "def",
+      "x-nonce": "1234",
+      "x-token": "TOKEN",
+      "x-time": "1786525834070",
+      "User-Agent": "ChinaMobile/12.5.2",
+      "Cookie": "JSESSIONID=abc; UID=def",
+      "Content-Length": "1496",
+      "Accept-Encoding": "deflate",
+    },
+    "ENCRYPTED_BODY"
+  );
+  expect(snap.url).toBe("https://client.app.coc.10086.cn/biz-orange/LN/uamonekeylogin/autoLogin");
+  expect(snap.headers["x-sign"]).toBe("def");
+  expect(snap.headers["x-token"]).toBe("TOKEN");
+  expect(snap.headers["Cookie"]).toBe("JSESSIONID=abc; UID=def");
+  expect(snap.body).toBe("ENCRYPTED_BODY");
+  // 干扰头被剔除
+  expect(snap.headers["Content-Length"]).toBeUndefined();
+  expect(snap.headers["Accept-Encoding"]).toBeUndefined();
 });
 
-test("extractAppCookie: 按固定顺序输出，顺序无关时结果恒定", () => {
-  const h1 = { "cookie": "ticketID=POD9; JSESSIONID=abc; UID=def" };
-  const h2 = { "cookie": "UID=def; JSESSIONID=abc; ticketID=POD9" };
-  expect(extractAppCookie(h1)).toBe(extractAppCookie(h2));
+test("extractAutoLoginSnapshot: 无 url 或 headers 返回 null", () => {
+  expect(extractAutoLoginSnapshot(null, {}, "")).toBeNull();
+  expect(extractAutoLoginSnapshot("https://x.com", null, "")).toBeNull();
 });
 
-test("extractAppCookie: 无关键 cookie 时返回空串", () => {
-  expect(extractAppCookie({ "cookie": "yx=123" })).toBe("");
-  expect(extractAppCookie({})).toBe("");
-  expect(extractAppCookie(null)).toBe("");
+// ===== shouldUpdateSnapshot: 去重（防重复通知） =====
+test("shouldUpdateSnapshot: 首次（无旧快照）需要更新", () => {
+  const snap = { url: "https://x.com", headers: {}, body: "b" };
+  expect(shouldUpdateSnapshot(snap, null)).toBe(true);
 });
 
-// ===== shouldUpdateCookie: 去重（防重复通知） =====
-test("shouldUpdateCookie: 首次（无旧值）需要更新", () => {
-  expect(shouldUpdateCookie("COOKIE1", null)).toBe(true);
+test("shouldUpdateSnapshot: 与旧快照相同则不更新（静默）", () => {
+  const snap = { url: "https://x.com", headers: { "x-sign": "s" }, body: "b" };
+  expect(shouldUpdateSnapshot(snap, JSON.parse(JSON.stringify(snap)))).toBe(false);
 });
 
-test("shouldUpdateCookie: 与旧值相同则不更新（静默）", () => {
-  expect(shouldUpdateCookie("COOKIE1", "COOKIE1")).toBe(false);
+test("shouldUpdateSnapshot: 与旧快照不同则更新（重新登录）", () => {
+  const snap = { url: "https://x.com", headers: { "x-sign": "s2" }, body: "b" };
+  const old = { url: "https://x.com", headers: { "x-sign": "s1" }, body: "b" };
+  expect(shouldUpdateSnapshot(snap, old)).toBe(true);
 });
 
-test("shouldUpdateCookie: 与旧值不同则更新（重新登录）", () => {
-  expect(shouldUpdateCookie("COOKIE2", "COOKIE1")).toBe(true);
-});
-
-test("shouldUpdateCookie: 空 cookie 不更新", () => {
-  expect(shouldUpdateCookie("", "COOKIE1")).toBe(false);
-  expect(shouldUpdateCookie(null, "COOKIE1")).toBe(false);
-  expect(shouldUpdateCookie(undefined, "COOKIE1")).toBe(false);
+test("shouldUpdateSnapshot: 空快照不更新", () => {
+  expect(shouldUpdateSnapshot(null, {})).toBe(false);
+  expect(shouldUpdateSnapshot({ url: "", headers: {}, body: "" }, {})).toBe(false);
 });

@@ -12,7 +12,7 @@ signTime=input,"30 7 * * *",tag=签到时间,desc=每日签到 cron 表达式（
 notify=switch,true,tag=签到结果通知,desc=关闭后不再发送通知
 
 [Script]
-http-request ^https:\/\/client\.app\.coc\.10086\.cn\/biz-orange\/DN\/(refreshSession|documentSharing\/getDocumentSharingByFuncId) script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/capture.js, tag=移动签到有礼-提取凭据
+http-request ^https:\/\/client\.app\.coc\.10086\.cn\/biz-orange\/LN\/uamonekeylogin\/autoLogin script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/capture.js, requires-body=true, tag=移动签到有礼-提取凭据
 cron {signTime} script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/cmcc-sign/sign.js, argument=[{notify}], tag=移动签到有礼-每日签到
 
 [MITM]
