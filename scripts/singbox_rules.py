@@ -11,19 +11,28 @@ import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 REMOTE_RULE_BASE = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules"
 DEFAULT_LOON_CONFIG = ROOT / "config/loon/mac.conf"
-DEFAULT_MANIFEST = ROOT / "config/sing-box/rules/lists/remote.txt"
+DEFAULT_MANIFEST = ROOT / "config/rules/index.txt"
 DEFAULT_PROFILE_PATH = ROOT / "config/sing-box/meta/generated/loon-profile.json"
-SOURCE_DIR = ROOT / "config/sing-box/rules/source/generated"
-SRS_DIR = ROOT / "config/sing-box/rules/srs/generated"
-UNSUPPORTED_DIR = SOURCE_DIR / "unsupported"
-INDEX_PATH = ROOT / "config/sing-box/rules/generated-index.json"
+GENERATED_DIR = ROOT / "config/rules/generated"
+SINGBOX_DIR = GENERATED_DIR / "singbox"
+CLASH_DIR = GENERATED_DIR / "clash"
+PLAIN_DIR = GENERATED_DIR / "plain"
+UNSUPPORTED_DIR = GENERATED_DIR / "unsupported"
+INDEX_PATH = GENERATED_DIR / "index.json"
+ROUTESET_PATH = ROOT / "config/sing-box/conf.d/45-ruleset.json"
+# 对外发布版：rule_set 指向发布分支的 URL，供不克隆本仓库的用户直接订阅
+REMOTE_ROUTESET_PATH = GENERATED_DIR / "45-ruleset-remote.json"
 SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set"
 SING_GEOSITE_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set"
+
+# rule_set.path 相对 sing-box 的工作目录解析。生产运行时工作目录是
+# config/sing-box（justfile 的所有 sing-box 命令都从那一层启动）。
+RULESET_RELATIVE_DIR = Path("../rules/generated/singbox")
 
 SUPPORTED_FIELDS = {
     "DOMAIN": "domain",
@@ -35,34 +44,89 @@ SUPPORTED_FIELDS = {
     "SRC-IP-CIDR": "source_ip_cidr",
     "SRC-PORT": "source_port",
     "DST-PORT": "port",
+    "DEST-PORT": "port",
     "PORT": "port",
     "PROCESS-NAME": "process_name",
+    "NETWORK": "network",
 }
 
+# sing-box 的路由规则没有对应表达，一律跳过并记录。
+# USER-AGENT / URL-REGEX：单靠 TLS 嗅探拿不到，sing-box 不暴露这两个维度。
+# IP-ASN / SRC-GEOIP / SRC-IP-ASN：geoip 族匹配已在 sing-box 1.12.0 移除，
+#   且源侧没有等价的行内表达，只能跳过。
+# IN-PORT：sing-box 用 inbound tag 而不是端口号来区分入口。
+# PROTOCOL：Loon 的取值是 TCP/UDP/QUIC/HTTP，与 sing-box 的 protocol（嗅探协议）
+#           和 network（tcp/udp）两套语义交叉，无法一一映射，宁可跳过也不猜。
+#
+# 注意 GEOIP / GEOSITE 不在此列：它们会被 normalize 成对 sing-geoip /
+# sing-geosite 预编译规则集的引用（见 special_ref_to_url），不是丢弃。
 UNSUPPORTED_TYPES = {
     "USER-AGENT",
     "URL-REGEX",
     "IP-ASN",
-    "DEST-PORT",
+    "SRC-GEOIP",
+    "SRC-IP-ASN",
     "IN-PORT",
-    "NETWORK",
     "PROTOCOL",
 }
+
+# mihomo 的 rule-provider（behavior: classical）能原生吃下这些行。
+# 详见 https://wiki.metacubex.one/en/config/rules/
+CLASH_SUPPORTED = set(SUPPORTED_FIELDS) | {
+    "IP-ASN",
+    "GEOIP",
+    "GEOSITE",
+    "SRC-GEOIP",
+    "SRC-IP-ASN",
+    "SRC-IP-SUFFIX",
+    "IP-SUFFIX",
+    "AND",
+    "OR",
+    "NOT",
+}
+
+# Loon 用 DEST-PORT，mihomo 用 DST-PORT，同一语义两种拼写。
+CLASH_RENAMES = {"DEST-PORT": "DST-PORT"}
+
+# 路由策略顺序即优先级，先匹配先胜。见 build_routeset。
+POLICY_ORDER = [
+    "reject",
+    "gemini",
+    "openai",
+    "appleai",
+    "opencode",
+    "dev",
+    "ptcg",
+    "japansite",
+    "adultnsfw",
+    "direct",
+    "proxy",
+]
+REJECT_POLICY = "reject"
+
+LOGICAL_PREFIXES = ("AND,", "OR,", "NOT,")
 
 
 @dataclass(frozen=True)
 class RemoteList:
     tag: str
     policy: str
-    url: str
     source: str
+    origin: str = "manifest"
 
     @property
     def output_name(self) -> str:
-        filename = Path(urllib.parse.urlparse(self.url).path).name
-        stem = Path(filename).stem or filename or self.tag
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_")
+        """产物文件名。tag 即产物名，不再从 URL 派生。
+
+        从客户端配置反推清单时（extract 子命令），tag 来自 URL 文件名或 provider
+        名，可能含路径分隔符等字符，因此这里做一次净化。
+        """
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", self.tag).strip("_")
         return safe or "rule"
+
+    @property
+    def is_remote(self) -> bool:
+        return self.source.startswith(("http://", "https://"))
 
 
 def read_text(path: Path) -> str:
@@ -75,15 +139,14 @@ def write_text(path: Path, content: str) -> None:
 
 
 def clean_generated_outputs() -> None:
-    for directory in (SOURCE_DIR, SRS_DIR, UNSUPPORTED_DIR):
-        directory.mkdir(parents=True, exist_ok=True)
-        for path in directory.iterdir():
-            if path.name == ".gitkeep":
-                continue
+    if GENERATED_DIR.exists():
+        for path in sorted(GENERATED_DIR.rglob("*"), reverse=True):
             if path.is_file():
                 path.unlink()
-    if INDEX_PATH.exists():
-        INDEX_PATH.unlink()
+            elif path.is_dir():
+                path.rmdir()
+    if ROUTESET_PATH.exists():
+        ROUTESET_PATH.unlink()
 
 
 def fetch_text(url: str) -> str:
@@ -102,6 +165,16 @@ def fetch_bytes(url: str) -> bytes:
     )
     with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
+
+
+def read_source(source: str) -> str:
+    """source 为 http(s) URL 时联网拉取，否则按仓库相对路径读取本地文件。"""
+    if source.startswith(("http://", "https://")):
+        return fetch_text(source)
+    path = ROOT / source
+    if not path.is_file():
+        raise FileNotFoundError(f"rule source not found: {source}")
+    return read_text(path)
 
 
 def parse_key_values(parts: list[str]) -> dict[str, str]:
@@ -263,7 +336,9 @@ def parse_loon_remote_rules(text: str) -> list[RemoteList]:
             continue
         tag = meta.get("tag") or Path(url).stem
         policy = meta.get("policy", "DIRECT")
-        items.append(RemoteList(tag=tag, policy=policy, url=url, source="loon"))
+        items.append(
+            RemoteList(tag=tag, policy=policy, source=url, origin="loon")
+        )
     return items
 
 
@@ -323,7 +398,9 @@ def parse_clash_remote_rules(text: str) -> list[RemoteList]:
         url = meta.get("url")
         if not url:
             continue
-        items.append(RemoteList(tag=provider, policy=policy, url=url, source="clash"))
+        items.append(
+            RemoteList(tag=provider, policy=policy, source=url, origin="clash")
+        )
     return items
 
 
@@ -337,10 +414,10 @@ def extract_remote_rules(path: Path) -> list[RemoteList]:
 
 
 def render_manifest(items: list[RemoteList]) -> str:
-    lines = ["# tag|policy|url|source"]
-    unique = {(item.tag, item.policy, item.url, item.source): item for item in items}
-    for item in sorted(unique.values(), key=lambda x: (x.tag.lower(), x.url)):
-        lines.append(f"{item.tag}|{item.policy}|{item.url}|{item.source}")
+    lines = ["# tag|policy|source"]
+    unique = {(item.tag, item.policy, item.source): item for item in items}
+    for item in sorted(unique.values(), key=lambda x: (x.tag.lower(), x.source)):
+        lines.append(f"{item.tag}|{item.policy}|{item.source}")
     lines.append("")
     return "\n".join(lines)
 
@@ -352,11 +429,12 @@ def load_manifest(path: Path) -> list[RemoteList]:
         if not stripped or stripped.startswith("#"):
             continue
         parts = stripped.split("|")
-        if len(parts) not in (3, 4):
-            raise ValueError(f"invalid manifest line: {line}")
-        tag, policy, url = [part.strip() for part in parts[:3]]
-        source = parts[3].strip() if len(parts) == 4 else "unknown"
-        items.append(RemoteList(tag=tag, policy=policy, url=url, source=source))
+        if len(parts) != 3:
+            raise ValueError(f"invalid manifest line (want tag|policy|source): {line}")
+        tag, policy, source = [part.strip() for part in parts]
+        if not tag or not policy or not source:
+            raise ValueError(f"empty manifest field: {line}")
+        items.append(RemoteList(tag=tag, policy=policy, source=source, origin="manifest"))
     return items
 
 
@@ -606,6 +684,7 @@ def to_source_json(rules: list[dict[str, Any]]) -> dict[str, Any]:
         "source_ip_cidr",
         "port",
         "source_port",
+        "network",
     ]
     for field in field_order:
         ordered_rules.extend(
@@ -646,70 +725,86 @@ def download_special_srs(special_refs: list[dict[str, str]], output_path: Path) 
     output_path.write_bytes(fetch_bytes(special_ref_to_url(ref["kind"], ref["value"])))
 
 
-def build_index(items: list[RemoteList]) -> dict[str, Any]:
-    entries = []
-    for item in items:
-        entries.append(
-            {
-                "tag": item.tag,
-                "policy": item.policy,
-                "url": item.url,
-                "source": item.source,
-                "output_name": item.output_name,
-                "source_path": f"config/sing-box/rules/source/generated/{item.output_name}.json",
-                "srs_path": f"config/sing-box/rules/srs/generated/{item.output_name}.srs",
-                "unsupported_path": f"config/sing-box/rules/source/generated/unsupported/{item.output_name}.txt",
-                "remote_source_url": f"{REMOTE_RULE_BASE}/source/{item.output_name}.json",
-                "remote_srs_url": f"{REMOTE_RULE_BASE}/srs/{item.output_name}.srs",
-                "remote_unsupported_url": f"{REMOTE_RULE_BASE}/unsupported/{item.output_name}.txt",
-            }
-        )
-    return {"version": 1, "entries": entries}
+class Emission(NamedTuple):
+    """一次客户端产物生成的完整结果。"""
+
+    text: str
+    skipped: list[str]
+    special_refs: list[dict[str, str]] = []
 
 
-def write_index(items: list[RemoteList]) -> None:
-    write_text(
-        INDEX_PATH, json.dumps(build_index(items), ensure_ascii=False, indent=2) + "\n"
-    )
+def emit_singbox(rule_lines: list[str]) -> Emission:
+    """输出 sing-box 源规则集 JSON 文本，附带被跳过的原始行。
 
-
-def build_one(item: RemoteList) -> tuple[Path, Path, Path | None, int, int]:
-    SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-    SRS_DIR.mkdir(parents=True, exist_ok=True)
-    UNSUPPORTED_DIR.mkdir(parents=True, exist_ok=True)
-
-    content = fetch_text(item.url)
-    rule_lines = normalize_rule_lines(content)
+    GEOIP / GEOSITE 行没有行内等价，但当整个列表只有这类引用时，可以退化为
+    对 sing-geoip / sing-geosite 预编译规则集的引用（special_refs），此时产物
+    是下载来的 .srs，而不是本地编译的。
+    """
     rules, special_refs, unsupported = convert_rule_lines(rule_lines)
-
-    source_path = SOURCE_DIR / f"{item.output_name}.json"
-    srs_path = SRS_DIR / f"{item.output_name}.srs"
-    unsupported_path = UNSUPPORTED_DIR / f"{item.output_name}.txt"
-
     if special_refs and not rules and not unsupported:
-        source_json = special_ref_to_metadata(special_refs)
-        write_text(
-            source_path, json.dumps(source_json, ensure_ascii=False, indent=2) + "\n"
+        payload = special_ref_to_metadata(special_refs)
+        return Emission(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", [], special_refs
         )
-        download_special_srs(special_refs, srs_path)
-    else:
-        source_json = to_source_json(rules)
-        write_text(
-            source_path, json.dumps(source_json, ensure_ascii=False, indent=2) + "\n"
-        )
-        compile_srs(source_path, srs_path)
+    payload = to_source_json(rules)
+    return Emission(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", unsupported)
 
-    if unsupported:
-        write_text(unsupported_path, "\n".join(unsupported) + "\n")
-    elif unsupported_path.exists():
-        unsupported_path.unlink()
-    return (
-        source_path,
-        srs_path,
-        unsupported_path if unsupported else None,
-        len(rule_lines),
-        len(unsupported),
-    )
+
+def clash_rule_line(stripped: str) -> str | None:
+    """把一行源规则转成 mihomo classical provider 的行，无法表达时返回 None。
+
+    `.domain.com` 是 DOMAIN-SUFFIX 的省略写法，裸域名是 DOMAIN 的省略写法；
+    这两种在 Surge/Loon 的列表里很常见（如 Apple_Domain.list），但 provider
+    的 payload 里没有省略语法，必须还原成完整规则。
+    """
+    if "," not in stripped:
+        if stripped.startswith("."):
+            return f"DOMAIN-SUFFIX,{stripped[1:]}"
+        return f"DOMAIN,{stripped}"
+    rule_type = stripped.split(",", 1)[0].strip().upper()
+    if rule_type not in CLASH_SUPPORTED:
+        return None
+    renamed = CLASH_RENAMES.get(rule_type, rule_type)
+    return renamed + stripped[len(rule_type) :]
+
+
+def emit_clash(rule_lines: list[str]) -> Emission:
+    """输出 mihomo rule-provider 的 payload 文本。
+
+    behavior: classical 的 provider 逐行吃原生规则语法，因此这里只做重命名、
+    省略式还原与过滤，不改变规则语义。
+    详见 https://wiki.metacubex.one/en/config/rule-providers/
+    """
+    kept: list[str] = []
+    skipped: list[str] = []
+    for line in rule_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        converted = clash_rule_line(stripped)
+        if converted is None:
+            skipped.append(stripped)
+            continue
+        kept.append(converted)
+    body = "\n".join(f"  - '{line}'" for line in kept)
+    text = f"payload:\n{body}\n" if kept else "payload: []\n"
+    return Emission(text, skipped)
+
+
+def emit_plain(rule_lines: list[str]) -> Emission:
+    """内容行原样输出，不做类型过滤或改写。
+
+    Loon 与 Surge 的规则集行格式与源格式一致，所以不需要转换。
+    注释与空行已在上游 normalize_rule_lines 里去掉了，这里拿到的是纯规则行。
+    """
+    return Emission("\n".join(rule_lines) + "\n", [])
+
+
+CLIENT_EMITTERS = {
+    "singbox": emit_singbox,
+    "clash": emit_clash,
+    "plain": emit_plain,
+}
 
 
 def find_item(items: list[RemoteList], target: str) -> RemoteList:
@@ -720,14 +815,161 @@ def find_item(items: list[RemoteList], target: str) -> RemoteList:
     raise KeyError(f"tag not found: {target}")
 
 
+def build_routeset(items: list[RemoteList], *, remote: bool = False) -> dict[str, Any]:
+    """生成路由片段：声明全部 rule_set 并按 policy 分组下发路由。
+
+    顺序即优先级：readConfig 按路径排序后本文件排在 40-route.json 之后，
+    mergeJSON 追加数组，因此手写的 zone-internal 规则恒在列表规则之前。
+
+    remote=False 供本仓库自用，指向磁盘上的生成产物（相对工作目录）。
+    remote=True 供外部用户订阅，指向已发布分支上的 URL。
+    """
+    by_policy: dict[str, list[str]] = defaultdict(list)
+    for item in items:
+        by_policy[item.policy].append(item.tag)
+
+    ordered = [p for p in POLICY_ORDER if p in by_policy]
+    ordered += sorted(p for p in by_policy if p not in POLICY_ORDER)
+
+    rules: list[dict[str, Any]] = []
+    for policy in ordered:
+        tags = sorted(by_policy[policy])
+        if policy == REJECT_POLICY:
+            rules.append({"rule_set": tags, "action": "reject"})
+        else:
+            rules.append(
+                {"rule_set": tags, "action": "route", "outbound": policy}
+            )
+
+    def entry(item: RemoteList) -> dict[str, Any]:
+        name = item.output_name
+        if remote:
+            return {
+                "type": "remote",
+                "tag": name,
+                "format": "binary",
+                "url": f"{REMOTE_RULE_BASE}/singbox/{name}.srs",
+            }
+        return {
+            "type": "local",
+            "tag": name,
+            "format": "binary",
+            "path": f"{RULESET_RELATIVE_DIR.as_posix()}/{name}.srs",
+        }
+
+    return {
+        "route": {
+            "rule_set": [entry(item) for item in sorted(items, key=lambda x: x.output_name)],
+            "rules": rules,
+        }
+    }
+
+
+def build_index(items: list[RemoteList]) -> dict[str, Any]:
+    entries = []
+    for item in items:
+        name = item.output_name
+        entries.append(
+            {
+                "tag": item.tag,
+                "policy": item.policy,
+                "source": item.source,
+                "output_name": name,
+                "local_source": not item.is_remote,
+                "paths": {
+                    client: f"config/rules/generated/{client}/{name}{suffix}"
+                    for client, suffix in (
+                        ("singbox", ".json"),
+                        ("clash", ".yaml"),
+                        ("plain", ".list"),
+                    )
+                },
+                "remote_urls": {
+                    client: f"{REMOTE_RULE_BASE}/{client}/{name}{suffix}"
+                    for client, suffix in (
+                        ("singbox", ".json"),
+                        ("clash", ".yaml"),
+                        ("plain", ".list"),
+                    )
+                },
+            }
+        )
+    return {"version": 2, "entries": entries}
+
+
+def write_index(items: list[RemoteList]) -> None:
+    write_text(
+        INDEX_PATH, json.dumps(build_index(items), ensure_ascii=False, indent=2) + "\n"
+    )
+
+
+def write_routeset(items: list[RemoteList]) -> None:
+    """写两份路由片段。
+
+    本仓库自用的一份指向磁盘产物，配 conf.d 下的其他文件一起跑。
+    对外订阅的一份指向发布分支的 URL，给不克隆本仓库的用户直接用。
+    """
+    for path, remote in ((ROUTESET_PATH, False), (REMOTE_ROUTESET_PATH, True)):
+        write_text(
+            path,
+            json.dumps(build_routeset(items, remote=remote), ensure_ascii=False, indent=2)
+            + "\n",
+        )
+
+
+SUFFIXES = {"singbox": ".json", "clash": ".yaml", "plain": ".list"}
+
+
+def build_one(item: RemoteList) -> list[tuple[str, Path, int, int]]:
+    """为单个 tag 生成全部客户端产物，返回 (client, 路径, 源行数, 跳过数)。"""
+    content = read_source(item.source)
+    rule_lines = normalize_rule_lines(content)
+    results: list[tuple[str, Path, int, int]] = []
+
+    for client, emitter in CLIENT_EMITTERS.items():
+        emission = emitter(rule_lines)
+        path = GENERATED_DIR / client / f"{item.output_name}{SUFFIXES[client]}"
+        write_text(path, emission.text)
+
+        if client == "singbox" and emission.special_refs:
+            # 纯 GEOIP/GEOSITE 列表：产物直接是上游预编译的规则集。
+            download_special_srs(emission.special_refs, path.with_suffix(".srs"))
+        elif client == "singbox":
+            compile_srs(path, path.with_suffix(".srs"))
+
+        report = UNSUPPORTED_DIR / client / f"{item.output_name}.txt"
+        skipped = emission.skipped
+        if skipped:
+            write_text(report, "\n".join(skipped) + "\n")
+        elif report.exists():
+            report.unlink()
+
+        results.append((client, path, len(rule_lines), len(skipped)))
+    return results
+
+
 def cmd_extract(args: argparse.Namespace) -> int:
     all_items: list[RemoteList] = []
     for input_file in args.inputs:
         all_items.extend(extract_remote_rules(Path(input_file)))
     manifest = render_manifest(all_items)
     write_text(Path(args.output), manifest)
-    write_index(load_manifest(Path(args.output)))
     print(f"manifest: {args.output} ({len(all_items)} entries)")
+    return 0
+
+
+def cmd_convert(args: argparse.Namespace) -> int:
+    """纯转换，不联网、不写仓库目录。供测试驱动。"""
+    raw = sys.stdin.read() if args.input == "-" else read_text(Path(args.input))
+    emitter = CLIENT_EMITTERS[args.client]
+    emission = emitter(normalize_rule_lines(raw))
+    if args.output == "-":
+        sys.stdout.write(emission.text)
+    else:
+        write_text(Path(args.output), emission.text)
+    if emission.skipped and args.report:
+        write_text(Path(args.report), "\n".join(emission.skipped) + "\n")
+    print(f"client={args.client} skipped={len(emission.skipped)}", file=sys.stderr)
     return 0
 
 
@@ -736,21 +978,29 @@ def cmd_build(args: argparse.Namespace) -> int:
     if args.all:
         clean_generated_outputs()
         write_index(items)
+        write_routeset(items)
     targets = items if args.all else [find_item(items, args.tag)]
-    built = 0
-    dropped = 0
+    totals: dict[str, int] = defaultdict(int)
+
     for item in targets:
-        source_path, srs_path, unsupported_path, total, unsupported = build_one(item)
-        built += 1
-        dropped += unsupported
-        summary = (
-            f"built {item.tag} -> {source_path.relative_to(ROOT)}, "
-            f"{srs_path.relative_to(ROOT)}, total={total}, unsupported={unsupported}"
+        results = build_one(item)
+        parts = []
+        for client, path, total, skipped in results:
+            totals[client] += skipped
+            parts.append(f"{client}={total - skipped}/{total}")
+        print(
+            f"built {item.tag} -> {', '.join(parts)}, "
+            f"policy={item.policy}, name={item.output_name}"
         )
-        if unsupported_path:
-            summary += f", report={unsupported_path.relative_to(ROOT)}"
-        print(summary)
-    print(f"done: built={built}, unsupported={dropped}")
+
+    # 有跳过项的 tag 才写报告，这里汇总列出，便于人工核对。
+    reports = sorted(p for p in UNSUPPORTED_DIR.rglob("*.txt") if p.is_file())
+    if reports:
+        print(f"skipped reports ({len(reports)}):")
+        for path in reports:
+            print(f"  {path.relative_to(ROOT)}")
+    summary = ", ".join(f"{c} skipped={totals[c]}" for c in CLIENT_EMITTERS)
+    print(f"done: built={len(targets)}, {summary}")
     return 0
 
 
@@ -790,6 +1040,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_MANIFEST),
     )
     build_parser_cmd.set_defaults(func=cmd_build)
+
+    convert_parser = subparsers.add_parser("convert")
+    convert_parser.add_argument("--input", required=True, help="file or - for stdin")
+    convert_parser.add_argument(
+        "--client", required=True, choices=sorted(CLIENT_EMITTERS)
+    )
+    convert_parser.add_argument(
+        "--output", default="-", help="file or - for stdout"
+    )
+    convert_parser.add_argument(
+        "--report", help="write skipped lines to this file"
+    )
+    convert_parser.set_defaults(func=cmd_convert)
 
     return parser
 
