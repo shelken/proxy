@@ -1,46 +1,48 @@
-// 合成器产出的整份配置必须被内核接受。
+// 端点核心装配出来的整份配置必须被内核接受。
 //
-// sing-box check 不下载规则集，但会校验规则集引用、出站 tag 是否存在、字段是否合法。
-// 合成器把公开层模板、内网参数、节点出站与规则集登记拼成一份配置，拼错的地方在这里现形。
+// sing-box check 不下载规则集，但会校验规则集引用、字段是否合法（注意它不校验规则里的
+// 出站是否存在，那要跑起来才现形）。端点核心把底模、内网参数、节点出站与策略组拼成一份
+// 配置，拼错的地方在这里现形。
 //
-// 用例只断言外部可观察的产出：这份配置能不能过校验、里面引用了什么。
+// 用例只断言外部可观察的产出：这份配置能不能过校验、里面引用了什么、能不能跑起来。
 
+import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import { SING_BOX, WORK, startSandbox } from "./lib/sandbox.js";
 
 const TOOLS = `${WORK}/tools`;
 const COMPOSED = `${WORK}/composed.json`;
 const REMOTE_BASE = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules";
-// 本地投影节点：合成要求至少一个可用节点，规则集下载也会经过它。
+// 本地投影节点：装配要求至少一个节点，规则集下载也会经过它。
 const PROBE_PORT = 18388;
-const PROBE_LINK = "ss://YWVzLTEyOC1nY206dGVzdA==@127.0.0.1:18388#probe-ss";
-
-const INPUT = {
-  // 与 check-singbox 用同一份夹具，只把节点换成沙箱里的投影节点。
-  ...(await Bun.file(`${WORK}/tests/compose-input.json`).json()),
-  nodes: [PROBE_LINK],
+const PROBE_NODE = {
+  type: "shadowsocks",
+  tag: "probe-ss",
+  server: "127.0.0.1",
+  server_port: PROBE_PORT,
+  method: "aes-128-gcm",
+  password: "test",
 };
+
+// 内网参数经契约传入；解析后端换成沙箱里的投影节点，因此不依赖容器。
+const INPUT = { dns: "192.0.2.10", zone: "corp.internal" };
+
+// 复用仓库里真实的装配代码，不在测试里再抄一份分组与装配规则。
+const { buildConfig } = await import(`${TOOLS}/endpoint.mjs`);
 
 let sb;
 
-/** 在沙箱里跑一次合成，产物落在 ${WORK}/composed.json。 */
-function compose(payload = INPUT) {
-  const proc = Bun.spawnSync(
-    [
-      "python3", `${TOOLS}/singbox_rules.py`, "compose",
-      "--input", "-",
-      "--template", `${WORK}/public.json`,
-      "--manifest", `${TOOLS}/index.txt`,
-      "--policy-order", `${TOOLS}/policy-order.txt`,
-      "--output", COMPOSED,
-    ],
-    { stdin: Buffer.from(JSON.stringify(payload)) },
+/** 用端点核心装配一份完整配置，产物落在 ${WORK}/composed.json。 */
+async function compose(payload = INPUT) {
+  const config = await buildConfig(
+    { source: "fixture", dns: payload.dns, zone: payload.zone },
+    {
+      template: JSON.parse(readFileSync(`${WORK}/template.json`, "utf-8")),
+      parse: async () => [structuredClone(PROBE_NODE)],
+    },
   );
-  return {
-    stdout: proc.stdout.toString(),
-    stderr: proc.stderr.toString(),
-    exitCode: proc.exitCode,
-  };
+  writeFileSync(COMPOSED, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return config;
 }
 
 function check(path) {
@@ -49,24 +51,27 @@ function check(path) {
 
 describe("compose", () => {
   test("composed darwin config passes the kernel's structural check", async () => {
-    const { exitCode, stderr } = compose();
-    expect(stderr).toContain("problems=0");
-    expect(exitCode).toBe(0);
+    const config = await compose();
 
     const checked = check(COMPOSED);
     expect(checked.stderr.toString() + checked.stdout.toString()).toBe("");
     expect(checked.exitCode).toBe(0);
 
     // 拼出来的必须是完整一份：入口、出站、规则集引用都得在。
-    const config = await Bun.file(COMPOSED).json();
     expect(config.inbounds.map((item) => item.tag)).toContain("tun-in");
     expect(config.outbounds.map((item) => item.tag)).toContain("proxy");
     expect(config.route.rule_set.length).toBeGreaterThan(10);
+
+    // 规则只许引用存在的出站：check 不查这一条，漏了要等启动才 FATAL。
+    const tags = new Set(config.outbounds.map((item) => item.tag));
+    const missing = config.route.rules
+      .map((rule) => rule.outbound)
+      .filter((tag) => tag && !tags.has(tag));
+    expect(missing).toEqual([]);
   });
 
   test("composed config pulls rule sets from the published branch", async () => {
-    compose();
-    const config = await Bun.file(COMPOSED).json();
+    const config = await compose();
 
     const remote = config.route.rule_set.filter((item) => item.type === "remote");
     expect(remote.length).toBeGreaterThan(10);
@@ -78,8 +83,7 @@ describe("compose", () => {
   });
 
   test("internal zone and resolver come from the parameters", async () => {
-    compose({ ...INPUT, dns: "192.0.2.10", zone: "lab.test" });
-    const config = await Bun.file(COMPOSED).json();
+    const config = await compose({ dns: "192.0.2.10", zone: "lab.test" });
 
     expect(
       config.dns.servers.find((item) => item.tag === "dns-internal").server,
@@ -108,7 +112,7 @@ describe("composed config runs", () => {
   test("starts, pulls every rule set and comes up with a tun", async () => {
     const probe = await startProbeNode();
     try {
-      expect(compose().exitCode).toBe(0);
+      await compose();
 
       sb = startSandbox({ publicConfig: COMPOSED });
       await sb.waitFor("sing-box started", 60_000);

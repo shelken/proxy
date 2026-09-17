@@ -1,8 +1,0 @@
-{
-  "target": "darwin",
-  "nodes": [
-    "vless://11111111-2222-3333-4444-555555555555@192.0.2.10:443?security=tls&sni=example.test&type=ws&host=example.test&path=%2Fws#doc-node"
-  ],
-  "dns": "192.0.2.10",
-  "zone": "corp.internal"
-}

@@ -87,39 +87,44 @@ just build-rules
 `config/sing-box/conf.d/` 下只有两个文件：手写的公开层模板 `10-public.json`，与上面这份生成的
 `45-ruleset.json`。按目录合并这两份时 sing-box 会按**文件名排序**、命令行传入的先后无效，因此
 `10-public.json` 必须排在前面 —— 否则登记里的列表规则会先于内网直连规则命中。两者一旦改坏名字
-（顺序翻转），`scripts/singbox_rules.py` 会直接报错拦下。设备拿到的配置不走目录合并，而是下面
-这条合成路径：那里的先后由代码显式给出。
+（顺序翻转），`scripts/singbox_rules.py` 会直接报错拦下。
+
+设备拿到的配置不走这条目录合并：它是端点核心用 `config/sing-box/template.json` 装配出的单份配置，
+规则先后由底模里的顺序显式确定。
 
 `45-ruleset.json` 与 `config/rules/generated/` 都是生成物，不要手工编辑，也已被 gitignore。它们是 CI 在 push 到 `main` 时生成并发布到 `sing-box-rules` 分支的。
 
-## 合成：输入到完整配置
+## 端点：一条 URL 到完整配置
+
+`config/sing-box/template.json` 是标准底模，自包含，不需要与别的文件做目录合并：
+入口（macOS TUN + mixed）、DNS 三份上游与两条分流规则、内联的 `zone-internal`、27 份远端
+规则集声明、13 条路由规则与 `direct` 占位出站。9 个策略组要等节点注入后才有成员，由端点补上。
+
+`scripts/endpoint.mjs` 是端点核心：接收单 URL 契约，用底模装配出完整配置。
 
 ```
-just check-singbox        # 用文档级夹具合成一份 darwin 配置并让内核校验
+just serve                 # 起本地端点：http://127.0.0.1:8080/darwin?sub=…&node=…&dns=…&zone=…
+just verify-endpoint <订阅URL或文件> [输出路径]   # 不起服务，直接走同一条装配路径并让内核校验
 ```
 
-等价的直接调用：
+契约（路径段决定变体，目前只实现 `darwin`，其余值返回 400）：
 
-```
-uv run python -B scripts/singbox_rules.py compose --input <输入.json> --output -
-```
-
-输入是一份 JSON，五列：
-
-| 键 | 必填 | 含义 |
+| 参数 | 必填 | 含义 |
 |---|---|---|
-| `target` | 是 | 目标端，目前只实现 `darwin`，其余值明确报错 |
-| `subscription` | 否 | 订阅体（base64 或明文），由调用方抓好再传进来 |
-| `nodes` | 否 | 节点分享链接，可重复；与订阅里的链接同等处理 |
-| `dns` | 是 | 内网 DNS 地址 |
-| `zone` | 是 | 内网域名后缀，生成 `zone-internal` 规则集 |
+| `sub` | 是 | 订阅链接（也可传订阅体，但只走 GET，过长会被拒） |
+| `node` | 否 | 自建节点分享链接，可重复；与订阅里的节点同等处理 |
+| `dns` | 否 | 内网 DNS 地址；缺省用底模里的 `192.168.6.1` |
+| `zone` | 否 | 内网域名后缀；缺省用底模里的 `ooooo.space` |
 
-输出是一份完整的 sing-box 配置：公开层模板、内网解析器与内网规则集、节点出站与分流分组、
-规则集登记（一律 `type: "remote"`，指向发布分支）。缺参数、参数非法、一个可用节点都没有
-都会当场失败且不产出半成品；它是纯变换，不联网、不写仓库目录。
+响应是 `application/json`，body 就是一份完整 sing-box 配置。输入非法、抓取失败、解析失败都返回
+明确错误（400 / 502），不返回半成品；请求之间不保留任何输入，不写盘、无会话。
 
-拼接顺序即优先级：公开层在最前（它的 `route.final` 与 `dns.final` 说了算，主分组与下载规则集
-用的 HTTP client 都跟着它走），登记在最后（列表规则排在内网直连规则之后）。
+**协议解析不由本仓库实现。** 分享链接（SS / VMess / VLESS（REALITY）/ Hysteria2 / Trojan / TUIC）
+交给 `sublink-worker` 容器解析，端点只取它解析出的节点出站，其余（它自带的规则集、`route.final`、
+分组）一律丢弃 —— 实测它会把底模的 `route.rule_set` 整体换成自己的 5 份、把 `route.final` 改写成
+自己的分组，且不创建本仓库需要的 9 个策略组。
+
+装配顺序即优先级由底模固定：`route.rules` 里内网直连排在最前，列表规则排在其后。
 
 ## 客户端不支持的规则
 
@@ -141,8 +146,14 @@ uv run python -B scripts/singbox_rules.py compose --input <输入.json> --output
 bun test scripts/singbox_rules.test.js
 ```
 
-或 `just test-rules`。用例通过脚本的 `convert` 与 `compose` 子命令驱动纯转换逻辑，全程不触网，
+或 `just test-rules`。用例通过脚本的 `convert` 子命令驱动纯转换逻辑，全程不触网，
 因此不依赖任何外部列表的当前内容。
+
+端点的装配契约另有一层不依赖容器与网络的用例：
+
+```
+bun test scripts/endpoint.test.js
+```
 
 需要内核参与的那一层在沙箱里跑：
 
@@ -150,8 +161,9 @@ bun test scripts/singbox_rules.test.js
 just test-sandbox
 ```
 
-`config/sing-box/tests/compose.test.js` 会在沙箱内合成一份配置、让 `sing-box check` 校验，并真的
-把它跑起来（本地投影节点 + TUN），断言启动、拉全规则集、无 FATAL —— 装配错误只有跑起来才现形。
+`config/sing-box/tests/compose.test.js` 会在沙箱内调用真实的装配代码产出配置、让 `sing-box check`
+校验，并真的把它跑起来（本地投影节点 + TUN），断言启动、拉全规则集、无 FATAL —— 装配错误只有跑
+起来才现形。
 
 ## 发布产物
 

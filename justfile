@@ -48,16 +48,17 @@ vm-delete:
     limactl delete --force {{vm_name}}
 
 # --- 沙箱测试 ---
-# 同步点：把被测配置复制到 VM 内的可写工作目录。
+# 同步点：把被测配置与装配代码复制到 VM 内的可写工作目录。
 # 只复制手写的公开层模板：生成的登记引用磁盘上的规则集产物，而沙箱里既没有那些产物，
 # 它的 tag 也会与测试覆盖层的内联定义撞车。
 sync-sandbox:
     {{lima_shell}} rm -rf /work/sing-box
     {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/tools
     {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/conf.d/10-public.json /work/sing-box/public.json
+    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/template.json /work/sing-box/template.json
     {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
-    # 合成器要在沙箱内跑：脚本与它读的两份数据文件一起复制进 guest。
-    {{lima_shell}} cp {{repo_in_guest}}/scripts/singbox_rules.py {{repo_in_guest}}/scripts/singbox_nodes.py /work/sing-box/tools/
+    # 装配走仓库里真实的端点核心，沙箱测试不另抄一份装配规则。
+    {{lima_shell}} cp {{repo_in_guest}}/scripts/endpoint.mjs {{repo_in_guest}}/scripts/singbox_rules.py /work/sing-box/tools/
     {{lima_shell}} cp {{repo_in_guest}}/config/rules/index.txt {{repo_in_guest}}/config/rules/policy-order.txt /work/sing-box/tools/
 
 # 在沙箱内运行全部网络行为测试
@@ -82,15 +83,32 @@ build-rules:
 test-rules:
     bun test scripts/singbox_rules.test.js
 
-# --- 真实订阅体检（跑在宿主机，需要能连到节点） ---
-# 解包 → 解析 → 结构校验 → 逐节点真实握手测延迟。
-# 订阅体只进内存，临时配置写在临时目录、结束即删；只监听 127.0.0.1，不建 TUN、不改路由。
-# 用法：just verify-sub ~/sub.txt   或   just verify-sub 'https://<机场>/sub?token=...'
-verify-sub source:
-    @uv run python -B scripts/verify_subscription.py {{source}}
+# 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
+sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
-# 校验生产配置：先用一份文档级夹具合成 darwin 配置（设备实际拿到的形态），再让内核校验。
-# 夹具只用 RFC 5737 的测试网段与保留 UUID，不含任何真实凭据。
-# 合成器把公开层模板、内网参数、节点出站与规则集登记拼成一份，所以这里校验的就是完整那一份。
+# --- 生产底模校验与容器化订阅验证 ---
+# 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
-    @uv run python -B scripts/singbox_rules.py compose --input config/sing-box/tests/compose-input.json --output /tmp/singbox-composed.json && sing-box check -c /tmp/singbox-composed.json && rm -f /tmp/singbox-composed.json
+    @{{sing_box_cmd}} check -c config/sing-box/template.json
+
+# 启动本地 sublink 转换容器
+sublink-up:
+    @docker run -d --name proxy-sublink -p 8787:8787 --rm ghcr.io/7sageer/sublink-worker:latest >/dev/null && echo "sublink-worker running on http://127.0.0.1:8787"
+
+# 停止本地 sublink 容器
+sublink-down:
+    @docker stop proxy-sublink >/dev/null 2>&1 || true
+
+# 本地等价验证单 URL 契约：解析后端取节点 → 底模装配 → sing-box check，全程零上传
+# 用法：just verify-endpoint /tmp/secret.txt [/tmp/singbox.json]
+#      just verify-endpoint 'https://<机场订阅>'
+# 需要 --node / --dns / --zone 时直接调脚本（just 不转发额外参数）：
+#      bun run scripts/endpoint.mjs /tmp/secret.txt /tmp/singbox.json --node 'vless://...' --dns 192.168.6.1 --zone ooooo.space
+verify-endpoint source output="/tmp/singbox.json":
+    @bun run scripts/endpoint.mjs {{source}} {{output}}
+
+# 本地点起端点（单 URL 契约）：
+#   just serve                     → http://127.0.0.1:8080/darwin?sub=…&node=…&dns=…&zone=…
+#   just serve 8080 192.168.5.2    → 绑到沙箱 VM 能访问的地址，让 VM 当"设备"直接取配置
+serve port="8080" host="127.0.0.1":
+    @bun run scripts/endpoint.mjs --serve --port {{port}} --host {{host}}
