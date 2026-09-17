@@ -115,8 +115,11 @@ describe("composed config runs", () => {
       await sb.waitFor("tun0", 30_000);
 
       const updated = (sb.log().match(/updated rule-set/g) ?? []).length;
-      expect(updated).toBe(26);
+      // 26 份清单产物 + 1 份 DNS 域名版；内联的 zone-internal 不需要下载。
+      expect(updated).toBe(27);
       expect(sb.log()).not.toContain("FATAL");
+      // DNS 规则引用含 IP 条目的规则集会触发这条废弃告警，1.16 起还会拒绝启动。
+      expect(sb.log()).not.toContain("Legacy Address Filter");
     } finally {
       await sb?.stop();
       await probe.stop();

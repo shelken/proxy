@@ -60,7 +60,7 @@ describe("route decisions", () => {
   });
 
   test("an unlisted domain falls through to the final outbound", async () => {
-    // example.cn 只被 dns.rules 的 ChinaMax 引用，route.rules 不引用它，
+    // example.cn 只被 dns.rules 的 ChinaMax-dns 引用，route.rules 不引用它，
     // 因此路由层落到 route.final。这个用例同时证明日志确实在记录决策。
     await request("http://example.cn/");
     expect(sb.outboundHits("proxy")).toBeGreaterThan(0);

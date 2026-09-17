@@ -73,6 +73,15 @@ just build-rules
 | `generated/clash/` | `<tag>.yaml`，mihomo `behavior: classical` 的 payload | mihomo / clash 类客户端 |
 | `generated/plain/` | `<tag>.list`，内容行原样保留（注释与空行已去除） | Loon / Surge 直接按 URL 引用 |
 
+公开层的 DNS 规则引用到的清单，还会多产出一份 `<tag>-dns.{json,srs}`：只保留
+`domain` / `domain_suffix` / `domain_keyword` / `domain_regex` 四类字段。
+
+这是内核的硬要求，不是洁癖：DNS 规则在拿到响应之前只能按查询名判定，含 IP 条目的规则集
+被 DNS 规则引用时，内核 1.14 起打废弃告警、1.16 起拒绝启动
+（[迁移说明](https://sing-box.sagernet.org/migration/#migrate-address-filter-fields-to-response-matching)）。
+所以 DNS 规则引用域名版（`ChinaMax-dns`），路由规则引用原版（`ChinaMax`）。
+清单里没有域名类条目却出现在 DNS 规则里，构建会直接失败，而不是生成一份废弃写法。
+
 另外生成 `config/sing-box/conf.d/45-ruleset.json`，里面是全部 `rule_set` 声明与按 policy 分组的路由规则。
 
 `config/sing-box/conf.d/` 下只有两个文件：手写的公开层模板 `10-public.json`，与上面这份生成的

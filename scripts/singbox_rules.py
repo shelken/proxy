@@ -40,6 +40,10 @@ RULESET_RELATIVE_DIR = Path("../rules/generated/singbox")
 # 目标端变体。只实现 darwin：路由器变体的 inbound 与 DNS 差异尚未定（见 #15），
 # 其余值一律报错，避免悄悄按 darwin 生成一份在别的端上跑不起来的东西。
 SUPPORTED_TARGETS = ("darwin",)
+# DNS 规则只能按查询名匹配，因此给 DNS 规则用的规则集产物只保留这几类字段。
+DNS_RULE_FIELDS = ("domain", "domain_suffix", "domain_keyword", "domain_regex")
+# DNS 规则专用的规则集产物名后缀：<tag>-dns。
+DNS_RULESET_SUFFIX = "-dns"
 # 内网域名规则集。公开层的 DNS 规则按这个名字引用它，所以它属于公开层的词汇表，
 # 不是可以推导出来的值。
 ZONE_RULESET_TAG = "zone-internal"
@@ -767,6 +771,32 @@ def emit_singbox(rule_lines: list[str]) -> Emission:
     return Emission(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", unsupported)
 
 
+def emit_singbox_dns(rule_lines: list[str], *, label: str = "") -> Emission:
+    """同一份源规则里只保留按查询名匹配的字段，产出 DNS 规则专用的规则集。
+
+    DNS 规则在拿到响应之前只能按查询名判定，IP 类条目在 DNS 规则里没有可判定的语义：
+    内核 1.14 起把这类引用标为废弃、1.16 起移除
+    （见 https://sing-box.sagernet.org/migration/#migrate-address-filter-fields-to-response-matching）。
+    所以公开层里被 DNS 规则引用的列表要有一份域名版。
+    """
+    emission = emit_singbox(rule_lines)
+    payload = json.loads(emission.text)
+    kept: list[dict[str, Any]] = []
+    for rule in payload.get("rules") or []:
+        domain_fields = {key: value for key, value in rule.items() if key in DNS_RULE_FIELDS}
+        if domain_fields:
+            kept.append(domain_fields)
+    if not kept:
+        # 一份没有域名条目的列表当 DNS 规则用，只会把那套废弃写法再抄一遍，宁可构建失败。
+        raise RuntimeError(
+            f"{label or '规则集'}里没有域名类条目，生成不出 DNS 规则用的规则集"
+        )
+    return Emission(
+        json.dumps(to_source_json(kept), ensure_ascii=False, indent=2) + "\n",
+        emission.skipped,
+    )
+
+
 def clash_rule_line(stripped: str) -> str | None:
     """把一行源规则转成 mihomo classical provider 的行，无法表达时返回 None。
 
@@ -832,8 +862,31 @@ def find_item(items: list[RemoteList], target: str) -> RemoteList:
     raise KeyError(f"tag not found: {target}")
 
 
+def routeset_entry(name: str, *, remote: bool) -> dict[str, Any]:
+    """一条 rule_set 声明。远端形态给设备用，本地形态给本机跑磁盘产物用。"""
+    if remote:
+        return {
+            "type": "remote",
+            "tag": name,
+            "format": "binary",
+            "url": f"{REMOTE_RULE_BASE}/singbox/{name}.srs",
+            # 默认也是 1d，写出来是为了不依赖「没说就是 1d」这条隐式规则。
+            "update_interval": "1d",
+        }
+    return {
+        "type": "local",
+        "tag": name,
+        "format": "binary",
+        "path": f"{RULESET_RELATIVE_DIR.as_posix()}/{name}.srs",
+    }
+
+
 def build_routeset(
-    items: list[RemoteList], policy_order: list[str], *, remote: bool = False
+    items: list[RemoteList],
+    policy_order: list[str],
+    *,
+    remote: bool = False,
+    companion_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """生成路由片段：声明全部 rule_set 并按 policy 分组下发路由。
 
@@ -845,6 +898,9 @@ def build_routeset(
 
     remote=False 供本仓库自用，指向磁盘上的生成产物（相对工作目录）。
     remote=True 供外部用户订阅，指向已发布分支上的 URL。
+
+    companion_names 是 DNS 规则专用的域名版规则集：它们只被 DNS 规则引用，不参与路由，
+    所以只声明、不生成路由规则。
     """
     by_policy: dict[str, list[str]] = defaultdict(list)
     for item in items:
@@ -863,30 +919,15 @@ def build_routeset(
                 {"rule_set": tags, "action": "route", "outbound": policy}
             )
 
-    def entry(item: RemoteList) -> dict[str, Any]:
-        name = item.output_name
-        if remote:
-            return {
-                "type": "remote",
-                "tag": name,
-                "format": "binary",
-                "url": f"{REMOTE_RULE_BASE}/singbox/{name}.srs",
-                # 默认也是 1d，写出来是为了不依赖「没说就是 1d」这条隐式规则。
-                "update_interval": "1d",
-            }
-        return {
-            "type": "local",
-            "tag": name,
-            "format": "binary",
-            "path": f"{RULESET_RELATIVE_DIR.as_posix()}/{name}.srs",
-        }
+    declared = [
+        routeset_entry(item.output_name, remote=remote)
+        for item in sorted(items, key=lambda x: x.output_name)
+    ]
+    declared += [
+        routeset_entry(name, remote=remote) for name in companion_names or []
+    ]
 
-    return {
-        "route": {
-            "rule_set": [entry(item) for item in sorted(items, key=lambda x: x.output_name)],
-            "rules": rules,
-        }
-    }
+    return {"route": {"rule_set": declared, "rules": rules}}
 
 
 def build_index(items: list[RemoteList]) -> dict[str, Any]:
@@ -941,11 +982,17 @@ def write_routeset(items: list[RemoteList], policy_order: list[str]) -> None:
             "public template must sort before the rule-set registry, "
             f"got {PUBLIC_TEMPLATE_PATH.name} > {ROUTESET_PATH.name}"
         )
+    companion_names = dns_companion_names(load_template(), items)
     for path, remote in ((ROUTESET_PATH, False), (REMOTE_ROUTESET_PATH, True)):
         write_text(
             path,
             json.dumps(
-                build_routeset(items, policy_order, remote=remote),
+                build_routeset(
+                    items,
+                    policy_order,
+                    remote=remote,
+                    companion_names=companion_names,
+                ),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -956,8 +1003,13 @@ def write_routeset(items: list[RemoteList], policy_order: list[str]) -> None:
 SUFFIXES = {"singbox": ".json", "clash": ".yaml", "plain": ".list"}
 
 
-def build_one(item: RemoteList) -> list[tuple[str, Path, int, int]]:
-    """为单个 tag 生成全部客户端产物，返回 (client, 路径, 源行数, 跳过数)。"""
+def build_one(
+    item: RemoteList, *, dns_companion: bool = False
+) -> list[tuple[str, Path, int, int]]:
+    """为单个 tag 生成全部客户端产物，返回 (client, 路径, 源行数, 跳过数)。
+
+    dns_companion 为真时额外产出一份只含域名条目的副本，给 DNS 规则用。
+    """
     content = read_source(item.source)
     rule_lines = normalize_rule_lines(content)
     results: list[tuple[str, Path, int, int]] = []
@@ -981,6 +1033,13 @@ def build_one(item: RemoteList) -> list[tuple[str, Path, int, int]]:
             report.unlink()
 
         results.append((client, path, len(rule_lines), len(skipped)))
+
+    if dns_companion:
+        dns_emission = emit_singbox_dns(rule_lines, label=item.tag)
+        dns_path = SINGBOX_DIR / f"{dns_ruleset_name(item.output_name)}.json"
+        write_text(dns_path, dns_emission.text)
+        compile_srs(dns_path, dns_path.with_suffix(".srs"))
+        results.append(("singbox", dns_path, len(rule_lines), 0))
     return results
 
 
@@ -997,8 +1056,15 @@ def cmd_extract(args: argparse.Namespace) -> int:
 def cmd_convert(args: argparse.Namespace) -> int:
     """纯转换，不联网、不写仓库目录。供测试驱动。"""
     raw = sys.stdin.read() if args.input == "-" else read_text(Path(args.input))
-    emitter = CLIENT_EMITTERS[args.client]
-    emission = emitter(normalize_rule_lines(raw))
+    lines = normalize_rule_lines(raw)
+    if args.dns_only:
+        # 域名版产物只对 sing-box 有意义：DNS 规则是它的概念。
+        if args.client != "singbox":
+            print("error: --dns-only 只对 singbox 客户端有意义", file=sys.stderr)
+            return 1
+        emission = emit_singbox_dns(lines)
+    else:
+        emission = CLIENT_EMITTERS[args.client](lines)
     if args.output == "-":
         sys.stdout.write(emission.text)
     else:
@@ -1136,6 +1202,46 @@ def validate_compose_input(payload: dict[str, Any]) -> tuple[str, str, str]:
     if not ZONE_RE.match(zone):
         raise ComposeError(f"zone 不是合法的域名后缀：{zone}")
     return target, dns, zone
+
+
+def dns_ruleset_name(name: str) -> str:
+    """DNS 规则专用规则集的产物名。"""
+    return name + DNS_RULESET_SUFFIX
+
+
+def dns_companion_names(template: dict[str, Any], items: list[RemoteList]) -> list[str]:
+    """需要额外产出一份「只含域名条目」副本的产物名。
+
+    公开层的 DNS 规则引用到的清单 tag 都要有域名版：DNS 规则里不能引用含 IP 条目的规则集
+    （内核 1.14 起废弃、1.16 移除）。公开层自己内联声明的（zone-internal）不需要。
+    """
+    inline = {
+        str(entry.get("tag"))
+        for entry in (template.get("route") or {}).get("rule_set") or []
+        if isinstance(entry, dict) and entry.get("tag")
+    }
+    # zone-internal 由合成器内联生成（它带内网域名后缀这个参数），不是清单产物。
+    inline.add(ZONE_RULESET_TAG)
+    by_output: dict[str, RemoteList] = {}
+    for item in items:
+        by_output[item.output_name] = item
+        by_output.setdefault(item.tag, item)
+
+    names: list[str] = []
+    for rule in (template.get("dns") or {}).get("rules") or []:
+        referenced = rule.get("rule_set")
+        for tag in ([referenced] if isinstance(referenced, str) else list(referenced or [])):
+            tag = str(tag)
+            if tag in inline or tag in names:
+                continue
+            # 公开层可以引用清单 tag 本身，也可以引用它的域名版；两种写法都要认得出对应产物。
+            base = tag[: -len(DNS_RULESET_SUFFIX)] if tag.endswith(DNS_RULESET_SUFFIX) else tag
+            if base not in by_output:
+                raise RuntimeError(
+                    "公开层的 DNS 规则引用了既不在清单里、也不是内联声明的规则集：" + tag
+                )
+            names.append(dns_ruleset_name(base))
+    return names
 
 
 def internal_dns_tag(template: dict[str, Any]) -> str:
@@ -1287,7 +1393,11 @@ def cmd_compose(args: argparse.Namespace) -> int:
         template = json.loads(read_text(Path(args.template)))
         items = load_manifest(Path(args.manifest))
         registry = build_routeset(
-            items, load_policy_order(Path(args.policy_order)), remote=True
+            items,
+            load_policy_order(Path(args.policy_order)),
+            remote=True,
+            # 公开层的 DNS 规则引用的是域名版规则集，声明要跟上。
+            companion_names=dns_companion_names(template, items),
         )
         group_tags = group_tags_from_manifest(items, declared_tags(template))
         config, problems, target = compose_config(
@@ -1329,10 +1439,13 @@ def cmd_build(args: argparse.Namespace) -> int:
         write_index(items)
         write_routeset(items, policy_order)
     targets = items if args.all else [find_item(items, args.tag)]
+    companions = set(dns_companion_names(load_template(), items))
     totals: dict[str, int] = defaultdict(int)
 
     for item in targets:
-        results = build_one(item)
+        results = build_one(
+            item, dns_companion=dns_ruleset_name(item.output_name) in companions
+        )
         parts = []
         for client, path, total, skipped in results:
             totals[client] += skipped
@@ -1411,6 +1524,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert_parser.add_argument(
         "--report", help="write skipped lines to this file"
+    )
+    convert_parser.add_argument(
+        "--dns-only",
+        action="store_true",
+        help="只保留按查询名匹配的字段，供 DNS 规则使用",
     )
     convert_parser.set_defaults(func=cmd_convert)
 

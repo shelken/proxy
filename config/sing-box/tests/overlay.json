@@ -33,6 +33,11 @@
         "type": "inline",
         "tag": "ChinaMax",
         "rules": [{ "domain_suffix": ["cn"] }]
+      },
+      {
+        "type": "inline",
+        "tag": "ChinaMax-dns",
+        "rules": [{ "domain_suffix": ["cn"] }]
       }
     ]
   },

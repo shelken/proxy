@@ -11,9 +11,12 @@ import { describe, expect, test } from "bun:test";
 const SCRIPT = "scripts/singbox_rules.py";
 
 /** 跑一次 convert，返回 { stdout, stderr, exitCode }。 */
-function convert(input, client) {
+function convert(input, client, extra = []) {
   const proc = Bun.spawnSync(
-    ["uv", "run", "python", "-B", SCRIPT, "convert", "--input", "-", "--client", client],
+    [
+      "uv", "run", "python", "-B", SCRIPT, "convert",
+      "--input", "-", "--client", client, ...extra,
+    ],
     { stdin: Buffer.from(input) },
   );
   return {
@@ -109,6 +112,24 @@ describe("convert --client singbox", () => {
       version: 3,
       rules: [],
     });
+  });
+
+  test("--dns-only keeps just the query-name fields", () => {
+    // DNS 规则在拿到响应之前只能按查询名判定，IP 类条目在 DNS 规则里没有可判定的语义：
+    // 内核 1.14 起把这类引用标为废弃、1.16 起移除。DNS 版产物因此只留域名类字段。
+    const rules = JSON.parse(
+      convert(
+        [
+          "DOMAIN,a.test",
+          "DOMAIN-SUFFIX,cn",
+          "IP-CIDR,10.0.0.0/8,no-resolve",
+          "GEOIP,cn,DIRECT",
+        ].join("\n"),
+        "singbox",
+        ["--dns-only"],
+      ).stdout,
+    ).rules;
+    expect(rules).toEqual([{ domain: ["a.test"] }, { domain_suffix: ["cn"] }]);
   });
 });
 
@@ -279,10 +300,14 @@ describe("compose", () => {
     const manifest = await Bun.file("config/rules/index.txt").text();
     const listed = manifest
       .split("\n")
-      .filter((line) => line.trim() && !line.startsWith("#"));
+      .filter((line) => line.trim() && !line.startsWith("#"))
+      .map((line) => line.split("|")[0]);
 
     const remote = config.route.rule_set.filter((item) => item.type === "remote");
-    expect(remote).toHaveLength(listed.length);
+    const declared = new Set(remote.map((item) => item.tag));
+    for (const tag of listed) {
+      expect(declared.has(tag)).toBe(true);
+    }
     for (const item of remote) {
       expect(item.url.startsWith(`${REMOTE_BASE}/singbox/`)).toBe(true);
       expect(item.url.endsWith(`${item.tag}.srs`)).toBe(true);
@@ -290,6 +315,17 @@ describe("compose", () => {
       expect(item.update_interval).toBe("1d");
     }
     expect(config.route.rule_set.some((item) => item.type === "local")).toBe(false);
+  });
+
+  test("sends the domestic list through its query-name-only variant", () => {
+    // 含 IP 条目的规则集不能直接给 DNS 规则用：内核 1.14 起标废弃、1.16 起移除，
+    // 所以公开层的 DNS 规则引用的是域名版，这一版也得有远端声明。
+    const config = composed();
+    const cnRule = config.dns.rules.find((rule) => rule.server === "dns-cn");
+    expect(cnRule.rule_set).toEqual(["ChinaMax-dns"]);
+    const declared = config.route.rule_set.find((item) => item.tag === "ChinaMax-dns");
+    expect(declared.type).toBe("remote");
+    expect(declared.url).toBe(`${REMOTE_BASE}/singbox/ChinaMax-dns.srs`);
   });
 
   test("keeps the public layer's rules ahead of the registry's", async () => {

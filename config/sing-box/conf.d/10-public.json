@@ -7,7 +7,7 @@
         "server": "dns-internal"
       },
       {
-        "rule_set": ["ChinaMax"],
+        "rule_set": ["ChinaMax-dns"],
         "action": "route",
         "server": "dns-cn"
       }

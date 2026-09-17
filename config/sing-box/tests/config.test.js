@@ -80,10 +80,11 @@ describe("merged config", () => {
     expect(local).toEqual([]);
   });
 
-  test("only the two overlay rule sets are present", () => {
+  test("only the three overlay rule sets are present", () => {
     // merge 会剥掉 type: "inline"（内联是默认类型），所以这里按 tag 断言。
-    // 沙箱内既没有生成产物，也没有真实私有拓扑，规则集应当只有这两个。
+    // 沙箱内既没有生成产物，也没有真实私有拓扑，规则集应当只有这三个：
+    // zone-internal（合成器内联生成）、ChinaMax（路由用）、ChinaMax-dns（DNS 规则用）。
     const tags = merged.route.rule_set.map((rs) => rs.tag).sort();
-    expect(tags).toEqual(["ChinaMax", "zone-internal"]);
+    expect(tags).toEqual(["ChinaMax", "ChinaMax-dns", "zone-internal"]);
   });
 });
