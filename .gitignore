@@ -2,3 +2,14 @@
 
 __pycache__/
 *.pyc
+
+# 私有拓扑（含真实地址、域名与节点），只提交 .example 模板
+config/sing-box/local/*.json
+!config/sing-box/local/*.example
+
+# 生成产物
+config/sing-box/conf.d/45-ruleset.json
+config/rules/generated/
+
+# sing-box 运行期文件
+config/sing-box/cache.db
