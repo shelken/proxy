@@ -32,7 +32,9 @@ policy 与出站 tag 同名，`reject` 例外（编译成 `action: reject`）：
 | `proxy` | 代理 |
 | `openai` / `gemini` / `appleai` / `dev` / `ptcg` / `japansite` / `adultnsfw` / `opencode` | 按服务分组的策略出站 |
 
-`POLICY_ORDER` 决定路由优先级，先匹配先胜，定义在 `scripts/singbox_rules.py`。
+`policy-order.txt` 决定路由优先级，先匹配先胜：一行一个 policy，顺序即优先级。没列进去的
+policy 不会丢，只是按字母序排在已列出的之后（生成时会打印提示）。这份顺序是数据不是代码 ——
+改顺序只改这个文件。
 
 ## custom/ 里的行格式
 

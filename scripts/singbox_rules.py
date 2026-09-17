@@ -13,11 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from singbox_nodes import NodeError, build_outbounds
+
 ROOT = Path(__file__).resolve().parent.parent
 REMOTE_RULE_BASE = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules"
-DEFAULT_LOON_CONFIG = ROOT / "config/loon/mac.conf"
 DEFAULT_MANIFEST = ROOT / "config/rules/index.txt"
-DEFAULT_PROFILE_PATH = ROOT / "config/sing-box/meta/generated/loon-profile.json"
 GENERATED_DIR = ROOT / "config/rules/generated"
 SINGBOX_DIR = GENERATED_DIR / "singbox"
 CLASH_DIR = GENERATED_DIR / "clash"
@@ -89,20 +89,10 @@ CLASH_SUPPORTED = set(SUPPORTED_FIELDS) | {
 # Loon 用 DEST-PORT，mihomo 用 DST-PORT，同一语义两种拼写。
 CLASH_RENAMES = {"DEST-PORT": "DST-PORT"}
 
-# 路由策略顺序即优先级，先匹配先胜。见 build_routeset。
-POLICY_ORDER = [
-    "reject",
-    "gemini",
-    "openai",
-    "appleai",
-    "opencode",
-    "dev",
-    "ptcg",
-    "japansite",
-    "adultnsfw",
-    "direct",
-    "proxy",
-]
+# 路由策略的优先级顺序来自 config/rules/policy-order.txt（数据，不是代码）：
+# 顺序是使用者的偏好，改顺序不该改代码。
+DEFAULT_POLICY_ORDER_PATH = ROOT / "config/rules/policy-order.txt"
+# reject 不是出站：它编译成 action: reject，所以这个名字是语义，不是可推导的值。
 REJECT_POLICY = "reject"
 
 LOGICAL_PREFIXES = ("AND,", "OR,", "NOT,")
@@ -816,11 +806,16 @@ def find_item(items: list[RemoteList], target: str) -> RemoteList:
     raise KeyError(f"tag not found: {target}")
 
 
-def build_routeset(items: list[RemoteList], *, remote: bool = False) -> dict[str, Any]:
+def build_routeset(
+    items: list[RemoteList], policy_order: list[str], *, remote: bool = False
+) -> dict[str, Any]:
     """生成路由片段：声明全部 rule_set 并按 policy 分组下发路由。
 
     顺序即优先级：sing-box 合并同目录配置时按文件名排序并追加数组，登记排在手写的公开层
     之后，因此手写的 zone-internal 规则恒在列表规则之前。
+
+    policy_order 决定各 policy 之间的先后（来自 policy-order.txt）；不在表里的 policy
+    按字母序排在后面，不丢。
 
     remote=False 供本仓库自用，指向磁盘上的生成产物（相对工作目录）。
     remote=True 供外部用户订阅，指向已发布分支上的 URL。
@@ -829,8 +824,8 @@ def build_routeset(items: list[RemoteList], *, remote: bool = False) -> dict[str
     for item in items:
         by_policy[item.policy].append(item.tag)
 
-    ordered = [p for p in POLICY_ORDER if p in by_policy]
-    ordered += sorted(p for p in by_policy if p not in POLICY_ORDER)
+    ordered = [p for p in policy_order if p in by_policy]
+    ordered += sorted(p for p in by_policy if p not in policy_order)
 
     rules: list[dict[str, Any]] = []
     for policy in ordered:
@@ -904,7 +899,7 @@ def write_index(items: list[RemoteList]) -> None:
     )
 
 
-def write_routeset(items: list[RemoteList]) -> None:
+def write_routeset(items: list[RemoteList], policy_order: list[str]) -> None:
     """写两份路由片段。
 
     本仓库自用的一份指向磁盘产物，配 conf.d 下的其他文件一起跑。
@@ -921,7 +916,11 @@ def write_routeset(items: list[RemoteList]) -> None:
     for path, remote in ((ROUTESET_PATH, False), (REMOTE_ROUTESET_PATH, True)):
         write_text(
             path,
-            json.dumps(build_routeset(items, remote=remote), ensure_ascii=False, indent=2)
+            json.dumps(
+                build_routeset(items, policy_order, remote=remote),
+                ensure_ascii=False,
+                indent=2,
+            )
             + "\n",
         )
 
@@ -982,12 +981,113 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return 0
 
 
+def load_policy_order(path: Path) -> list[str]:
+    """读策略优先级顺序：一行一个 policy，`#` 开头是注释。"""
+    if not path.is_file():
+        raise RuntimeError(f"找不到策略顺序文件：{path}")
+    lines = [line.strip() for line in read_text(path).splitlines()]
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def group_tags_from_manifest(items: list[RemoteList], declared: set[str]) -> list[str]:
+    """分流分组 tag：清单里的 policy 列，去掉 reject 与公开层已经声明过的出站。
+
+    真相就在清单里 —— build_routeset 正是按 policy 生成引用这些 tag 的路由规则。
+    这里不再自带一份常量，否则清单加一条策略、解析器不生成分组，公开层就会引用一个
+    不存在的出站。
+
+    declared 是公开层模板已经声明的出站 tag（例如 direct）：它们已经有出站了，不需要
+    再生成分组。
+    """
+    tags: list[str] = []
+    for item in items:
+        if item.policy in (REJECT_POLICY, *declared) or item.policy in tags:
+            continue
+        tags.append(item.policy)
+    return tags
+
+
+def load_template() -> dict[str, Any]:
+    return json.loads(read_text(PUBLIC_TEMPLATE_PATH))
+
+
+def declared_tags(template: dict[str, Any]) -> set[str]:
+    """公开层已经声明过的出站 tag。"""
+    return {
+        item["tag"] for item in template.get("outbounds") or [] if item.get("tag")
+    }
+
+
+def main_group_of(template: dict[str, Any]) -> str:
+    """主分组 tag：公开层 route.final 指向的那个。
+
+    模板是引用方（route.final 与各条规则都引发出站 tag），以它为准，就不可能出现
+    「生成了分组但没人引用」或「引用了没生成的分组」。
+    """
+    final = (template.get("route") or {}).get("final")
+    if not final:
+        raise RuntimeError(f"{PUBLIC_TEMPLATE_PATH.relative_to(ROOT)} 里没有 route.final")
+    return final
+
+
+def cmd_outbounds(args: argparse.Namespace) -> int:
+    """纯转换：stdin 收订阅与节点，stdout 出出站与分流分组。供测试与端点驱动。
+
+    分组 tag 与主分组从规则清单与公开层模板读，两个来源都是数据文件，不在代码里复制。
+
+    单个节点解析失败只记为问题并从 stderr 报出，不影响其余节点；一个可用节点都
+    没有时才失败，避免端点返回一份没有出站的半成品。
+    """
+    raw = sys.stdin.read() if args.input == "-" else read_text(Path(args.input))
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        print(f"error: 输入不是合法 JSON：{error}", file=sys.stderr)
+        return 1
+    try:
+        template = load_template()
+        group_tags = group_tags_from_manifest(
+            load_manifest(Path(args.manifest)), declared_tags(template)
+        )
+        fragment, problems = build_outbounds(
+            payload, group_tags=group_tags, main_group=main_group_of(template)
+        )
+    except (NodeError, RuntimeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    text = json.dumps(fragment, ensure_ascii=False, indent=2) + "\n"
+    if args.output == "-":
+        sys.stdout.write(text)
+    else:
+        write_text(Path(args.output), text)
+
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    outbounds = fragment["outbounds"]
+    groups = [item for item in outbounds if item["tag"] in group_tags]
+    print(
+        f"nodes={len(outbounds) - len(groups)} groups={len(groups)} "
+        f"problems={len(problems)}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     items = load_manifest(Path(args.manifest))
+    policy_order = load_policy_order(Path(args.policy_order))
+    # 没排过序的策略不会丢，只是按字母序排在已排的之后；这里说清楚是哪几个。
+    unlisted = sorted({item.policy for item in items} - set(policy_order))
+    if unlisted:
+        print(
+            "note: 策略顺序文件里没有这些 policy，按字母序排在后面："
+            + ", ".join(unlisted)
+        )
     if args.all:
         clean_generated_outputs()
         write_index(items)
-        write_routeset(items)
+        write_routeset(items, policy_order)
     targets = items if args.all else [find_item(items, args.tag)]
     totals: dict[str, int] = defaultdict(int)
 
@@ -1018,25 +1118,31 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     extract_parser = subparsers.add_parser("extract")
+    # 刻意不给默认值：读的是私有 Loon 配置，路径因机器而异，给个仓库内不存在的默认
+    # 路径只会让人以为它读到了东西。
     extract_parser.add_argument(
         "--inputs",
         nargs="+",
-        default=[str(DEFAULT_LOON_CONFIG)],
+        required=True,
+        help="Loon 配置路径，可多个",
     )
     extract_parser.add_argument(
         "--output",
-        default=str(DEFAULT_MANIFEST),
+        required=True,
+        help="生成的清单路径",
     )
     extract_parser.set_defaults(func=cmd_extract)
 
     extract_profile_parser = subparsers.add_parser("extract-profile")
     extract_profile_parser.add_argument(
         "--input",
-        default=str(DEFAULT_LOON_CONFIG),
+        required=True,
+        help="Loon 配置路径",
     )
     extract_profile_parser.add_argument(
         "--output",
-        default=str(DEFAULT_PROFILE_PATH),
+        required=True,
+        help="生成的 profile 路径",
     )
     extract_profile_parser.set_defaults(func=cmd_extract_profile)
 
@@ -1047,6 +1153,11 @@ def build_parser() -> argparse.ArgumentParser:
     build_parser_cmd.add_argument(
         "--manifest",
         default=str(DEFAULT_MANIFEST),
+    )
+    build_parser_cmd.add_argument(
+        "--policy-order",
+        default=str(DEFAULT_POLICY_ORDER_PATH),
+        help="策略优先级顺序文件",
     )
     build_parser_cmd.set_defaults(func=cmd_build)
 
@@ -1062,6 +1173,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--report", help="write skipped lines to this file"
     )
     convert_parser.set_defaults(func=cmd_convert)
+
+    outbounds_parser = subparsers.add_parser("outbounds")
+    outbounds_parser.add_argument("--input", required=True, help="file or - for stdin")
+    outbounds_parser.add_argument(
+        "--output", default="-", help="file or - for stdout"
+    )
+    outbounds_parser.add_argument(
+        "--manifest",
+        default=str(DEFAULT_MANIFEST),
+        help="规则清单，分组 tag 从这里取",
+    )
+    outbounds_parser.set_defaults(func=cmd_outbounds)
 
     return parser
 
