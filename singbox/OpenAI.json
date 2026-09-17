@@ -1,0 +1,41 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "cdn.usefathom.com"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "ai.com",
+        "openai-api.arkoselabs.com",
+        "openai.com",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "chatgpt.com",
+        "chatgpt.livekit.cloud",
+        "livekit.cloud",
+        "sora.com",
+        "minimaxi.com",
+        "minimax.io",
+        "windsurf.com",
+        "groq.com",
+        "openrouter.ai",
+        "perplexity.ai",
+        "anthropic.com",
+        "claude.ai",
+        "kimi.com",
+        "zed.dev",
+        "diabrowser.engineering",
+        "exa.ai"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "hailuoai",
+        "stripe"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        "pokemontcgpocket.com",
+        "nintendo.com",
+        "akamaized.net"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "player-api-prod"
+      ]
+    }
+  ]
+}

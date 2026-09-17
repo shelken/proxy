@@ -1,0 +1,288 @@
+{
+  "route": {
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Adult",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Adult.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Advertising",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Apple",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Apple-AI",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple-AI.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "ChinaMax",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Facebook",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Facebook.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Gemini",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Gemini.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Hijacking",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Hijacking.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Instagram",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Instagram.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Japan",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Japan.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Lan",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyDirect",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyProxy",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyReject",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "OpenAI",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/OpenAI.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Privacy",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Spotify",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Spotify.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Telegram",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Telegram.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "TikTok",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/TikTok.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Twitter",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Twitter.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "YouTube",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/YouTube.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "cftunnel",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/cftunnel.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "dev",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/dev.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "geoip-cn",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/geoip-cn.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "opencode",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/opencode.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "ptcg",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ptcg.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "ChinaMax-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "update_interval": "1d"
+      }
+    ],
+    "rules": [
+      {
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "MyReject",
+          "Privacy"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
+          "Gemini"
+        ],
+        "action": "route",
+        "outbound": "gemini"
+      },
+      {
+        "rule_set": [
+          "OpenAI"
+        ],
+        "action": "route",
+        "outbound": "openai"
+      },
+      {
+        "rule_set": [
+          "Apple-AI"
+        ],
+        "action": "route",
+        "outbound": "appleai"
+      },
+      {
+        "rule_set": [
+          "opencode"
+        ],
+        "action": "route",
+        "outbound": "opencode"
+      },
+      {
+        "rule_set": [
+          "dev"
+        ],
+        "action": "route",
+        "outbound": "dev"
+      },
+      {
+        "rule_set": [
+          "ptcg"
+        ],
+        "action": "route",
+        "outbound": "ptcg"
+      },
+      {
+        "rule_set": [
+          "Japan"
+        ],
+        "action": "route",
+        "outbound": "japansite"
+      },
+      {
+        "rule_set": [
+          "Adult"
+        ],
+        "action": "route",
+        "outbound": "adultnsfw"
+      },
+      {
+        "rule_set": [
+          "Apple",
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Facebook",
+          "Instagram",
+          "MyProxy",
+          "Spotify",
+          "Telegram",
+          "TikTok",
+          "Twitter",
+          "YouTube"
+        ],
+        "action": "route",
+        "outbound": "proxy"
+      }
+    ]
+  }
+}
