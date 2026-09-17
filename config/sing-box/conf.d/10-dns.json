@@ -1,0 +1,17 @@
+{
+  "dns": {
+    "rules": [
+      {
+        "rule_set": ["zone-internal"],
+        "action": "route",
+        "server": "dns-internal"
+      },
+      {
+        "rule_set": ["ChinaMax"],
+        "action": "route",
+        "server": "dns-cn"
+      }
+    ],
+    "final": "dns-foreign"
+  }
+}

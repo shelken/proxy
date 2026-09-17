@@ -1,0 +1,79 @@
+# 网络规则测试沙箱。
+#
+# 这些测试会创建 TUN 设备、改写路由表，在 macOS 宿主机上跑会破坏正在使用的网络。
+# Linux 有自己的网络栈，所以放进独立内核的 VM 里跑。
+#
+# 注意 mounts 用的是 ~ 加 mountPoint，不是 {{.Dir}}：
+# lima 的 {{.Dir}} 是实例目录（~/.lima/<name>），不是项目目录。
+minimumLimaVersion: 2.0.0
+
+base: [template:_images/ubuntu-24.04]
+
+vmType: vz
+arch: aarch64
+cpus: 2
+memory: "2GiB"
+disk: "20GiB"
+
+mounts:
+  - location: "~"
+    mountPoint: /host-home
+    writable: false
+
+# 关闭默认的全端口转发，宿主机侧不开放任何入口
+portForwards:
+  - guestIP: "0.0.0.0"
+    proto: any
+    ignore: true
+
+propagateProxyEnv: false
+
+containerd:
+  system: false
+  user: false
+
+upgradePackages: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eu
+
+      SB_VERSION=1.14.1
+      BUN_VERSION=1.4.2
+      BIN_DIR=/opt/proxy-test/bin
+
+      # 测试工作目录。tests/lib/sandbox.js 用 -D /work/sing-box 让 sing-box
+      # 有可写的工作目录（/host-home 是只读挂载），cache.db 也落在这里。
+      mkdir -p /work/sing-box
+      chmod 0777 /work /work/sing-box
+
+      if [ -x "$BIN_DIR/sing-box" ] && [ -x "$BIN_DIR/bun" ]; then
+        echo "proxy-test binaries already present"
+        exit 0
+      fi
+
+      mkdir -p "$BIN_DIR" /tmp/proxy-test-dl
+      cd /tmp/proxy-test-dl
+      curl -fsSL -o sing-box.tar.gz \
+        "https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_VERSION}-linux-arm64.tar.gz"
+      tar -xzf sing-box.tar.gz
+      install -m 0755 "sing-box-${SB_VERSION}-linux-arm64/sing-box" "$BIN_DIR/sing-box"
+
+      curl -fsSL -o bun.zip \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-aarch64.zip"
+      python3 -m zipfile -e bun.zip bun-extract
+      install -m 0755 bun-extract/bun-linux-aarch64/bun "$BIN_DIR/bun"
+
+      rm -rf /tmp/proxy-test-dl
+      echo "proxy-test binaries installed: $("$BIN_DIR/sing-box" version | head -1), $("$BIN_DIR/bun" --version)"
+
+probes:
+  - mode: readiness
+    description: sing-box and bun are installed
+    script: |
+      #!/bin/sh
+      set -eu
+      /opt/proxy-test/bin/sing-box version >/dev/null
+      /opt/proxy-test/bin/bun --version >/dev/null

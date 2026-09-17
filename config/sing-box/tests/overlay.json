@@ -1,0 +1,50 @@
+{
+  "log": { "level": "debug" },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "dns-internal",
+        "server": "127.0.0.1",
+        "server_port": 15353
+      },
+      {
+        "type": "udp",
+        "tag": "dns-cn",
+        "server": "127.0.0.1",
+        "server_port": 15354
+      },
+      {
+        "type": "udp",
+        "tag": "dns-foreign",
+        "server": "127.0.0.1",
+        "server_port": 15354
+      }
+    ]
+  },
+  "route": {
+    "rule_set": [
+      {
+        "type": "inline",
+        "tag": "zone-internal",
+        "rules": [{ "domain_suffix": ["zone.test"] }]
+      },
+      {
+        "type": "inline",
+        "tag": "ChinaMax",
+        "rules": [{ "domain_suffix": ["cn"] }]
+      }
+    ]
+  },
+  "outbounds": [
+    { "type": "direct", "tag": "proxy" },
+    { "type": "direct", "tag": "openai" },
+    { "type": "direct", "tag": "gemini" },
+    { "type": "direct", "tag": "appleai" },
+    { "type": "direct", "tag": "dev" },
+    { "type": "direct", "tag": "ptcg" },
+    { "type": "direct", "tag": "adultnsfw" },
+    { "type": "direct", "tag": "japansite" },
+    { "type": "direct", "tag": "opencode" }
+  ]
+}

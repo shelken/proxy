@@ -12,7 +12,7 @@ if (!name) {
 }
 
 const files = execSync(
-  `find . -name "*.test.js" -not -path "./.git/*" -not -path "./node_modules/*"`
+  `find . -name "*.test.js" -not -path "./.git/*" -not -path "./node_modules/*" -not -path "./config/sing-box/*"`
 )
   .toString()
   .trim()
