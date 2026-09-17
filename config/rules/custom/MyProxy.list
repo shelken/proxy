@@ -1,0 +1,78 @@
+# ai
+DOMAIN-SUFFIX,poe.com
+DOMAIN-SUFFIX,fastgpt.run
+DOMAIN-SUFFIX,huggingface.co
+DOMAIN-SUFFIX,minimax.io
+
+# arc
+DOMAIN-SUFFIX,arc.net
+DOMAIN-SUFFIX,arcboosts.com
+
+# bybit
+DOMAIN-KEYWORD,bybit
+DOMAIN-SUFFIX,bybits.org
+DOMAIN-SUFFIX,bybit.biz
+DOMAIN-SUFFIX,byapps.net
+DOMAIN-SUFFIX,bycsi.com
+DOMAIN-SUFFIX,byd3c3.com
+
+# cloudflare
+DOMAIN-SUFFIX,static.cloudflareinsights.com
+
+# crypto
+DOMAIN-SUFFIX,metamask.io
+
+# dns
+IP-CIDR,1.1.1.1/32,no-resolve
+IP-CIDR,8.8.8.8/32,no-resolve
+IP-CIDR,8.8.4.4/32,no-resolve
+
+# futu
+DOMAIN-SUFFIX,moomoo.com
+DOMAIN-SUFFIX,futunn.com
+DOMAIN-SUFFIX,futufin.com
+
+# google
+DOMAIN-SUFFIX,gstatic.com
+DOMAIN-SUFFIX,gmail.com
+
+# seagm
+DOMAIN-SUFFIX,seagm.com
+
+# miaona
+DOMAIN-KEYWORD,miaona
+
+# nintendo/ptcg
+DOMAIN-SUFFIX,pokemon-webapi.appspot.com
+DOMAIN-SUFFIX,gift.pokemontcgpocket.com
+#DOMAIN-SUFFIX,akamaized.net
+
+# parsec
+DOMAIN-SUFFIX,parsec.app
+
+# reddit
+DOMAIN-SUFFIX,redd.it
+DOMAIN-SUFFIX,reddit.com
+DOMAIN-SUFFIX,redditstatic.com
+DOMAIN-SUFFIX,redditmedia.com
+
+# tls
+DOMAIN-SUFFIX,hk
+
+# todoist
+DOMAIN-SUFFIX,todoist.com
+
+# tools 
+DOMAIN-SUFFIX,raycast.com
+
+# wiki
+DOMAIN-SUFFIX,wikimedia.org
+DOMAIN-SUFFIX,wikipedia.org
+
+# others 其他
+DOMAIN-SUFFIX,nodeseek.com
+DOMAIN-SUFFIX,imgur.com
+DOMAIN-SUFFIX,api.revenuecat.com
+DOMAIN-SUFFIX,v2ex.com
+DOMAIN-SUFFIX,in.appcenter.ms
+DOMAIN-SUFFIX,nvidia.com

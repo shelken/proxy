@@ -1,0 +1,50 @@
+# openai
+DOMAIN-SUFFIX,ai.com
+DOMAIN-SUFFIX,openai-api.arkoselabs.com
+DOMAIN-SUFFIX,openai.com
+DOMAIN-SUFFIX,oaistatic.com
+DOMAIN-SUFFIX,oaiusercontent.com
+DOMAIN-SUFFIX,chatgpt.com
+DOMAIN-SUFFIX,chatgpt.livekit.cloud
+DOMAIN-SUFFIX,livekit.cloud
+DOMAIN-SUFFIX,sora.com
+
+# minimax
+DOMAIN-SUFFIX,minimaxi.com
+DOMAIN-SUFFIX,minimax.io
+DOMAIN-KEYWORD,hailuoai
+
+# windsurf
+DOMAIN-SUFFIX,windsurf.com
+
+# bing
+# DOMAIN-SUFFIX,bing.com
+
+# groq
+DOMAIN-SUFFIX,groq.com
+
+# openrouter
+DOMAIN-SUFFIX,openrouter.ai
+
+# perplexity
+DOMAIN-SUFFIX,perplexity.ai
+
+# claude
+DOMAIN,cdn.usefathom.com
+DOMAIN-SUFFIX,anthropic.com
+DOMAIN-SUFFIX,claude.ai
+
+# kimi
+DOMAIN-SUFFIX,kimi.com
+
+# zed
+DOMAIN-SUFFIX,zed.dev
+
+# dia
+DOMAIN-SUFFIX,diabrowser.engineering
+
+# tools
+DOMAIN-SUFFIX,exa.ai
+
+# others
+DOMAIN-KEYWORD,stripe

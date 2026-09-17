@@ -1,0 +1,36 @@
+# 规则清单 —— 本仓库是唯一权威规则源
+#
+# 格式：tag|policy|source
+#   tag     产物文件名，也是 sing-box 里的 rule_set tag
+#   policy  路由策略，对应 sing-box 的 outbound 名；reject 会编译成 action: reject
+#   source  仓库相对路径则读本地文件；以 http 开头则按 URL 拉取
+#
+# 只编辑本文件与 custom/ 下的列表，各客户端产物由 scripts/singbox_rules.py 生成。
+# 详见 config/rules/README.md
+
+MyReject|reject|config/rules/custom/MyReject.list
+MyDirect|direct|config/rules/custom/MyDirect.list
+MyProxy|proxy|config/rules/custom/MyProxy.list
+OpenAI|openai|config/rules/custom/OpenAI.list
+Gemini|gemini|config/rules/custom/Gemini.list
+Apple-AI|appleai|config/rules/custom/Apple-AI.list
+dev|dev|config/rules/custom/dev.list
+ptcg|ptcg|config/rules/custom/ptcg.list
+Adult|adultnsfw|config/rules/custom/Adult.list
+Japan|japansite|config/rules/custom/Japan.list
+opencode|opencode|config/rules/custom/opencode.list
+cftunnel|direct|config/rules/custom/cftunnel.list
+Advertising|reject|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Advertising/Advertising.list
+Apple|direct|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Apple/Apple_Domain.list
+ChinaMax|direct|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/ChinaMax/ChinaMax.list
+Facebook|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Facebook/Facebook.list
+geoip-cn|direct|https://raw.githubusercontent.com/Loon0x00/LoonLiteRules/main/direct/cn.list
+Hijacking|reject|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list
+Instagram|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Instagram/Instagram.list
+Lan|direct|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Lan/Lan.list
+Privacy|reject|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list
+Spotify|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Loon/Spotify/Spotify.list
+Telegram|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Telegram/Telegram.list
+TikTok|proxy|https://raw.githubusercontent.com/Semporia/TikTok-Unlock/master/Loon/TikTok.list
+Twitter|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/63bc79ab90647613b9f2df80389caf133e4b6214/rule/Loon/Twitter/Twitter.list
+YouTube|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/YouTube/YouTube.list
