@@ -73,6 +73,13 @@ build-rules:
 test-rules:
     bun test scripts/singbox_rules.test.js
 
+# --- 真实订阅体检（跑在宿主机，需要能连到节点） ---
+# 解包 → 解析 → 结构校验 → 逐节点真实握手测延迟。
+# 订阅体只进内存，临时配置写在临时目录、结束即删；只监听 127.0.0.1，不建 TUN、不改路由。
+# 用法：just verify-sub ~/sub.txt   或   just verify-sub 'https://<机场>/sub?token=...'
+verify-sub source:
+    @uv run python -B scripts/verify_subscription.py {{source}}
+
 # 校验生产配置（公开层 + 生成的规则集登记 + 私有拓扑模板）。
 # -D 不可省略：45-ruleset.json 里的 rule_set.path 相对工作目录解析。
 # sing-box 合并配置目录时按路径名排序，命令行传入的先后无效，所以 10-public.json 恒在
