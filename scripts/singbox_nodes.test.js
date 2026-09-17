@@ -30,9 +30,13 @@ async function mainGroup() {
 }
 
 const UUID = "11111111-2222-3333-4444-555555555555";
+/** REALITY 的 x25519 公钥：32 字节假值，只要内核的 base64 解码过得去。 */
+const REALITY_KEY = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
 
 const LINKS = {
   vless: `vless://${UUID}@example.com:443?encryption=none&security=tls&sni=cdn.example.com&type=ws&host=cdn.example.com&path=%2Fws%3Fed%3D2048&fp=chrome#vless-node`,
+  // 真实订阅里的 REALITY 链接常不带 fp；内核要求开了 reality 就必须开 uTLS，指纹缺省时按 chrome。
+  reality: `vless://${UUID}@example.com:443?security=reality&pbk=${REALITY_KEY}&sid=6ba85179e30d4fc2&type=tcp&sni=www.example.com#reality-node`,
   trojan: "trojan://p%40ss@example.org:443?sni=example.org&type=grpc&serviceName=svc#trojan-node",
   ss: "ss://YWVzLTI1Ni1nY206cGFzcw@example.org:8388#ss-node",
   hy2: "hysteria2://pass@example.org:8443?sni=example.org&insecure=1&obfs=salamander&obfs-password=obfsp#hy2-node",
@@ -56,7 +60,16 @@ const VMESS_JSON = {
 };
 const VMESS = `vmess://${Buffer.from(JSON.stringify(VMESS_JSON)).toString("base64")}`;
 
-const ALL_LINKS = [LINKS.vless, VMESS, LINKS.ss, LINKS.trojan, LINKS.hy2, LINKS.tuic, LINKS.anytls];
+const ALL_LINKS = [
+  LINKS.vless,
+  LINKS.reality,
+  VMESS,
+  LINKS.ss,
+  LINKS.trojan,
+  LINKS.hy2,
+  LINKS.tuic,
+  LINKS.anytls,
+];
 
 /** 跑一次 outbounds，返回 { stdout, stderr, exitCode }。 */
 function run(payload) {
@@ -181,6 +194,19 @@ describe("outbounds -- 协议解析", () => {
       server_name: "www.example.com",
       utls: { enabled: true, fingerprint: "chrome" },
       reality: { enabled: true, public_key: "PUBKEY", short_id: "abcd" },
+    });
+  });
+
+  test("REALITY 链接没给指纹时也要开 uTLS", () => {
+    // 不给指纹的真实链接很常见，而内核要求 reality 出站必须开 uTLS，指纹缺省按 chrome。
+    // 少了这个开关，整份配置会在启动阶段被拒：uTLS is required by reality client。
+    const link = `vless://${UUID}@example.com:443?security=reality&pbk=${REALITY_KEY}&type=tcp&sni=www.example.com#reality-node`;
+    const nodes = outboundsByTag({ nodes: [link] });
+    expect(nodes.get("reality-node").tls).toEqual({
+      enabled: true,
+      server_name: "www.example.com",
+      utls: { enabled: true },
+      reality: { enabled: true, public_key: REALITY_KEY },
     });
   });
 

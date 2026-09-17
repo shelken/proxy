@@ -205,6 +205,10 @@ def add_reality(tls: dict[str, Any], query: dict[str, str], security: str) -> No
     short_id = pick(query, "sid")
     if short_id:
         reality["short_id"] = short_id
+    # 内核要求：开了 reality 就必须开 uTLS，否则整份配置在启动阶段被拒
+    # （uTLS is required by reality client）。分享链接常只给公钥不给指纹，指纹缺省时
+    # 内核按 chrome 走，所以这里只补开关，不编一个指纹出来。
+    tls.setdefault("utls", {"enabled": True})
     tls["reality"] = reality
 
 
