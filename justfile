@@ -12,6 +12,12 @@
 # 所以这里把 $HOME 前缀换掉即可，不需要写死用户名或绝对路径。
 repo_in_guest := replace(justfile_directory(), env_var_or_default("HOME", ""), "/host-home")
 
+# 沙箱 VM 名与 guest 内的入口，只在这里写一次。
+vm_name := "proxy-test"
+# limactl shell 默认把宿主当前目录当工作目录 cd 进 guest，而那条路径在 guest 里并不存在，
+# 于是每条命令执行前都会喷一行 `cd: ... No such file or directory`。固定 guest 侧工作目录。
+lima_shell := "limactl shell --workdir /work " + vm_name
+
 # 运行全部测试
 test:
     @just run-test test
@@ -27,42 +33,42 @@ test-sign:
 # --- 沙箱 VM 生命周期 ---
 # 创建沙箱 VM（一次性）
 vm-create:
-    limactl create --name=proxy-test --tty=false {{justfile_directory()}}/config/sing-box/lima.yaml
+    limactl create --name={{vm_name}} --tty=false {{justfile_directory()}}/config/sing-box/lima.yaml
 
 # 启动沙箱 VM
 vm-start:
-    limactl start --tty=false proxy-test
+    limactl start --tty=false {{vm_name}}
 
 # 停止沙箱 VM
 vm-stop:
-    limactl stop proxy-test
+    limactl stop {{vm_name}}
 
 # 删除沙箱 VM
 vm-delete:
-    limactl delete --force proxy-test
+    limactl delete --force {{vm_name}}
 
 # --- 沙箱测试 ---
 # 同步点：把被测配置复制到 VM 内的可写工作目录。
 # 只复制手写的公开层模板：生成的登记引用磁盘上的规则集产物，而沙箱里既没有那些产物，
 # 它的 tag 也会与测试覆盖层的内联定义撞车。
 sync-sandbox:
-    limactl shell proxy-test rm -rf /work/sing-box
-    limactl shell proxy-test mkdir -p /work/sing-box/tests
-    limactl shell proxy-test cp {{repo_in_guest}}/config/sing-box/conf.d/10-public.json /work/sing-box/public.json
-    limactl shell proxy-test cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
+    {{lima_shell}} rm -rf /work/sing-box
+    {{lima_shell}} mkdir -p /work/sing-box/tests
+    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/conf.d/10-public.json /work/sing-box/public.json
+    {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
 
 # 在沙箱内运行全部网络行为测试
 test-sandbox: sync-sandbox
-    limactl shell proxy-test /opt/proxy-test/bin/bun test /work/sing-box/tests
+    {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests
 
 # 只跑某一层，例如 just test-sandbox-layer dns
 test-sandbox-layer name: sync-sandbox
-    limactl shell proxy-test /opt/proxy-test/bin/bun test /work/sing-box/tests/{{name}}.test.js
+    {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests/{{name}}.test.js
 
 # 在沙箱内校验配置（公开层 + 测试覆盖层）。
 # 覆盖层用同一批 tag 指向本地夹具、注入最小内联规则集，因此沙箱里不放真实拓扑与生成产物。
 check-sandbox: sync-sandbox
-    limactl shell proxy-test /opt/proxy-test/bin/sing-box check -c /work/sing-box/public.json -c /work/sing-box/tests/overlay.json
+    {{lima_shell}} /opt/proxy-test/bin/sing-box check -c /work/sing-box/public.json -c /work/sing-box/tests/overlay.json
 
 # --- 规则生成与校验（跑在宿主机，需要联网拉第三方列表） ---
 # 生成全部客户端的规则产物

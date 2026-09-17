@@ -27,13 +27,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # v7 起跑在 node24；v4 会在运行日志里留下 Node.js 20 弃用告警。
+        uses: actions/checkout@v7
         with:
           # 生成器只读工作树，发布走临时仓，都不需要 main 的历史。
           fetch-depth: 1
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10
+        with:
+          # 本仓 Python 侧只用标准库、没有依赖文件：uv 缓存没有可缓存的东西，也没有能让它
+          # 失效的键，开着只会每次刷一条「cache will never be invalidated」。
+          enable-cache: false
 
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
@@ -64,7 +69,8 @@ jobs:
           cp config/rules/generated/45-ruleset-remote.json publish/45-ruleset.json
 
       - name: Upload publish artifact
-        uses: actions/upload-artifact@v4
+        # v6 起跑在 node24（要求 runner ≥ 2.327.1，托管 runner 满足）。
+        uses: actions/upload-artifact@v7
         with:
           name: rule-sets
           path: publish
