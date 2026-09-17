@@ -34,7 +34,9 @@ jobs:
           fetch-depth: 1
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v10
+        # v7 起跑在 node24（v6 还是 node20）。v8 及以上没有发布 action.yml，
+        # 写上去会在 Set up job 阶段直接「unable to find version」。
+        uses: astral-sh/setup-uv@v7
         with:
           # 本仓 Python 侧只用标准库、没有依赖文件：uv 缓存没有可缓存的东西，也没有能让它
           # 失效的键，开着只会每次刷一条「cache will never be invalidated」。
