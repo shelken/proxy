@@ -73,7 +73,12 @@ just build-rules
 
 另外生成 `config/sing-box/conf.d/45-ruleset.json`，里面是全部 `rule_set` 声明与按 policy 分组的路由规则。
 
-`config/sing-box/conf.d/45-ruleset.json` 与 `config/rules/generated/` 都是生成物，不要手工编辑，也已被 gitignore。它们是 CI 在 push 到 `main` 时生成并发布到 `sing-box-rules` 分支的。
+`config/sing-box/conf.d/` 下只有两个文件：手写的公开层模板 `10-public.json`，与上面这份生成的
+`45-ruleset.json`。sing-box 合并同目录配置时按**文件名排序**，命令行传入的先后无效，因此
+`10-public.json` 必须排在前面 —— 否则登记里的列表规则会先于内网直连规则命中。两者一旦改坏名字
+（顺序翻转），`scripts/singbox_rules.py` 会直接报错拦下。
+
+`45-ruleset.json` 与 `config/rules/generated/` 都是生成物，不要手工编辑，也已被 gitignore。它们是 CI 在 push 到 `main` 时生成并发布到 `sing-box-rules` 分支的。
 
 ## 客户端不支持的规则
 

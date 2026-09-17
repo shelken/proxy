@@ -1,13 +1,13 @@
 // 结构层：合并后的配置必须自洽。不需要特权。
 //
-// 被测对象是沙箱里的文件集（sync-sandbox 排除了生成产物），因此断言
-// 「没有任何 type: local 规则集」等价于「生成产物没有漏进沙箱，
+// 被测对象是沙箱里的文件集（sync-sandbox 只复制手写的公开层，不复制生成的登记），
+// 因此断言「没有任何 type: local 规则集」等价于「生成的登记没有漏进沙箱，
 // 内联定义取得了唯一所有权」。
 
 import { describe, expect, test, beforeAll } from "bun:test";
 import { SING_BOX, WORK } from "./lib/sandbox.js";
 
-const CONF = `${WORK}/conf.d`;
+const PUBLIC = `${WORK}/public.json`;
 const OVERLAY = `${WORK}/tests/overlay.json`;
 const MERGED = "/tmp/config-merged.json";
 
@@ -19,8 +19,8 @@ beforeAll(async () => {
     SING_BOX,
     "merge",
     MERGED,
-    "-C",
-    CONF,
+    "-c",
+    PUBLIC,
     "-c",
     OVERLAY,
   ]);
@@ -29,7 +29,7 @@ beforeAll(async () => {
   }
   merged = JSON.parse(await Bun.file(MERGED).text());
 
-  const check = Bun.spawnSync([SING_BOX, "check", "-C", CONF, "-c", OVERLAY]);
+  const check = Bun.spawnSync([SING_BOX, "check", "-c", PUBLIC, "-c", OVERLAY]);
   checkExit = { code: check.exitCode, stderr: check.stderr.toString() };
 });
 
@@ -73,9 +73,9 @@ describe("merged config", () => {
   });
 
   test("no disk-backed rule_set leaked into the sandbox", () => {
-    // 生成的 45-ruleset.json 引用 ../rules/generated/singbox/*.srs，其条目
-    // 带 type: "local"。它若进入沙箱，其 tag 会与本覆盖层的内联定义重名，
-    // 测试结果就取决于构建时是否跑过生成器。
+    // 生成的登记引用 ../rules/generated/singbox/*.srs，其条目带 type: "local"。
+    // 它若进入沙箱，其 tag 会与本覆盖层的内联定义重名，测试结果就取决于构建时
+    // 是否跑过生成器。
     const local = merged.route.rule_set.filter((rs) => rs.type === "local");
     expect(local).toEqual([]);
   });

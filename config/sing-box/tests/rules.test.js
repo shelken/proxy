@@ -11,12 +11,12 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { SING_BOX, WORK } from "./lib/sandbox.js";
 
 const OVERLAY = `${WORK}/tests/overlay.json`;
-const CONF = `${WORK}/conf.d`;
+const PUBLIC = `${WORK}/public.json`;
 
 /** 把内联规则集导出成独立源文件，供 rule-set match 使用。 */
 async function exportRuleSet(tag) {
   const mergedPath = `/tmp/rs-merge-${tag}.json`;
-  const merge = Bun.spawnSync([SING_BOX, "merge", mergedPath, "-C", CONF, "-c", OVERLAY]);
+  const merge = Bun.spawnSync([SING_BOX, "merge", mergedPath, "-c", PUBLIC, "-c", OVERLAY]);
   if (merge.exitCode !== 0) {
     throw new Error(`merge failed: ${merge.stderr.toString()}`);
   }

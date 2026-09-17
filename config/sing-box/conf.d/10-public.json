@@ -1,0 +1,63 @@
+{
+  "dns": {
+    "rules": [
+      {
+        "rule_set": ["zone-internal"],
+        "action": "route",
+        "server": "dns-internal"
+      },
+      {
+        "rule_set": ["ChinaMax"],
+        "action": "route",
+        "server": "dns-cn"
+      }
+    ],
+    "final": "dns-foreign"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": ["172.19.0.1/30"],
+      "auto_route": true,
+      "dns_mode": "hijack",
+      "route_exclude_address": [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+        "169.254.0.0/16",
+        "224.0.0.0/4"
+      ]
+    },
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "rule_set": ["zone-internal"],
+        "action": "route",
+        "outbound": "direct"
+      }
+    ],
+    "final": "proxy",
+    "default_domain_resolver": {
+      "server": "dns-cn"
+    }
+  }
+}

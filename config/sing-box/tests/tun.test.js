@@ -5,13 +5,13 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { startSandbox, WORK } from "./lib/sandbox.js";
 
-const CONF = `${WORK}/conf.d`;
+const PUBLIC = `${WORK}/public.json`;
 const OVERLAY = `${WORK}/tests/overlay.json`;
 
 let sb;
 
 beforeAll(async () => {
-  sb = startSandbox({ confDir: CONF, overlay: OVERLAY });
+  sb = startSandbox({ publicConfig: PUBLIC, overlay: OVERLAY });
   await sb.waitFor("sing-box started");
   await sb.waitFor("tun0");
 });

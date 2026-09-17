@@ -13,11 +13,11 @@ export const WORK = "/work/sing-box";
 
 /**
  * 启动 sing-box，返回可查询的句柄。
- * @param {{ confDir: string, overlay: string }} options
+ * @param {{ publicConfig: string, overlay: string }} options
  */
-export function startSandbox({ confDir, overlay }) {
+export function startSandbox({ publicConfig, overlay }) {
   const proc = Bun.spawn(
-    ["sudo", "-n", SING_BOX, "run", "-D", WORK, "-C", confDir, "-c", overlay],
+    ["sudo", "-n", SING_BOX, "run", "-D", WORK, "-c", publicConfig, "-c", overlay],
     { stdout: "pipe", stderr: "pipe" },
   );
 

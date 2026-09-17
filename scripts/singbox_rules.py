@@ -25,6 +25,7 @@ PLAIN_DIR = GENERATED_DIR / "plain"
 UNSUPPORTED_DIR = GENERATED_DIR / "unsupported"
 INDEX_PATH = GENERATED_DIR / "index.json"
 ROUTESET_PATH = ROOT / "config/sing-box/conf.d/45-ruleset.json"
+PUBLIC_TEMPLATE_PATH = ROOT / "config/sing-box/conf.d/10-public.json"
 # 对外发布版：rule_set 指向发布分支的 URL，供不克隆本仓库的用户直接订阅
 REMOTE_ROUTESET_PATH = GENERATED_DIR / "45-ruleset-remote.json"
 SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set"
@@ -818,8 +819,8 @@ def find_item(items: list[RemoteList], target: str) -> RemoteList:
 def build_routeset(items: list[RemoteList], *, remote: bool = False) -> dict[str, Any]:
     """生成路由片段：声明全部 rule_set 并按 policy 分组下发路由。
 
-    顺序即优先级：readConfig 按路径排序后本文件排在 40-route.json 之后，
-    mergeJSON 追加数组，因此手写的 zone-internal 规则恒在列表规则之前。
+    顺序即优先级：sing-box 合并同目录配置时按文件名排序并追加数组，登记排在手写的公开层
+    之后，因此手写的 zone-internal 规则恒在列表规则之前。
 
     remote=False 供本仓库自用，指向磁盘上的生成产物（相对工作目录）。
     remote=True 供外部用户订阅，指向已发布分支上的 URL。
@@ -909,6 +910,14 @@ def write_routeset(items: list[RemoteList]) -> None:
     本仓库自用的一份指向磁盘产物，配 conf.d 下的其他文件一起跑。
     对外订阅的一份指向发布分支的 URL，给不克隆本仓库的用户直接用。
     """
+    # sing-box 合并同目录配置时按文件名排序，命令行传入的先后无效（实测）。手写公开层
+    # 必须排在生成的登记之前：登记里的列表规则若先命中，内网直连规则就永远不会生效。
+    # 文件名一改顺序就会静默翻转，所以在这里先拦住。
+    if PUBLIC_TEMPLATE_PATH.name > ROUTESET_PATH.name:
+        raise RuntimeError(
+            "public template must sort before the rule-set registry, "
+            f"got {PUBLIC_TEMPLATE_PATH.name} > {ROUTESET_PATH.name}"
+        )
     for path, remote in ((ROUTESET_PATH, False), (REMOTE_ROUTESET_PATH, True)):
         write_text(
             path,

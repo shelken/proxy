@@ -10,7 +10,7 @@ import { startSandbox, startDnsFixture, WORK } from "./lib/sandbox.js";
 // 合起来超过 bun test 默认的 5 秒 hook 上限。
 setDefaultTimeout(30_000);
 
-const CONF = `${WORK}/conf.d`;
+const PUBLIC = `${WORK}/public.json`;
 const OVERLAY = `${WORK}/tests/overlay.json`;
 
 let sb;
@@ -21,7 +21,7 @@ beforeAll(async () => {
     await startDnsFixture({ port: 15353, logPath: "/tmp/fx-a.log" }),
     await startDnsFixture({ port: 15354, logPath: "/tmp/fx-b.log" }),
   ];
-  sb = startSandbox({ confDir: CONF, overlay: OVERLAY });
+  sb = startSandbox({ publicConfig: PUBLIC, overlay: OVERLAY });
   await sb.waitFor("sing-box started");
 });
 

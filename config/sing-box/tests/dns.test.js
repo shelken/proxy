@@ -12,7 +12,7 @@ import { startSandbox, startDnsFixture, WORK } from "./lib/sandbox.js";
 // 夹具启动、sing-box 启动与每次查询后的等待合起来超过默认的 5 秒 hook 上限。
 setDefaultTimeout(30_000);
 
-const CONF = `${WORK}/conf.d`;
+const PUBLIC = `${WORK}/public.json`;
 const OVERLAY = `${WORK}/tests/overlay.json`;
 
 const FX_A = { port: 15353, logPath: "/tmp/fx-a.log" };
@@ -25,7 +25,7 @@ let b;
 beforeAll(async () => {
   a = await startDnsFixture(FX_A);
   b = await startDnsFixture(FX_B);
-  sb = startSandbox({ confDir: CONF, overlay: OVERLAY });
+  sb = startSandbox({ publicConfig: PUBLIC, overlay: OVERLAY });
   await sb.waitFor("sing-box started", 20_000);
 });
 

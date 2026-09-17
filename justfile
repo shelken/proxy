@@ -43,11 +43,12 @@ vm-delete:
 
 # --- 沙箱测试 ---
 # 同步点：把被测配置复制到 VM 内的可写工作目录。
-# 排除 conf.d/45-ruleset.json（生成产物，会与测试覆盖层的内联定义同 tag 冲突）。
+# 只复制手写的公开层模板：生成的登记引用磁盘上的规则集产物，而沙箱里既没有那些产物，
+# 它的 tag 也会与测试覆盖层的内联定义撞车。
 sync-sandbox:
     limactl shell proxy-test rm -rf /work/sing-box
-    limactl shell proxy-test mkdir -p /work/sing-box/conf.d /work/sing-box/tests
-    limactl shell proxy-test sh -c 'for f in {{repo_in_guest}}/config/sing-box/conf.d/*.json; do case "$f" in *45-ruleset.json) ;; *) cp "$f" /work/sing-box/conf.d/;; esac; done'
+    limactl shell proxy-test mkdir -p /work/sing-box/tests
+    limactl shell proxy-test cp {{repo_in_guest}}/config/sing-box/conf.d/10-public.json /work/sing-box/public.json
     limactl shell proxy-test cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
 
 # 在沙箱内运行全部网络行为测试
@@ -59,9 +60,9 @@ test-sandbox-layer name: sync-sandbox
     limactl shell proxy-test /opt/proxy-test/bin/bun test /work/sing-box/tests/{{name}}.test.js
 
 # 在沙箱内校验配置（公开层 + 测试覆盖层）。
-# 依赖生成产物的 tag 由覆盖层以内联定义补齐，因此这里用 overlay 而不是真实拓扑。
+# 覆盖层用同一批 tag 指向本地夹具、注入最小内联规则集，因此沙箱里不放真实拓扑与生成产物。
 check-sandbox: sync-sandbox
-    limactl shell proxy-test /opt/proxy-test/bin/sing-box check -C /work/sing-box/conf.d -c /work/sing-box/tests/overlay.json
+    limactl shell proxy-test /opt/proxy-test/bin/sing-box check -c /work/sing-box/public.json -c /work/sing-box/tests/overlay.json
 
 # --- 规则生成与校验（跑在宿主机，需要联网拉第三方列表） ---
 # 生成全部客户端的规则产物
@@ -72,7 +73,9 @@ build-rules:
 test-rules:
     bun test scripts/singbox_rules.test.js
 
-# 校验生产配置（公开层 + 私有拓扑模板）。依赖宿主机有 sing-box，没有就用 just check-sandbox。
+# 校验生产配置（公开层 + 生成的规则集登记 + 私有拓扑模板）。
 # -D 不可省略：45-ruleset.json 里的 rule_set.path 相对工作目录解析。
+# sing-box 合并配置目录时按路径名排序，命令行传入的先后无效，所以 10-public.json 恒在
+# 45-ruleset.json 之前，内网直连规则先于列表规则生效。
 check-singbox:
     sing-box check -D config/sing-box -C conf.d -c local/99-topology.json.example
