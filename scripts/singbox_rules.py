@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import ipaddress
 import json
 import re
 import shutil
@@ -34,6 +36,30 @@ SING_GEOSITE_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geosite/r
 # rule_set.path 相对 sing-box 的工作目录解析。生产运行时工作目录是
 # config/sing-box（justfile 的所有 sing-box 命令都从那一层启动）。
 RULESET_RELATIVE_DIR = Path("../rules/generated/singbox")
+
+# 目标端变体。只实现 darwin：路由器变体的 inbound 与 DNS 差异尚未定（见 #15），
+# 其余值一律报错，避免悄悄按 darwin 生成一份在别的端上跑不起来的东西。
+SUPPORTED_TARGETS = ("darwin",)
+# 内网域名规则集。公开层的 DNS 规则按这个名字引用它，所以它属于公开层的词汇表，
+# 不是可以推导出来的值。
+ZONE_RULESET_TAG = "zone-internal"
+# 下载远端规则集用的 HTTP client 名。
+RULESET_CLIENT_TAG = "rule-set-dl"
+# 除内网解析器之外的公共解析器。URL 只带内网 DNS 与域名后缀两个参数，
+# 这两个值对所有使用者都一样，不值得做成参数。
+PUBLIC_DNS_CN = "223.5.5.5"
+PUBLIC_DNS_FOREIGN = "1.1.1.1"
+COMPOSE_INPUT_KEYS = ("target", "subscription", "nodes", "dns", "zone")
+# 域名后缀：不校验就不是后缀（"*" 之类会让规则集匹配到所有人）。
+ZONE_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$",
+    re.IGNORECASE,
+)
+
+
+class ComposeError(ValueError):
+    """输入缺参数或参数非法。不产出一份缺胳膊少腿的配置。"""
+
 
 SUPPORTED_FIELDS = {
     "DOMAIN": "domain",
@@ -845,6 +871,8 @@ def build_routeset(
                 "tag": name,
                 "format": "binary",
                 "url": f"{REMOTE_RULE_BASE}/singbox/{name}.srs",
+                # 默认也是 1d，写出来是为了不依赖「没说就是 1d」这条隐式规则。
+                "update_interval": "1d",
             }
         return {
             "type": "local",
@@ -1074,6 +1102,218 @@ def cmd_outbounds(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_compose_input(payload: dict[str, Any]) -> tuple[str, str, str]:
+    """校验合成输入，返回 (target, dns, zone)。
+
+    不认识的键也算非法：URL 里多打一个字母（zones、dnsserver）本该当场失败，而不是被
+    当成「没给这个参数」生成一份少了内网解析的配置。
+    """
+    if not isinstance(payload, dict):
+        raise ComposeError("输入必须是一个 JSON 对象")
+    unknown = sorted(set(payload) - set(COMPOSE_INPUT_KEYS))
+    if unknown:
+        raise ComposeError("输入里有不认识的键：" + "、".join(unknown))
+
+    target = str(payload.get("target") or "").strip().lower()
+    if not target:
+        raise ComposeError("缺少 target")
+    if target not in SUPPORTED_TARGETS:
+        raise ComposeError(
+            f"不支持的 target：{target}（当前只实现 {'、'.join(SUPPORTED_TARGETS)}）"
+        )
+
+    dns = str(payload.get("dns") or "").strip()
+    if not dns:
+        raise ComposeError("缺少 dns（内网 DNS 地址）")
+    try:
+        ipaddress.ip_address(dns)
+    except ValueError:
+        raise ComposeError(f"dns 不是合法的 IP 地址：{dns}") from None
+
+    zone = str(payload.get("zone") or "").strip().strip(".")
+    if not zone:
+        raise ComposeError("缺少 zone（内网域名后缀）")
+    if not ZONE_RE.match(zone):
+        raise ComposeError(f"zone 不是合法的域名后缀：{zone}")
+    return target, dns, zone
+
+
+def internal_dns_tag(template: dict[str, Any]) -> str:
+    """公开层把内网域名送去哪个 DNS 上游，那个上游就是内网解析器。"""
+    for rule in (template.get("dns") or {}).get("rules") or []:
+        if ZONE_RULESET_TAG in (rule.get("rule_set") or []) and rule.get("server"):
+            return str(rule["server"])
+    raise ComposeError(f"公开层没有把 {ZONE_RULESET_TAG} 送去任何 DNS 上游")
+
+
+def referenced_dns_tags(template: dict[str, Any]) -> list[str]:
+    """公开层引用到的 DNS server tag，按引用顺序去重。"""
+    dns = template.get("dns") or {}
+    tags = [str(rule["server"]) for rule in dns.get("rules") or [] if rule.get("server")]
+    if dns.get("final"):
+        tags.append(str(dns["final"]))
+    resolver = (template.get("route") or {}).get("default_domain_resolver") or {}
+    if resolver.get("server"):
+        tags.append(str(resolver["server"]))
+    return list(dict.fromkeys(tags))
+
+
+def compose_dns_servers(
+    template: dict[str, Any], *, dns: str, main_group: str
+) -> list[dict[str, Any]]:
+    """内网解析器跟着参数走，公共解析器一个直连、一个跟随主分组。
+
+    tag 全部从公开层的引用反推，代码里不复制：公开层改名字，这里跟着改。
+    """
+    internal = internal_dns_tag(template)
+    foreign = str((template.get("dns") or {}).get("final") or "")
+    if internal == foreign:
+        raise ComposeError(f"公开层的 dns.final 不能就是内网解析器（{internal}）")
+    servers: list[dict[str, Any]] = []
+    for tag in referenced_dns_tags(template):
+        if tag == internal:
+            # 内网解析器在 Tailscale 或局域网上。不写 detour 就是直连 —— 内核里空的
+            # detour 才走本地拨号，而点名一个 direct 出站会被它拒绝：那个出站若没有
+            # 任何拨号字段就是「空出站」，内核认为「经由空直连出站绕一圈」没有意义。
+            servers.append({"type": "udp", "tag": tag, "server": dns})
+        elif tag == foreign:
+            servers.append(
+                {
+                    "type": "udp",
+                    "tag": tag,
+                    "server": PUBLIC_DNS_FOREIGN,
+                    "detour": main_group,
+                }
+            )
+        else:
+            servers.append({"type": "udp", "tag": tag, "server": PUBLIC_DNS_CN})
+    return servers
+
+
+def compose_private_layer(
+    template: dict[str, Any], *, dns: str, zone: str, main_group: str
+) -> dict[str, Any]:
+    """由内网参数生成的那一段：内网解析器、内网域名规则集、下载规则集的 HTTP client。
+
+    规则集下载走主分组：显式客户端出现之前，内核用的隐式默认客户端就是走默认出站
+    （也就是 route.final）下载的，发布分支的域名在墙内直连不稳，照旧走代理更可靠。
+    主分组 tag 从模板的 route.final 取，不在代码里复制。
+    """
+    return {
+        "dns": {
+            "servers": compose_dns_servers(template, dns=dns, main_group=main_group)
+        },
+        "http_clients": [{"tag": RULESET_CLIENT_TAG, "detour": main_group}],
+        "route": {
+            "default_http_client": RULESET_CLIENT_TAG,
+            "rule_set": [
+                {
+                    "type": "inline",
+                    "tag": ZONE_RULESET_TAG,
+                    "rules": [{"domain_suffix": [zone]}],
+                }
+            ],
+        },
+    }
+
+
+def merge_configs(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """把若干配置片段合成一份，语义与 sing-box 合并配置目录时一致（逐条实测）：
+
+    对象递归合并、数组按顺序拼接、标量以先出现的为准。sing-box 的合并顺序按路径名排序、
+    与命令行传入的先后无关，所以这里的先后由调用方显式给出。
+    """
+    result: dict[str, Any] = {}
+    for part in parts:
+        merge_into(result, part)
+    return result
+
+
+def merge_into(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key, value in source.items():
+        if key not in target:
+            # 深拷贝：合并结果不该与入参共享可变对象。
+            target[key] = copy.deepcopy(value)
+            continue
+        current = target[key]
+        if isinstance(current, dict) and isinstance(value, dict):
+            merge_into(current, value)
+        elif isinstance(current, list) and isinstance(value, list):
+            current.extend(copy.deepcopy(value))
+        # 其余情况保留先出现的值 —— 与内核一致。
+
+
+def compose_config(
+    payload: dict[str, Any],
+    *,
+    template: dict[str, Any],
+    registry: dict[str, Any],
+    group_tags: list[str],
+) -> tuple[dict[str, Any], list[str], str]:
+    """输入 → 一份完整配置。返回 (配置, 逐条问题, target)。
+
+    拼接顺序就是优先级：公开层在最前（它的 route.final、dns.final 说了算），登记在最后
+    （列表规则排在手写的内网直连规则之后）。
+    """
+    target, dns, zone = validate_compose_input(payload)
+    main_group = main_group_of(template)
+    fragment, problems = build_outbounds(
+        payload, group_tags=group_tags, main_group=main_group
+    )
+    config = merge_configs(
+        [
+            template,
+            compose_private_layer(template, dns=dns, zone=zone, main_group=main_group),
+            fragment,
+            registry,
+        ]
+    )
+    return config, problems, target
+
+
+def cmd_compose(args: argparse.Namespace) -> int:
+    """纯变换：stdin 收输入，stdout 出一份完整配置。
+
+    不联网：订阅由调用方抓好再传进来（抓取与出网加固是端点的事）。不写仓库目录：
+    配置只往 stdout 或 --output 走。
+    """
+    raw = sys.stdin.read() if args.input == "-" else read_text(Path(args.input))
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        print(f"error: 输入不是合法 JSON：{error}", file=sys.stderr)
+        return 1
+    try:
+        template = json.loads(read_text(Path(args.template)))
+        items = load_manifest(Path(args.manifest))
+        registry = build_routeset(
+            items, load_policy_order(Path(args.policy_order)), remote=True
+        )
+        group_tags = group_tags_from_manifest(items, declared_tags(template))
+        config, problems, target = compose_config(
+            payload, template=template, registry=registry, group_tags=group_tags
+        )
+    except (ComposeError, NodeError, RuntimeError, OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    text = json.dumps(config, ensure_ascii=False, indent=2) + "\n"
+    if args.output == "-":
+        sys.stdout.write(text)
+    else:
+        write_text(Path(args.output), text)
+
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    outbounds = config["outbounds"]
+    print(
+        f"target={target} outbounds={len(outbounds)} groups={len(group_tags)} "
+        f"rule_sets={len(config['route']['rule_set'])} problems={len(problems)}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     items = load_manifest(Path(args.manifest))
     policy_order = load_policy_order(Path(args.policy_order))
@@ -1185,6 +1425,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="规则清单，分组 tag 从这里取",
     )
     outbounds_parser.set_defaults(func=cmd_outbounds)
+
+    compose_parser = subparsers.add_parser("compose")
+    compose_parser.add_argument("--input", required=True, help="file or - for stdin")
+    compose_parser.add_argument(
+        "--output", default="-", help="file or - for stdout"
+    )
+    compose_parser.add_argument(
+        "--template",
+        default=str(PUBLIC_TEMPLATE_PATH),
+        help="公开层模板",
+    )
+    compose_parser.add_argument(
+        "--manifest",
+        default=str(DEFAULT_MANIFEST),
+        help="规则清单，分组 tag 与规则集登记都从它生成",
+    )
+    compose_parser.add_argument(
+        "--policy-order",
+        default=str(DEFAULT_POLICY_ORDER_PATH),
+        help="策略优先级顺序文件",
+    )
+    compose_parser.set_defaults(func=cmd_compose)
 
     return parser
 

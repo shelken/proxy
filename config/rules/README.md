@@ -76,11 +76,41 @@ just build-rules
 另外生成 `config/sing-box/conf.d/45-ruleset.json`，里面是全部 `rule_set` 声明与按 policy 分组的路由规则。
 
 `config/sing-box/conf.d/` 下只有两个文件：手写的公开层模板 `10-public.json`，与上面这份生成的
-`45-ruleset.json`。sing-box 合并同目录配置时按**文件名排序**，命令行传入的先后无效，因此
+`45-ruleset.json`。按目录合并这两份时 sing-box 会按**文件名排序**、命令行传入的先后无效，因此
 `10-public.json` 必须排在前面 —— 否则登记里的列表规则会先于内网直连规则命中。两者一旦改坏名字
-（顺序翻转），`scripts/singbox_rules.py` 会直接报错拦下。
+（顺序翻转），`scripts/singbox_rules.py` 会直接报错拦下。设备拿到的配置不走目录合并，而是下面
+这条合成路径：那里的先后由代码显式给出。
 
 `45-ruleset.json` 与 `config/rules/generated/` 都是生成物，不要手工编辑，也已被 gitignore。它们是 CI 在 push 到 `main` 时生成并发布到 `sing-box-rules` 分支的。
+
+## 合成：输入到完整配置
+
+```
+just check-singbox        # 用文档级夹具合成一份 darwin 配置并让内核校验
+```
+
+等价的直接调用：
+
+```
+uv run python -B scripts/singbox_rules.py compose --input <输入.json> --output -
+```
+
+输入是一份 JSON，五列：
+
+| 键 | 必填 | 含义 |
+|---|---|---|
+| `target` | 是 | 目标端，目前只实现 `darwin`，其余值明确报错 |
+| `subscription` | 否 | 订阅体（base64 或明文），由调用方抓好再传进来 |
+| `nodes` | 否 | 节点分享链接，可重复；与订阅里的链接同等处理 |
+| `dns` | 是 | 内网 DNS 地址 |
+| `zone` | 是 | 内网域名后缀，生成 `zone-internal` 规则集 |
+
+输出是一份完整的 sing-box 配置：公开层模板、内网解析器与内网规则集、节点出站与分流分组、
+规则集登记（一律 `type: "remote"`，指向发布分支）。缺参数、参数非法、一个可用节点都没有
+都会当场失败且不产出半成品；它是纯变换，不联网、不写仓库目录。
+
+拼接顺序即优先级：公开层在最前（它的 `route.final` 与 `dns.final` 说了算，主分组与下载规则集
+用的 HTTP client 都跟着它走），登记在最后（列表规则排在内网直连规则之后）。
 
 ## 客户端不支持的规则
 
@@ -102,8 +132,17 @@ just build-rules
 bun test scripts/singbox_rules.test.js
 ```
 
-或 `just test-rules`。用例通过脚本的 `convert` 子命令驱动纯转换逻辑，全程不触网，
+或 `just test-rules`。用例通过脚本的 `convert` 与 `compose` 子命令驱动纯转换逻辑，全程不触网，
 因此不依赖任何外部列表的当前内容。
+
+需要内核参与的那一层在沙箱里跑：
+
+```
+just test-sandbox
+```
+
+`config/sing-box/tests/compose.test.js` 会在沙箱内合成一份配置、让 `sing-box check` 校验，并真的
+把它跑起来（本地投影节点 + TUN），断言启动、拉全规则集、无 FATAL —— 装配错误只有跑起来才现形。
 
 ## 发布产物
 

@@ -53,9 +53,12 @@ vm-delete:
 # 它的 tag 也会与测试覆盖层的内联定义撞车。
 sync-sandbox:
     {{lima_shell}} rm -rf /work/sing-box
-    {{lima_shell}} mkdir -p /work/sing-box/tests
+    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/tools
     {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/conf.d/10-public.json /work/sing-box/public.json
     {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
+    # 合成器要在沙箱内跑：脚本与它读的两份数据文件一起复制进 guest。
+    {{lima_shell}} cp {{repo_in_guest}}/scripts/singbox_rules.py {{repo_in_guest}}/scripts/singbox_nodes.py /work/sing-box/tools/
+    {{lima_shell}} cp {{repo_in_guest}}/config/rules/index.txt {{repo_in_guest}}/config/rules/policy-order.txt /work/sing-box/tools/
 
 # 在沙箱内运行全部网络行为测试
 test-sandbox: sync-sandbox
@@ -86,9 +89,8 @@ test-rules:
 verify-sub source:
     @uv run python -B scripts/verify_subscription.py {{source}}
 
-# 校验生产配置（公开层 + 生成的规则集登记 + 私有拓扑模板）。
-# -D 不可省略：45-ruleset.json 里的 rule_set.path 相对工作目录解析。
-# sing-box 合并配置目录时按路径名排序，命令行传入的先后无效，所以 10-public.json 恒在
-# 45-ruleset.json 之前，内网直连规则先于列表规则生效。
+# 校验生产配置：先用一份文档级夹具合成 darwin 配置（设备实际拿到的形态），再让内核校验。
+# 夹具只用 RFC 5737 的测试网段与保留 UUID，不含任何真实凭据。
+# 合成器把公开层模板、内网参数、节点出站与规则集登记拼成一份，所以这里校验的就是完整那一份。
 check-singbox:
-    sing-box check -D config/sing-box -C conf.d -c local/99-topology.json.example
+    @uv run python -B scripts/singbox_rules.py compose --input config/sing-box/tests/compose-input.json --output /tmp/singbox-composed.json && sing-box check -c /tmp/singbox-composed.json && rm -f /tmp/singbox-composed.json

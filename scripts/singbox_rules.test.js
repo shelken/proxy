@@ -178,3 +178,193 @@ describe("unsupported report", () => {
     expect(await Bun.file(report).text()).toBe("IP-ASN,396982,no-resolve\n");
   });
 });
+
+// --- 合成器 ---
+//
+// 只断言外部可观察的行为：给定这组输入产出的配置长什么样、缺参数时是否当场失败。
+// 结构校验（sing-box check）在沙箱里跑，那里才有内核可执行文件。
+
+const REMOTE_BASE = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules";
+
+const COMPOSE_BASE = {
+  target: "darwin",
+  nodes: [
+    "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls&sni=a.test&type=ws&host=a.test&path=%2Fx#node-1",
+    "trojan://pass@example.net:443?security=tls&sni=b.test&type=grpc&serviceName=gs#node-2",
+  ],
+  dns: "100.100.100.100",
+  zone: "corp.internal",
+};
+
+/** 跑一次 compose，返回 { stdout, stderr, exitCode }。 */
+function compose(input, env = {}) {
+  const proc = Bun.spawnSync(
+    ["uv", "run", "python", "-B", SCRIPT, "compose", "--input", "-"],
+    {
+      stdin: Buffer.from(typeof input === "string" ? input : JSON.stringify(input)),
+      env: { ...process.env, ...env },
+    },
+  );
+  return {
+    stdout: proc.stdout.toString(),
+    stderr: proc.stderr.toString(),
+    exitCode: proc.exitCode,
+  };
+}
+
+/** 合成一份配置，顺带断言它没在 stderr 上抱怨。 */
+function composed(extra = {}) {
+  const { stdout, stderr, exitCode } = compose({ ...COMPOSE_BASE, ...extra });
+  expect(stderr).toContain("target=darwin");
+  expect(exitCode).toBe(0);
+  return JSON.parse(stdout);
+}
+
+/** 公开层模板：合成结果的基准，断言时用来对照。 */
+async function template() {
+  return JSON.parse(
+    await Bun.file("config/sing-box/conf.d/10-public.json").text(),
+  );
+}
+
+describe("compose", () => {
+  test("produces a config whose every referenced outbound exists", async () => {
+    const config = composed();
+    const base = await template();
+
+    expect(config.inbounds.map((item) => item.tag)).toEqual(
+      base.inbounds.map((item) => item.tag),
+    );
+    expect(config.route.final).toBe(base.route.final);
+    expect(config.dns.final).toBe(base.dns.final);
+
+    const tags = new Set(config.outbounds.map((item) => item.tag));
+    for (const tag of ["node-1", "node-2", "direct", "proxy", "opencode"]) {
+      expect(tags.has(tag)).toBe(true);
+    }
+    // 规则引用的出站必须真的存在：分组少生成一个，这里就红。
+    for (const rule of config.route.rules) {
+      if (rule.outbound) expect(tags.has(rule.outbound)).toBe(true);
+    }
+    const serverTags = new Set(config.dns.servers.map((item) => item.tag));
+    for (const rule of config.dns.rules) {
+      expect(serverTags.has(rule.server)).toBe(true);
+    }
+    expect(serverTags.has(config.dns.final)).toBe(true);
+  });
+
+  test("builds the internal resolver and zone rule set from the parameters", () => {
+    const config = composed();
+    const internal = config.dns.servers.find((item) => item.tag === "dns-internal");
+    expect(internal.server).toBe(COMPOSE_BASE.dns);
+    // 不写 detour：内核里空的 detour 就是本地直连，而点名一个没有任何拨号字段的
+    // direct 出站会被它当成「绕经空直连出站」直接拒绝，配置起不来。
+    expect(internal.detour).toBeUndefined();
+
+    const zone = config.route.rule_set.find((item) => item.tag === "zone-internal");
+    expect(zone.rules).toEqual([{ domain_suffix: [COMPOSE_BASE.zone] }]);
+
+    // 换一组参数就该跟着变：写死的话这里会照旧。
+    const other = composed({ dns: "192.168.9.9", zone: "lan" });
+    expect(
+      other.dns.servers.find((item) => item.tag === "dns-internal").server,
+    ).toBe("192.168.9.9");
+    expect(
+      other.route.rule_set.find((item) => item.tag === "zone-internal").rules,
+    ).toEqual([{ domain_suffix: ["lan"] }]);
+  });
+
+  test("references every rule set remotely on the published branch", async () => {
+    const config = composed();
+    const manifest = await Bun.file("config/rules/index.txt").text();
+    const listed = manifest
+      .split("\n")
+      .filter((line) => line.trim() && !line.startsWith("#"));
+
+    const remote = config.route.rule_set.filter((item) => item.type === "remote");
+    expect(remote).toHaveLength(listed.length);
+    for (const item of remote) {
+      expect(item.url.startsWith(`${REMOTE_BASE}/singbox/`)).toBe(true);
+      expect(item.url.endsWith(`${item.tag}.srs`)).toBe(true);
+      // 下载周期显式写出来，不依赖「没说就是 1d」这条隐式默认。
+      expect(item.update_interval).toBe("1d");
+    }
+    expect(config.route.rule_set.some((item) => item.type === "local")).toBe(false);
+  });
+
+  test("keeps the public layer's rules ahead of the registry's", async () => {
+    const config = composed();
+    const base = await template();
+
+    // 内网直连规则若排在列表规则之后，就永远不会命中。
+    expect(config.route.rules.slice(0, 2)).toEqual(base.route.rules);
+    expect(config.route.rules[1]).toEqual({
+      rule_set: ["zone-internal"],
+      action: "route",
+      outbound: "direct",
+    });
+    expect(config.dns.rules).toEqual(base.dns.rules);
+    for (const rule of config.route.rules.slice(2)) {
+      expect(Array.isArray(rule.rule_set)).toBe(true);
+    }
+  });
+
+  test("declares an explicit http client for rule-set downloads", () => {
+    // 不显式声明就落到 1.14 已弃用、1.16 将移除的隐式默认客户端上。
+    const config = composed();
+    expect(config.http_clients).toEqual([
+      { tag: "rule-set-dl", detour: "proxy" },
+    ]);
+    expect(config.route.default_http_client).toBe("rule-set-dl");
+    // 下载走的出站必须是配置里真实存在的那条。
+    const tags = new Set(config.outbounds.map((item) => item.tag));
+    expect(tags.has(config.http_clients[0].detour)).toBe(true);
+  });
+
+  test("takes nodes from a subscription as well as from single links", () => {
+    const link = "trojan://pass@example.org:8443?security=tls&sni=c.test#from-sub";
+    const config = composed({
+      subscription: Buffer.from(link).toString("base64"),
+      nodes: ["vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls&sni=a.test#single"],
+    });
+    const tags = config.outbounds.map((item) => item.tag);
+    expect(tags).toContain("from-sub");
+    expect(tags).toContain("single");
+  });
+
+  test("fails without producing a half config", async () => {
+    const cases = [
+      [{ ...COMPOSE_BASE, target: "linux-router" }, "不支持的 target：linux-router"],
+      [{ ...COMPOSE_BASE, target: "" }, "缺少 target"],
+      [{ ...COMPOSE_BASE, dns: "" }, "缺少 dns"],
+      [{ ...COMPOSE_BASE, dns: "10.0.0.256" }, "dns 不是合法的 IP 地址"],
+      [{ ...COMPOSE_BASE, zone: "" }, "缺少 zone"],
+      [{ ...COMPOSE_BASE, zone: "not a zone" }, "zone 不是合法的域名后缀"],
+      [{ ...COMPOSE_BASE, nodes: [], subscription: "" }, "没有可用节点"],
+      [{ ...COMPOSE_BASE, sub: "x" }, "不认识的键：sub"],
+    ];
+    for (const [input, hint] of cases) {
+      const { stdout, stderr, exitCode } = compose(input);
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(hint);
+    }
+    expect(compose("{ not json").exitCode).toBe(1);
+  });
+
+  test("is a pure transform: no network, no repository writes", () => {
+    const gitStatus = () =>
+      Bun.spawnSync(["git", "status", "--porcelain"]).stdout.toString();
+    const before = gitStatus();
+
+    // 三个代理变量都指向死端口：真去抓订阅的话这里就失败了。
+    const { exitCode } = compose(COMPOSE_BASE, {
+      http_proxy: "http://127.0.0.1:1",
+      https_proxy: "http://127.0.0.1:1",
+      all_proxy: "socks5://127.0.0.1:1",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(gitStatus()).toBe(before);
+  });
+});

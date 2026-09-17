@@ -13,11 +13,13 @@ export const WORK = "/work/sing-box";
 
 /**
  * 启动 sing-box，返回可查询的句柄。
- * @param {{ publicConfig: string, overlay: string }} options
+ * @param {{ publicConfig: string, overlay?: string }} options
  */
 export function startSandbox({ publicConfig, overlay }) {
+  // 覆盖层是可选的：合成出来的配置自带全部出站与规则集引用，不需要夹具覆盖。
+  const overlays = overlay ? ["-c", overlay] : [];
   const proc = Bun.spawn(
-    ["sudo", "-n", SING_BOX, "run", "-D", WORK, "-c", publicConfig, "-c", overlay],
+    ["sudo", "-n", SING_BOX, "run", "-D", WORK, "-c", publicConfig, ...overlays],
     { stdout: "pipe", stderr: "pipe" },
   );
 
