@@ -82,17 +82,9 @@ just build-rules
 所以 DNS 规则引用域名版（`ChinaMax-dns`），路由规则引用原版（`ChinaMax`）。
 清单里没有域名类条目却出现在 DNS 规则里，构建会直接失败，而不是生成一份废弃写法。
 
-另外生成 `config/sing-box/conf.d/45-ruleset.json`，里面是全部 `rule_set` 声明与按 policy 分组的路由规则。
+全仓库唯一标准底模为 `config/sing-box/template.json`，自包含全部入口、DNS、27 份规则集声明与 13 条分流规则。设备端点统一获取单份自包含完整配置，彻底免去客户端多文件合并与顺序依赖。
 
-`config/sing-box/conf.d/` 下只有两个文件：手写的公开层模板 `10-public.json`，与上面这份生成的
-`45-ruleset.json`。按目录合并这两份时 sing-box 会按**文件名排序**、命令行传入的先后无效，因此
-`10-public.json` 必须排在前面 —— 否则登记里的列表规则会先于内网直连规则命中。两者一旦改坏名字
-（顺序翻转），`scripts/singbox_rules.py` 会直接报错拦下。
-
-设备拿到的配置不走这条目录合并：它是端点核心用 `config/sing-box/template.json` 装配出的单份配置，
-规则先后由底模里的顺序显式确定。
-
-`45-ruleset.json` 与 `config/rules/generated/` 都是生成物，不要手工编辑，也已被 gitignore。它们是 CI 在 push 到 `main` 时生成并发布到 `sing-box-rules` 分支的。
+`config/rules/generated/` 均为生成物，不要手工编辑，也已被 gitignore。它们是 CI 在 push 到 `main` 时生成并发布到 `sing-box-rules` 分支的。
 
 ## 端点：一条 URL 到完整配置
 

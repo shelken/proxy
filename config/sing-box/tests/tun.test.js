@@ -11,7 +11,7 @@ const OVERLAY = `${WORK}/tests/overlay.json`;
 let sb;
 
 beforeAll(async () => {
-  sb = startSandbox({ publicConfig: PUBLIC, overlay: OVERLAY });
+  sb = startSandbox();
   await sb.waitFor("sing-box started");
   await sb.waitFor("tun0");
 });
@@ -44,5 +44,28 @@ describe("tun interface", () => {
 
   test("tailscale CGNAT range is excluded from the tun", () => {
     expect(run(["ip", "route", "get", "100.64.0.1"])).not.toContain("tun0");
+  });
+
+  test("mixed inbound on 127.0.0.1:2080 is listening and accepts connections", async () => {
+    const socket = await new Promise((resolve, reject) => {
+      Bun.connect({
+        hostname: "127.0.0.1",
+        port: 2080,
+        socket: {
+          data(sock, data) {},
+          open(sock) {
+            resolve(sock);
+            sock.end();
+          },
+          error(sock, error) {
+            reject(error);
+          },
+          connectError(sock, error) {
+            reject(error);
+          },
+        },
+      });
+    });
+    expect(socket).toBeDefined();
   });
 });

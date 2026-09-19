@@ -21,7 +21,7 @@ beforeAll(async () => {
     await startDnsFixture({ port: 15353, logPath: "/tmp/fx-a.log" }),
     await startDnsFixture({ port: 15354, logPath: "/tmp/fx-b.log" }),
   ];
-  sb = startSandbox({ publicConfig: PUBLIC, overlay: OVERLAY });
+  sb = startSandbox();
   await sb.waitFor("sing-box started");
 });
 

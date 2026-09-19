@@ -53,14 +53,13 @@ vm-delete:
 # 它的 tag 也会与测试覆盖层的内联定义撞车。
 sync-sandbox:
     {{lima_shell}} rm -rf /work/sing-box
-    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/tools
-    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/conf.d/10-public.json /work/sing-box/public.json
+    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/conf.d /work/sing-box/rules
+    {{lima_shell}} cp -r {{repo_in_guest}}/config/rules/generated/singbox/. /work/sing-box/rules/
+    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/tests/overlay.json /work/sing-box/conf.d/00-local.json
+    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/tests/base.json /work/sing-box/conf.d/10-rules.json
+    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/tests/base.json /work/sing-box/public.json
     {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/template.json /work/sing-box/template.json
     {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
-    # 装配走仓库里真实的端点核心，沙箱测试不另抄一份装配规则。
-    {{lima_shell}} cp {{repo_in_guest}}/scripts/endpoint.mjs {{repo_in_guest}}/scripts/singbox_rules.py /work/sing-box/tools/
-    {{lima_shell}} cp {{repo_in_guest}}/config/rules/index.txt {{repo_in_guest}}/config/rules/policy-order.txt /work/sing-box/tools/
-
 # 在沙箱内运行全部网络行为测试
 test-sandbox: sync-sandbox
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests
@@ -72,7 +71,7 @@ test-sandbox-layer name: sync-sandbox
 # 在沙箱内校验配置（公开层 + 测试覆盖层）。
 # 覆盖层用同一批 tag 指向本地夹具、注入最小内联规则集，因此沙箱里不放真实拓扑与生成产物。
 check-sandbox: sync-sandbox
-    {{lima_shell}} /opt/proxy-test/bin/sing-box check -c /work/sing-box/public.json -c /work/sing-box/tests/overlay.json
+    {{lima_shell}} /opt/proxy-test/bin/sing-box check -C /work/sing-box/conf.d
 
 # --- 规则生成与校验（跑在宿主机，需要联网拉第三方列表） ---
 # 生成全部客户端的规则产物
@@ -100,15 +99,20 @@ sublink-down:
     @docker stop proxy-sublink >/dev/null 2>&1 || true
 
 # 本地等价验证单 URL 契约：解析后端取节点 → 底模装配 → sing-box check，全程零上传
-# 用法：just verify-endpoint /tmp/secret.txt [/tmp/singbox.json]
-#      just verify-endpoint 'https://<机场订阅>'
-# 需要 --node / --dns / --zone 时直接调脚本（just 不转发额外参数）：
-#      bun run scripts/endpoint.mjs /tmp/secret.txt /tmp/singbox.json --node 'vless://...' --dns 192.168.6.1 --zone ooooo.space
-verify-endpoint source output="/tmp/singbox.json":
+# 用法：just verify-endpoint [订阅URL或文件] [/tmp/singbox.json]
+verify-endpoint source="" output="/tmp/singbox.json":
     @bun run scripts/endpoint.mjs {{source}} {{output}}
 
 # 本地点起端点（单 URL 契约）：
-#   just serve                     → http://127.0.0.1:8080/darwin?sub=…&node=…&dns=…&zone=…
+#   just serve                     → http://127.0.0.1:8080/darwin?sub=…&node=…
 #   just serve 8080 192.168.5.2    → 绑到沙箱 VM 能访问的地址，让 VM 当"设备"直接取配置
 serve port="8080" host="127.0.0.1":
     @bun run scripts/endpoint.mjs --serve --port {{port}} --host {{host}}
+
+
+# 在沙箱中全链路追踪指定域名的分流与真实出口节点
+# 用法: just trace google.com
+#       just trace api.openai.com
+#       just trace foo.ooooo.space
+trace domain="google.com":
+    @bun run scripts/trace-route.mjs {{domain}}

@@ -25,7 +25,7 @@ let b;
 beforeAll(async () => {
   a = await startDnsFixture(FX_A);
   b = await startDnsFixture(FX_B);
-  sb = startSandbox({ publicConfig: PUBLIC, overlay: OVERLAY });
+  sb = startSandbox();
   await sb.waitFor("sing-box started", 20_000);
 });
 
