@@ -5,6 +5,7 @@ mod detect;
 mod doctor;
 mod node;
 mod paths;
+mod profile;
 mod store;
 mod template;
 
@@ -38,6 +39,7 @@ fn main() {
             Ok(())
         }
         Some("check") => cmd_check(),
+        Some("profile") => profile::run(rest.first().map(String::as_str)),
         Some("doctor") => {
             doctor::run();
             Ok(())
@@ -70,6 +72,7 @@ fn usage() -> String {
         "  sb-sync doctor                网络分层自检（DNS/直连/代理逐层计时）",
         "  sb-sync output                打印产物路径",
         "  sb-sync version               打印版本号",
+        "  sb-sync profile [文件]        查看 SFM profiles 与产物同源性（可选校验指定 profile）",
     ]
     .join("\n")
 }

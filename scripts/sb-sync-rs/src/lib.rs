@@ -8,6 +8,7 @@ pub mod detect;
 pub mod doctor;
 pub mod node;
 pub mod paths;
+pub mod profile;
 pub mod store;
 pub mod template;
 
