@@ -30,6 +30,14 @@ jobs:
             scripts/sb-sync-rs/target
           key: sb-sync-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
 
+      - name: Sync version with tag
+        working-directory: scripts/sb-sync-rs
+        run: |
+          # 单一事实来源 = git tag；构建前把 tag 写入 Cargo.toml，避免二进制版本与发布版本漂移
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          rm Cargo.toml.bak
+
       - name: Test
         working-directory: scripts/sb-sync-rs
         run: cargo test --release
