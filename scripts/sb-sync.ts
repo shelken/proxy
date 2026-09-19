@@ -112,12 +112,19 @@ function writeOutputAtomic(finalPath: string, content: string, validate: (path: 
 // 底模：内嵌 → 缓存 → 远程，三级来源
 // ---------------------------------------------------------------------------
 
-/** 拉取远程底模原文；失败返回 null（由调用方决定回退层级）。 */
+/** 拉取远程底模原文；失败返回 null（由调用方决定回退层级）。
+ * 用 curl 子进程而非 Bun fetch：Bun 内置 DNS/连接复用会固定到持有旧缓存的
+ * Fastly 边缘节点（raw.githubusercontent 的 CDN 对 URL 长缓存），系统栈
+ * (getaddrinfo) 则随 DNS 轮询拿到新节点。curl 走系统栈，保证底模更新即时可见。 */
 async function fetchRemoteTemplate(): Promise<string | null> {
   try {
-    const res = await fetch(TEMPLATE_REMOTE_URL, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
-    const text = await res.text();
+    const p = Bun.spawnSync([
+      "curl", "-fsSL", "--max-time", "10",
+      "-H", "cache-control: no-cache",
+      TEMPLATE_REMOTE_URL,
+    ]);
+    if (p.exitCode !== 0) return null;
+    const text = p.stdout.toString();
     JSON.parse(text); // 语法门禁：坏内容视同失败
     return text;
   } catch {
