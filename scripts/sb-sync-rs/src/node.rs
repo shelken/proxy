@@ -25,7 +25,7 @@ fn tag_from_hash(url: &url::Url, default: &str) -> String {
 /// hysteria2:// 或 hy2:// → sing-box hysteria2 出站。
 pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
     let u = parse_url(raw)?;
-    let tag = tag_from_hash(&u, "SelfHost");
+    let tag = tag_from_hash(&u, "selfhost");
     let auth = percent_decode(if !u.username().is_empty() {
         u.username()
     } else {
