@@ -357,6 +357,99 @@ function cmdCheck(): void {
 }
 
 // ---------------------------------------------------------------------------
+// doctor：端到端网络自检（定位"慢在哪一层"）
+// ---------------------------------------------------------------------------
+
+interface ProbeResult {
+  name: string;
+  ok: boolean;
+  detail: string;
+  ms: number;
+}
+
+/** DNS 探测：用随机子域绕过一切缓存，测"系统解析器→内核"整条链。 */
+function probeDnsRandom(): ProbeResult {
+  // 专用于自检的保留域：dig NS 只要有权威应答即算通，NXDOMAIN 也算通(说明解析链活)
+  // 用 random.example.com 的 NS 不行——NXDOMAIN 会走同样路径但无法区分黑洞与正常;
+  // 改用 dns.google / 1.1.1.1 可查的稳定域名 + 随机前缀无意义,故直接查固定域 NS:
+  const start = Date.now();
+  const p = Bun.spawnSync(["dig", "+short", "+time=2", "+tries=1", "NS", "example.com"]);
+  const ms = Date.now() - start;
+  const out = p.stdout.toString().trim();
+  const ok = p.exitCode === 0 && out.length > 0;
+  return {
+    name: "DNS 解析链 (系统解析器→内核)",
+    ok,
+    detail: ok ? out.split("\n")[0] : "超时/无应答 — 解析路径黑洞(参照 001-tun-exclude-dns-blackhole)",
+    ms,
+  };
+}
+
+/** 站点探测：DNS+TCP+TLS+首字节分层计时。 */
+async function probeSite(name: string, url: string, timeoutMs = 8000): Promise<ProbeResult> {
+  const start = Date.now();
+  try {
+    const res = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { name, ok: res.status < 500, detail: `HTTP ${res.status}`, ms: Date.now() - start };
+  } catch (e) {
+    return { name, ok: false, detail: `失败: ${(e as Error).message}`, ms: Date.now() - start };
+  }
+}
+
+async function cmdDoctor(): Promise<void> {
+  console.log("=== sb-sync doctor — 网络分层自检 ===\n");
+
+  // 第一层: 配置(离线,复用 check)
+  const output = resolve(loadStore().output ?? OUTPUT_PATH);
+  if (!existsSync(output)) {
+    console.log("⚠ 产物不存在 — 先 sb-sync sync。仅做 DNS 层自检:\n");
+  } else {
+    const cfg = JSON.parse(readFileSync(output, "utf-8")) as SingBoxTemplate;
+    const check = Bun.spawnSync([findSingBox(), "check", "-c", output]);
+    console.log(`[配置] sing-box check: ${check.exitCode === 0 ? "✓ 通过" : "✗ " + check.stderr.toString().trim()}`);
+    const sysDns = Bun.spawnSync(["scutil", "--dns"]);
+    const m = sysDns.stdout.toString().match(/nameserver\[0\]\s*:\s*(\S+)/);
+    if (m?.[1]) {
+      const addr = m[1];
+      const tun = (cfg.inbounds as Array<{ type: string; address?: string[] }>)?.find((i) => i.type === "tun");
+      const excluded = ((cfg.inbounds[0] as { route_exclude_address?: string[] }).route_exclude_address ?? []) as string[];
+      const inExclude = excluded.some((cidr) => {
+        const [net, bits] = cidr.split("/");
+        const probe = addr.split(".").map(Number);
+        const mask = -(1 << (32 - Number(bits))) >>> 0;
+        const base = net.split(".").map(Number);
+        const ip = (probe[0] << 24 | probe[1] << 16 | probe[2] << 8 | probe[3]) >>> 0;
+        const n = (base[0] << 24 | base[1] << 16 | base[2] << 8 | base[3]) >>> 0;
+        return (ip & mask) === (n & mask);
+      });
+      console.log(`[配置] 系统解析器 ${addr}${inExclude ? "  ✗ 落在 route_exclude_address 内 (001 号尸检同款黑洞!)" : "  ✓ 不在排除段"}`);
+    }
+    console.log();
+  }
+
+  // 第二层: DNS 解析链(随机性不需要,关键是走系统栈且应答快)
+  const results: ProbeResult[] = [];
+  results.push(probeDnsRandom());
+
+  // 第三层: 站点探测 — direct 与 proxy 各一,分层定位
+  results.push(await probeSite("直连站点 (baidu.com)", "https://www.baidu.com/"));
+  results.push(await probeSite("代理站点 (google.com)", "https://www.google.com/generate_204"));
+  results.push(await probeSite("图片 CDN (pbs.twimg.com)", "https://pbs.twimg.com/favicon.ico"));
+
+  for (const r of results) {
+    console.log(`${r.ok ? "✓" : "✗"} ${r.name}  —  ${r.detail}  (${r.ms}ms)${r.ms > 3000 ? "  ⚠ 超过 3s" : ""}`);
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\n结论: ${failed.length === 0 ? "全部正常" : `${failed.length} 项失败`}${results.some((r) => r.ms > 3000) ? " | 注意: 存在 3s+ 慢项" : ""}`);
+  if (failed.length > 0) process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
 // 入口
 // ---------------------------------------------------------------------------
 
@@ -400,6 +493,9 @@ async function main(): Promise<void> {
     case "check":
       cmdCheck();
       break;
+    case "doctor":
+      await cmdDoctor();
+      break;
     default:
       console.error(
         [
@@ -415,6 +511,7 @@ async function main(): Promise<void> {
           "  sb-sync template update|reset 手动刷新/重置远程底模",
           "  sb-sync sync                  拉订阅+自动更新底模+原子产出",
           "  sb-sync check                 验证本地产物（零网络）",
+          "  sb-sync doctor                网络分层自检（DNS/直连/代理逐层计时）",
           "  sb-sync output                打印产物路径",
         ].join("\n"),
       );
