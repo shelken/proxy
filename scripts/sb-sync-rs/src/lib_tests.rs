@@ -8,7 +8,7 @@ mod tests {
     use crate::template::embedded_template;
     use serde_json::{json, Value};
 
-    const HY2_URI: &str = "hy2://pass@192.0.2.1:8388?sni=example.com#SelfHost";
+    const HY2_URI: &str = "hy2://pass@192.0.2.1:8388?sni=example.com#selfhost";
     const ANYTLS_URI: &str = "anytls://pass2@192.0.2.2:8443?sni=cdn.example.net#AnyNode";
 
     /// 模拟机场订阅响应体：base64(URI 列表)，两行 ss URI（SIP002）。
@@ -52,7 +52,7 @@ mod tests {
     fn hy2_uri_parses_to_hysteria2() {
         let parsed = parse_node_uri(HY2_URI).unwrap();
         assert_eq!(parsed["type"], "hysteria2");
-        assert_eq!(parsed["tag"], "SelfHost");
+        assert_eq!(parsed["tag"], "selfhost");
         assert_eq!(parsed["server"], "192.0.2.1");
         assert_eq!(parsed["password"], "pass");
     }
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn nine_groups_populated_correctly() {
+    fn ten_groups_populated_correctly() {
         let config = assemble(&format!("{HY2_URI}|https://airport.example/sub"));
         let selectors: Vec<&str> = config["outbounds"]
             .as_array()
@@ -124,7 +124,7 @@ mod tests {
             .filter(|o| o["type"] == "selector")
             .filter_map(|o| o["tag"].as_str())
             .collect();
-        // 底模声明 9 个 selector 组，顺序与底模一致
+        // 底模声明 10 个 selector 组，顺序与底模一致
         let tpl = embedded_template();
         let tpl_selectors: Vec<&str> = tpl["outbounds"]
             .as_array()
@@ -141,15 +141,15 @@ mod tests {
             .iter()
             .find(|o| o["type"] == "selector" && o["tag"] == "proxy")
             .unwrap();
-        assert_eq!(proxy["outbounds"], json!(["SelfHost", "SelfHost-node", "HK-01", "JP-01"]));
-        assert_eq!(proxy["default"], "SelfHost");
+        assert_eq!(proxy["outbounds"], json!(["selfhost", "selfhost-node", "HK-01", "JP-01"]));
+        assert_eq!(proxy["default"], "selfhost");
     }
 
     #[test]
     fn private_nodes_first_airport_appended_in_order() {
         let config = assemble(&format!("https://airport.example/sub|{HY2_URI}|{ANYTLS_URI}"));
-        // "SelfHost" 现为 urltest 组的保留 tag，同名节点自动改名
-        assert_eq!(node_tags_of(&config), vec!["SelfHost-node", "AnyNode", "HK-01", "JP-01"]);
+        // "selfhost" 现为 urltest 组的保留 tag，同名节点自动改名
+        assert_eq!(node_tags_of(&config), vec!["selfhost-node", "AnyNode", "HK-01", "JP-01"]);
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
         let tags = node_tags_of(&config);
         let set: std::collections::HashSet<&String> = tags.iter().collect();
         assert_eq!(set.len(), tags.len());
-        assert_eq!(tags[0], "SelfHost-node");
+        assert_eq!(tags[0], "selfhost-node");
     }
 
     #[test]
@@ -166,19 +166,19 @@ mod tests {
         let config = assemble(&format!("{HY2_URI}|https://airport.example/sub"));
         let groups = config["outbounds"].as_array().unwrap();
 
-        // urltest 组存在，候选由 (?i)(vps|hy2|SelfHost) 展开（命中同名私有节点）
+        // urltest 组存在，候选由 (?i)(vps|hy2|selfhost) 展开（命中同名私有节点）
         let urltest = groups
             .iter()
-            .find(|o| o["type"] == "urltest" && o["tag"] == "SelfHost")
-            .expect("SelfHost urltest 组缺失");
-        assert_eq!(urltest["outbounds"], json!(["SelfHost-node"]));
+            .find(|o| o["type"] == "urltest" && o["tag"] == "selfhost")
+            .expect("selfhost urltest 组缺失");
+        assert_eq!(urltest["outbounds"], json!(["selfhost-node"]));
 
-        // proxy 组的 "SelfHost" 占位解析为组引用而非被丢弃
+        // proxy 组的 "selfhost" 占位解析为组引用而非被丢弃
         let proxy = groups
             .iter()
             .find(|o| o["type"] == "selector" && o["tag"] == "proxy")
             .unwrap();
-        assert_eq!(proxy["outbounds"][0], "SelfHost");
+        assert_eq!(proxy["outbounds"][0], "selfhost");
     }
 
     #[test]

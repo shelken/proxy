@@ -44,7 +44,7 @@ sb-sync sync 检测到 SFM 面板在线时会打印重载提示。
 ## 面板与节点切换
 
 - 菜单栏图标 → `Open Dashboard`（或浏览器访问 `http://127.0.0.1:9090/ui`）打开 Web 面板
-- `Proxies` 页：9 大策略组，点击组内节点即切换出口；`openai` 组等专用组独立切换
+- `Proxies` 页：10 大策略组，点击组内节点即切换出口；`openai` 组等专用组独立切换
 - `Connections` 页：实时连接与命中规则排查
 
 ## Remote Profile（可选，多设备场景）

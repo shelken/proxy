@@ -101,7 +101,7 @@ export function getPolicyGroups(): string[] {
 
 export function parseHysteria2(raw: string): OutboundNode {
   const u = new URL(raw);
-  const tag = decodeURIComponent(u.hash ? u.hash.slice(1) : "SelfHost");
+  const tag = decodeURIComponent(u.hash ? u.hash.slice(1) : "selfhost");
   const auth = decodeURIComponent(u.username || u.password || "");
   const port = u.port ? parseInt(u.port, 10) : 443;
   const sni = u.searchParams.get("sni") || u.hostname;

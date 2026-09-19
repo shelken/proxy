@@ -34,3 +34,4 @@ Telegram|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/re
 TikTok|proxy|https://raw.githubusercontent.com/Semporia/TikTok-Unlock/master/Loon/TikTok.list
 Twitter|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/63bc79ab90647613b9f2df80389caf133e4b6214/rule/Loon/Twitter/Twitter.list
 YouTube|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/YouTube/YouTube.list
+zai|zai|config/rules/custom/zai.list

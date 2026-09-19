@@ -20,7 +20,7 @@ const TEMPLATE = JSON.parse(
 /** 期望的策略组顺序：主分组在前，其余分流分组随后。 */
 const GROUP_TAGS = ["proxy", ...getPolicyGroups()];
 
-const HY2_URI = "hy2://pass@192.0.2.1:8388?sni=example.com#SelfHost";
+const HY2_URI = "hy2://pass@192.0.2.1:8388?sni=example.com#selfhost";
 const ANYTLS_URI = "anytls://pass2@192.0.2.2:8443?sni=cdn.example.net#AnyNode";
 /** 模拟机场订阅响应体：base64(URI 列表)，两行 ss URI（SIP002）。 */
 const AIRPORT_BODY = Buffer.from(
@@ -52,7 +52,7 @@ describe("parseNodeUri / parseSubscriptionBody", () => {
   test("hy2 URI 解析出 hysteria2 出站", () => {
     const parsed = parseNodeUri(HY2_URI);
     expect(parsed.type).toBe("hysteria2");
-    expect(parsed.tag).toBe("SelfHost");
+    expect(parsed.tag).toBe("selfhost");
     expect(parsed.server).toBe("192.0.2.1");
     expect(parsed.password).toBe("pass");
   });
@@ -100,29 +100,29 @@ describe("parseNodeUri / parseSubscriptionBody", () => {
 });
 
 describe("buildConfig", () => {
-  test("九个策略组齐全，且候选池正确展开", async () => {
+  test("十个策略组齐全，且候选池正确展开", async () => {
     const config = await assemble(`${HY2_URI}|https://airport.example/sub`);
     const outbounds = config.outbounds ?? [];
 
-    // SelfHost urltest 组存在且排在主分组前（底模顺序）
-    const selfhost = outbounds.find((o) => o.type === "urltest" && o.tag === "SelfHost");
-    expect(selfhost?.outbounds).toEqual(["SelfHost-node"]);
+    // selfhost urltest 组存在且排在主分组前（底模顺序）
+    const selfhost = outbounds.find((o) => o.type === "urltest" && o.tag === "selfhost");
+    expect(selfhost?.outbounds).toEqual(["selfhost-node"]);
 
     const selectors = outbounds.filter((o) => o.type === "selector");
     expect(selectors.map((s) => s.tag)).toEqual(GROUP_TAGS);
 
     const proxy = selectors.find((s) => s.tag === "proxy")!;
-    // "SelfHost" 为 urltest 组引用；同名节点让位为 SelfHost-node 由 .* 展开
-    expect(proxy.outbounds).toEqual(["SelfHost", "SelfHost-node", "HK-01", "JP-01"]);
-    expect(proxy.default).toBe("SelfHost");
+    // "selfhost" 为 urltest 组引用；同名节点让位为 selfhost-node 由 .* 展开
+    expect(proxy.outbounds).toEqual(["selfhost", "selfhost-node", "HK-01", "JP-01"]);
+    expect(proxy.default).toBe("selfhost");
   });
 
   test("节点顺序：私有 URI 保序在前，机场节点按订阅原序追加", async () => {
     const config = await assemble(
       `https://airport.example/sub|${HY2_URI}|${ANYTLS_URI}`,
     );
-    // "SelfHost" 现为 urltest 组的保留 tag，同名节点自动改名
-    expect(nodeTagsOf(config)).toEqual(["SelfHost-node", "AnyNode", "HK-01", "JP-01"]);
+    // "selfhost" 现为 urltest 组的保留 tag，同名节点自动改名
+    expect(nodeTagsOf(config)).toEqual(["selfhost-node", "AnyNode", "HK-01", "JP-01"]);
   });
 
   test("多源混合与重复名让位，产物内标签唯一", async () => {
@@ -131,8 +131,8 @@ describe("buildConfig", () => {
     );
     const tags = nodeTagsOf(config);
     expect(new Set(tags).size).toBe(tags.length);
-    // "SelfHost" 为 urltest 组保留 tag，同名节点让位
-    expect(tags[0]).toBe("SelfHost-node");
+    // "selfhost" 为 urltest 组保留 tag，同名节点让位
+    expect(tags[0]).toBe("selfhost-node");
   });
 
   test("保留标签表与底模的契约一致", () => {

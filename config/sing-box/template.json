@@ -115,6 +115,13 @@
       },
       {
         "rule_set": [
+          "zai"
+        ],
+        "action": "route",
+        "outbound": "zai"
+      },
+      {
+        "rule_set": [
           "dev"
         ],
         "action": "route",
@@ -358,6 +365,13 @@
       },
       {
         "type": "remote",
+        "tag": "zai",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/zai.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
         "tag": "ChinaMax-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
@@ -378,9 +392,9 @@
     },
     {
       "type": "urltest",
-      "tag": "SelfHost",
+      "tag": "selfhost",
       "outbounds": [
-        "(?i)(vps|hy2|SelfHost)"
+        "(?i)(vps|hy2|selfhost)"
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "2m0s",
@@ -390,27 +404,27 @@
       "type": "selector",
       "tag": "proxy",
       "outbounds": [
-        "SelfHost",
+        "selfhost",
         ".*"
       ],
-      "default": "SelfHost"
+      "default": "selfhost"
     },
     {
       "type": "selector",
       "tag": "openai",
       "outbounds": [
-        "SelfHost",
+        "selfhost",
         "proxy",
         "(?i)(港|日本|台湾|GPT|美)"
       ],
-      "default": "SelfHost"
+      "default": "selfhost"
     },
     {
       "type": "selector",
       "tag": "gemini",
       "outbounds": [
         "openai",
-        "SelfHost",
+        "selfhost",
         "proxy",
         "(?i)(日本|川日|东京|大阪|JP|Japan)"
       ],
@@ -420,29 +434,29 @@
       "type": "selector",
       "tag": "dev",
       "outbounds": [
-        "SelfHost",
+        "selfhost",
         "proxy",
         "(?i)(港|HK|Hong)"
       ],
-      "default": "SelfHost"
+      "default": "selfhost"
     },
     {
       "type": "selector",
       "tag": "adultnsfw",
       "outbounds": [
-        "SelfHost",
+        "selfhost",
         "proxy",
         "direct",
         "(?i)(vps|hys|港)"
       ],
-      "default": "SelfHost"
+      "default": "selfhost"
     },
     {
       "type": "selector",
       "tag": "appleai",
       "outbounds": [
         "direct",
-        "SelfHost",
+        "selfhost",
         "proxy"
       ],
       "default": "direct"
@@ -451,19 +465,19 @@
       "type": "selector",
       "tag": "ptcg",
       "outbounds": [
-        "SelfHost",
+        "selfhost",
         "proxy",
         "direct",
         "(?i)(日本|JP)"
       ],
-      "default": "SelfHost"
+      "default": "selfhost"
     },
     {
       "type": "selector",
       "tag": "japansite",
       "outbounds": [
         "proxy",
-        "SelfHost",
+        "selfhost",
         "(?i)(日本|川日|东京|大阪|JP|Japan)"
       ],
       "default": "proxy"
@@ -473,7 +487,17 @@
       "tag": "opencode",
       "outbounds": [
         "proxy",
-        "SelfHost",
+        "selfhost",
+        ".*"
+      ],
+      "default": "proxy"
+    },
+    {
+      "type": "selector",
+      "tag": "zai",
+      "outbounds": [
+        "proxy",
+        "selfhost",
         ".*"
       ],
       "default": "proxy"
