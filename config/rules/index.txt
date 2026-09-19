@@ -35,3 +35,7 @@ TikTok|proxy|https://raw.githubusercontent.com/Semporia/TikTok-Unlock/master/Loo
 Twitter|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/63bc79ab90647613b9f2df80389caf133e4b6214/rule/Loon/Twitter/Twitter.list
 YouTube|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/YouTube/YouTube.list
 zai|zai|config/rules/custom/zai.list
+Microsoft|microsoft|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Microsoft/Microsoft.list
+PayPal|paypal|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/PayPal/PayPal.list
+grok|grok|config/rules/custom/grok.list
+1024|1024|config/rules/custom/1024.list

@@ -1,0 +1,4 @@
+# Grok (xAI) —— 来源：Loon 生产配置 grok 组
+DOMAIN,cli-chat-proxy.grok.com
+DOMAIN,accounts.x.ai
+DOMAIN,api.x.ai
