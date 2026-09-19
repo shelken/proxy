@@ -43,7 +43,7 @@ function nodeTagsOf(config) {
 }
 
 describe("buildConfig", () => {
-  test("九个策略组齐全，主分组以首个节点为默认，其余跟随主分组", async () => {
+  test("九个策略组齐全，且候选池正确展开", async () => {
     const config = await assemble([node("hk-01"), node("jp-02")]);
     const selectors = config.outbounds.filter((item) => item.type === "selector");
 
@@ -53,10 +53,9 @@ describe("buildConfig", () => {
     expect(main.outbounds).toEqual(["hk-01", "jp-02"]);
     expect(main.default).toBe("hk-01");
 
-    for (const group of selectors.filter((item) => item.tag !== "proxy")) {
-      expect(group.default).toBe("proxy");
-      expect(group.outbounds).toEqual(["proxy", "hk-01", "jp-02"]);
-    }
+    const appleai = selectors.find((item) => item.tag === "appleai");
+    expect(appleai.default).toBe("direct");
+    expect(appleai.outbounds).toEqual(["direct", "proxy"]);
   });
 
   test("节点顺序与输入一致，且 direct 只出现一次", async () => {
@@ -148,6 +147,38 @@ describe("buildConfig", () => {
       [{ domain_suffix: ["ooooo.space"] }],
     );
   });
+  test("私有自建节点严格排在 Index 0，机场节点保持物理顺序追加", async () => {
+    const config = await buildConfig(
+      {
+        nodes: [
+          "hysteria2://password@example.com:443?sni=sni.example.com#SelfHost",
+        ],
+        sub: "https://example.test/sub",
+      },
+      {
+        parse: async () => [node("US-Airport"), node("HK-Airport")],
+        template: TEMPLATE,
+      },
+    );
+
+    const tags = nodeTagsOf(config);
+    expect(tags).toEqual(["SelfHost", "US-Airport", "HK-Airport"]);
+
+    const main = config.outbounds.find((item) => item.tag === "proxy");
+    expect(main.outbounds).toEqual(["SelfHost", "US-Airport", "HK-Airport"]);
+    expect(main.default).toBe("SelfHost");
+
+    const openai = config.outbounds.find((item) => item.tag === "openai");
+    expect(openai.default).toBe("SelfHost");
+    expect(openai.outbounds[0]).toBe("SelfHost");
+
+    const gemini = config.outbounds.find((item) => item.tag === "gemini");
+    expect(gemini.default).toBe("openai");
+
+    const appleai = config.outbounds.find((item) => item.tag === "appleai");
+    expect(appleai.default).toBe("direct");
+  });
+
 });
 
 describe("serveEndpoint", () => {

@@ -32,23 +32,51 @@ export const NON_NODE_TYPES = new Set([
 ]);
 
 /** 底模 route.rules 引用的出站标签，节点名撞上时必须让位。 */
-export const RESERVED_TAGS = [
-  "direct",
-  "proxy",
-  "openai",
-  "gemini",
-  "appleai",
-  "dev",
-  "ptcg",
-  "adultnsfw",
-  "japansite",
-  "opencode",
-];
+export const RESERVED_TAGS = (loadTemplate().outbounds ?? []).map((o) => o.tag);
 
 /** 主分组之外的分流分组：默认跟随主分组，成员里排上全部节点。 */
 export const POLICY_GROUPS = RESERVED_TAGS.filter(
   (tag) => tag !== "direct" && tag !== "proxy",
 );
+export function parseHysteria2(raw) {
+  const u = new URL(raw);
+  const tag = decodeURIComponent(u.hash ? u.hash.slice(1) : "SelfHost");
+  const auth = decodeURIComponent(u.username || u.password || "");
+  const port = u.port ? parseInt(u.port, 10) : 443;
+  const sni = u.searchParams.get("sni") || u.hostname;
+  const insecure = u.searchParams.get("insecure") === "1";
+  const obfsType = u.searchParams.get("obfs");
+  const obfsPassword = u.searchParams.get("obfs-password");
+
+  const outbound = {
+    type: "hysteria2",
+    tag,
+    server: u.hostname,
+    server_port: port,
+    password: auth,
+    tls: {
+      enabled: true,
+      server_name: sni,
+      insecure,
+    },
+  };
+  if (obfsType) {
+    outbound.obfs = {
+      type: obfsType,
+      password: obfsPassword || "",
+    };
+  }
+  return outbound;
+}
+
+export function parseNodeUri(uri) {
+  if (typeof uri !== "string") return uri;
+  const trimmed = uri.trim();
+  if (trimmed.startsWith("hysteria2://") || trimmed.startsWith("hy2://")) {
+    return parseHysteria2(trimmed);
+  }
+  return null;
+}
 
 export function findSingBox() {
   if (process.env.SING_BOX) return process.env.SING_BOX;
@@ -161,9 +189,46 @@ function assignTags(nodes) {
 export async function buildConfig(input, deps = {}) {
   const parse = deps.parse ?? parseViaSublink;
   const template = structuredClone(deps.template ?? loadTemplate());
-  const { source, dns, zone } = input;
+  const { source, sub, nodes: rawNodes = [], dns, zone } = input;
 
-  const nodes = await parse(source);
+  const privateNodes = [];
+  const airportNodes = [];
+
+  // 1. 私有节点严格处理（严格保留顺序并固定在实体节点首部，默认作为首选）
+  for (const n of rawNodes) {
+    if (typeof n === "object" && n !== null) {
+      privateNodes.push(n);
+    } else if (typeof n === "string") {
+      const parsed = parseNodeUri(n);
+      if (parsed) {
+        privateNodes.push(parsed);
+      } else {
+        const parsedList = await parse(n);
+        privateNodes.push(...parsedList);
+      }
+    }
+  }
+
+  // 2. 订阅节点处理（严格保留物理先后顺序追加）
+  if (sub) {
+    airportNodes.push(...(await parse(sub)));
+  } else if (source) {
+    const lines = source.split("\n").map((l) => l.trim()).filter(Boolean);
+    const subLines = [];
+    for (const line of lines) {
+      const parsed = parseNodeUri(line);
+      if (parsed) {
+        privateNodes.push(parsed);
+      } else {
+        subLines.push(line);
+      }
+    }
+    if (subLines.length > 0) {
+      airportNodes.push(...(await parse(subLines.join("\n"))));
+    }
+  }
+
+  const nodes = [...privateNodes, ...airportNodes];
   if (nodes.length === 0) {
     throw new Error("未解析出任何节点：请检查订阅内容或节点链接");
   }
@@ -190,23 +255,45 @@ export async function buildConfig(input, deps = {}) {
     zoneSet.rules = [{ domain_suffix: [zone] }];
   }
 
+  const declaredSelectors = (template.outbounds ?? []).filter(
+    (o) => o.type === "selector",
+  );
+  const selectorTagSet = new Set(declaredSelectors.map((s) => s.tag));
+
+  const populatedSelectors = declaredSelectors.map((sel) => {
+    const expanded = [];
+    for (const item of (sel.outbounds ?? [])) {
+      if (item === "direct" || selectorTagSet.has(item) || tags.includes(item)) {
+        expanded.push(item);
+      } else {
+        try {
+          let pat = item;
+          let flags = "";
+          if (pat.startsWith("(?i)")) {
+            pat = pat.slice(4);
+            flags = "i";
+          }
+          const re = new RegExp(pat, flags);
+          const matched = tags.filter((t) => re.test(t));
+          expanded.push(...matched);
+        } catch {}
+      }
+    }
+    const combined = [...new Set(expanded.filter((t) => t !== sel.tag))];
+    return {
+      type: "selector",
+      tag: sel.tag,
+      outbounds: combined,
+      default: combined[0] ?? "direct",
+    };
+  });
+
   return {
     ...template,
     outbounds: [
       { type: "direct", tag: "direct" },
       ...nodes,
-      {
-        type: "selector",
-        tag: "proxy",
-        outbounds: tags,
-        default: tags[0],
-      },
-      ...POLICY_GROUPS.map((tag) => ({
-        type: "selector",
-        tag,
-        outbounds: ["proxy", ...tags],
-        default: "proxy",
-      })),
+      ...populatedSelectors,
     ],
   };
 }
@@ -237,14 +324,12 @@ export async function serveEndpoint({
       }
       const sub = url.searchParams.get("sub");
       if (!sub) return fail(400, "缺少 sub 参数");
-
-      const source = [sub, ...url.searchParams.getAll("node")]
-        .filter((line) => line && line.trim())
-        .join("\n");
+      const nodeLinks = url.searchParams.getAll("node").filter((n) => n && n.trim());
       try {
         const config = await buildConfig(
           {
-            source,
+            sub,
+            nodes: nodeLinks,
             dns: url.searchParams.get("dns") ?? undefined,
             zone: url.searchParams.get("zone") ?? undefined,
           },
@@ -260,32 +345,57 @@ export async function serveEndpoint({
   });
 
   console.log(
-    `端点已监听 http://${hostname}:${server.port}/darwin?sub=…&node=…&dns=…&zone=…`,
+    `端点已监听 http://${hostname}:${server.port}/darwin?sub=…&node=…`,
   );
   return server;
 }
 
-/** GET 只带得动有限长度：超长且不含订阅 URL 时提前报错，不留给后端一个误导性状态码。 */
+function parseEnvContent(content) {
+  const env = {};
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let val = trimmed.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    env[key] = val;
+  }
+  return env;
+}
+
+/** 解析源参数，支持 .env、本地文件或直接的订阅 URL。 */
 function resolveSource(sourceArg, nodeLinks) {
   const filePath = resolve(process.cwd(), sourceArg);
-  const lines = existsSync(filePath)
-    ? readFileSync(filePath, "utf-8")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"))
-    : [sourceArg.trim()];
-  lines.push(...nodeLinks);
-
-  const value = lines.join("\n");
-  const isUrl = lines.some(
-    (line) => line.startsWith("http://") || line.startsWith("https://"),
-  );
-  if (Buffer.byteLength(value, "utf-8") > 6000 && !isUrl) {
-    throw new Error(
-      "订阅内容过长且不含订阅 URL：sublink 的 /singbox 只接受 GET，请改传订阅 URL",
-    );
+  if (existsSync(filePath)) {
+    const content = readFileSync(filePath, "utf-8");
+    if (sourceArg.endsWith(".env") || content.includes("SUB_URL=")) {
+      const env = parseEnvContent(content);
+      const sub = env.SUB_URL;
+      const nodes = [...nodeLinks];
+      if (env.NODE_URI) nodes.unshift(env.NODE_URI);
+      return { sub, nodes };
+    }
+    const lines = content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    lines.push(...nodeLinks);
+    return { source: lines.join("\n"), nodes: [] };
   }
-  return value;
+
+  const isUrl =
+    sourceArg.startsWith("http://") || sourceArg.startsWith("https://");
+  if (isUrl) {
+    return { sub: sourceArg, nodes: nodeLinks };
+  }
+  return { source: [sourceArg, ...nodeLinks].join("\n"), nodes: [] };
 }
 
 function parseArgs(argv) {
@@ -308,9 +418,18 @@ function parseArgs(argv) {
     else if (arg === "--serve") options.serve = true;
     else if (arg === "--port") options.port = Number(argv[++i]);
     else if (arg === "--host") options.host = argv[++i];
-    else positionals.push(arg);
+    else if (arg === "--output" || arg === "-o") options.output = argv[++i];
+    else if (arg.trim()) positionals.push(arg.trim());
   }
-  [options.source, options.output] = positionals;
+  if (positionals.length === 1) {
+    if (positionals[0].endsWith(".json")) {
+      options.output = positionals[0];
+    } else {
+      options.source = positionals[0];
+    }
+  } else if (positionals.length >= 2) {
+    [options.source, options.output] = positionals;
+  }
   return options;
 }
 
@@ -323,22 +442,33 @@ async function main() {
   }
 
   if (!options.source) {
-    console.error(
-      [
-        "用法（本地校验）：just verify-endpoint <订阅URL或文件> [输出路径=/tmp/singbox.json] [--node <节点链接>]... [--dns <内网DNS>] [--zone <内网域名后缀>]",
-        "用法（起端点）：  just serve [端口] [绑定地址]",
-      ].join("\n"),
-    );
-    process.exit(1);
+    if (process.env.SUB_URL) {
+      options.sub = process.env.SUB_URL;
+      if (process.env.NODE_URI) options.nodes.unshift(process.env.NODE_URI);
+    } else if (existsSync(".env")) {
+      options.source = ".env";
+    } else {
+      console.error(
+        [
+          "用法（本地校验）：just verify-endpoint [订阅URL或文件] [输出路径=/tmp/singbox.json] [--node <节点链接>]...",
+          "用法（起端点）：  just serve [端口] [绑定地址]",
+        ].join("\n"),
+      );
+      process.exit(1);
+    }
   }
   const outputPath = resolve(process.cwd(), options.output ?? "/tmp/singbox.json");
-  const source = resolveSource(options.source, options.nodes);
-
-  const config = await buildConfig({ source, dns: options.dns, zone: options.zone });
+  const resolved = options.sub
+    ? { sub: options.sub, nodes: options.nodes }
+    : resolveSource(options.source, options.nodes);
+  const config = await buildConfig({
+    ...resolved,
+    dns: options.dns,
+    zone: options.zone,
+  });
   const nodeCount = config.outbounds.filter(
     (outbound) => !NON_NODE_TYPES.has(outbound.type),
   ).length;
-  console.log(`[sublink] 实体节点 ${nodeCount}`);
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
