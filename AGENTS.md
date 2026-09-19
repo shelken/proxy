@@ -24,6 +24,10 @@
 - 所有网络rule的测试, 必须在沙箱/容器中进行测试; 不准直接修改本地任何实际在用的规则
 - 禁止在本地或容器中执行任何临时`安装包`的操作
 
+## 提醒
+
+- 更新最新template后,注意`raw.githubusercontent.com`至少距离上次更新同文件要有5分钟间隔(缓存)
+
 ## Loon
 
 - mac下的loon配置在`~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf`; 读取时必须过滤掉`[Proxy]`,`[Remote Proxy]`,`[Mitm]` 三个敏感的配置块
