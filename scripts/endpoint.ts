@@ -1,19 +1,20 @@
 #!/usr/bin/env bun
 /**
- * 端点核心：单 URL 契约（`sub` / `node` / `dns` / `zone`）→ 完整 sing-box 配置。
+ * 端点核心：单参数契约（base64 编码的 `|` 分隔源列表）→ 完整 sing-box 配置。
  *
- * 契约来自 Issue #8／#13：零上传、零会话、零留存。底模随仓库提供，协议解析交给
- * sublink-worker 容器，最终装配（底模 + 节点 + 9 个策略组）由本文件完成。
+ * 源列表支持四种形态，任意混合，`|` 分隔，顺序即优先级：
+ *   1. https://…        机场订阅（响应体为 base64 编码的 URI 列表）
+ *   2. hy2:// hysteria2://  Hysteria2 私有节点
+ *   3. anytls://        AnyTLS 私有节点
+ *   4. ss://            Shadowsocks（SIP002 / legacy）
+ *
+ * 零上传、零会话、零留存：订阅抓取与 URI 解析全部本地完成，不依赖任何转换服务。
+ * 无法识别的输入行直接报错（fail-fast），绝不静默丢弃。
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { homedir } from "node:os";
 
-const SUBLINK_IMAGE = "ghcr.io/7sageer/sublink-worker:latest"; // 实测运行时版本 v2.4.2
-const CONTAINER_NAME = "proxy-sublink";
-const SUBLINK_PORT = Number(process.env.SUBLINK_PORT ?? 8787);
-const SUBLINK_URL = `http://127.0.0.1:${SUBLINK_PORT}`;
 const ROOT_DIR = resolve(import.meta.dir, "..");
 const TEMPLATE_PATH = resolve(ROOT_DIR, "config/sing-box/template.json");
 
@@ -55,26 +56,15 @@ export interface SingBoxTemplate {
 }
 
 export interface BuildConfigInput {
-  source?: string;
-  sub?: string;
-  nodes?: Array<string | OutboundNode>;
-  dns?: string;
-  zone?: string;
+  /** `|` 分隔的源列表（未编码原文）：机场订阅 URL / hy2 URI / anytls URI。 */
+  sources?: string;
+  localConfigPath?: string;
 }
-
 export interface BuildDeps {
-  parse?: (source: string) => Promise<OutboundNode[]>;
+  /** 订阅抓取注入点（测试用），默认 fetchRemoteSubscription。 */
+  fetchSubscription?: (url: string) => Promise<string>;
   template?: SingBoxTemplate;
 }
-
-/** 出站里非实体节点的类型：解析后端返回的分组与内置出站，装配时一律丢弃。 */
-export const NON_NODE_TYPES = new Set<string>([
-  "selector",
-  "urltest",
-  "direct",
-  "block",
-  "dns",
-]);
 
 function loadTemplate(): SingBoxTemplate {
   return JSON.parse(readFileSync(TEMPLATE_PATH, "utf-8")) as SingBoxTemplate;
@@ -119,94 +109,169 @@ export function parseHysteria2(raw: string): OutboundNode {
   return outbound;
 }
 
-export function parseNodeUri(uri: unknown): OutboundNode | null {
-  if (typeof uri !== "string") return null;
+/** AnyTLS URI → sing-box 出站（字段语义按官方 anytls.md）。 */
+export function parseAnytls(raw: string): OutboundNode {
+  const u = new URL(raw);
+  const tag = decodeURIComponent(u.hash ? u.hash.slice(1) : "") || `AnyTLS ${u.hostname}:${u.port || 443}`;
+  const password = decodeURIComponent(u.username || u.password || "");
+  if (!password) throw new Error(`anytls URI 缺少密码：${raw}`);
+
+  const tls: Record<string, unknown> = { enabled: true };
+  const sni = u.searchParams.get("sni");
+  if (sni) tls.server_name = sni;
+  const insecure = u.searchParams.get("insecure");
+  if (insecure !== null) tls.insecure = insecure === "1";
+  const alpn = u.searchParams.get("alpn");
+  if (alpn) tls.alpn = alpn.split(",").map((s) => s.trim()).filter(Boolean);
+  const fingerprint = u.searchParams.get("fp");
+  if (fingerprint) tls.utls = { enabled: true, fingerprint };
+
+  const outbound: OutboundNode = {
+    type: "anytls",
+    tag,
+    server: u.hostname,
+    server_port: u.port ? parseInt(u.port, 10) : 443,
+    password,
+    tls,
+  };
+  for (const [src, dst] of [
+    ["idle-session-check-interval", "idle_session_check_interval"],
+    ["idle-session-timeout", "idle_session_timeout"],
+    ["min-idle-session", "min_idle_session"],
+  ] as const) {
+    const value = u.searchParams.get(src);
+    if (value !== null) outbound[dst] = value;
+  }
+  return outbound;
+}
+
+/**
+ * Shadowsocks URI（SIP002 及 legacy base64 整段格式）→ sing-box 出站。
+ * 支持两种形态：
+ *   ss://base64(method:password)@host:port#tag
+ *   ss://base64(method:password@host:port)#tag   （legacy，整段 base64）
+ */
+export function parseShadowsocks(raw: string): OutboundNode {
+  const hashIndex = raw.indexOf("#");
+  const tag = hashIndex >= 0 ? decodeURIComponent(raw.slice(hashIndex + 1)) : "Shadowsocks";
+  let mainPart = hashIndex >= 0 ? raw.slice(0, hashIndex) : raw.slice(5);
+  mainPart = mainPart.slice(5);
+
+  // 去掉 plugin 等查询参数（暂不支持插件字段，保留主字段解析）
+  const queryIndex = mainPart.indexOf("?");
+  if (queryIndex >= 0) mainPart = mainPart.slice(0, queryIndex);
+
+  const decodeB64 = (s: string) =>
+    Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+
+  let method: string;
+  let password: string;
+  let hostPart: string;
+
+  const at = mainPart.lastIndexOf("@");
+  if (at >= 0) {
+    // SIP002：userinfo 是 base64(method:password) 或明文 method:password
+    const userinfo = mainPart.slice(0, at);
+    hostPart = mainPart.slice(at + 1);
+    let decoded = userinfo;
+    try {
+      const probe = decodeB64(userinfo);
+      if (probe.includes(":")) decoded = probe;
+    } catch {}
+    const sep = decoded.indexOf(":");
+    method = decoded.slice(0, sep);
+    password = decoded.slice(sep + 1);
+  } else {
+    // legacy：整段 base64 = method:password@host:port
+    const decoded = decodeB64(mainPart);
+    const at2 = decoded.lastIndexOf("@");
+    if (at2 < 0) throw new Error("无法解析 ss URI：既无 @ 分隔也不是合法 legacy 格式");
+    const cred = decoded.slice(0, at2);
+    hostPart = decoded.slice(at2 + 1);
+    const sep = cred.indexOf(":");
+    method = cred.slice(0, sep);
+    password = cred.slice(sep + 1);
+  }
+
+  let server: string;
+  let serverPort: number;
+  if (hostPart.startsWith("[")) {
+    // IPv6：[::1]:8388
+    const m = hostPart.match(/^\[([^\]]+)\]:(\d+)$/);
+    if (!m) throw new Error(`无法解析 ss 服务器地址：${hostPart}`);
+    server = m[1];
+    serverPort = parseInt(m[2], 10);
+  } else {
+    const sep = hostPart.lastIndexOf(":");
+    if (sep < 0) throw new Error(`无法解析 ss 服务器地址：${hostPart}`);
+    server = hostPart.slice(0, sep);
+    serverPort = parseInt(hostPart.slice(sep + 1), 10);
+  }
+  if (!method || !password || !server || Number.isNaN(serverPort)) {
+    throw new Error("ss URI 字段不完整（method/password/server/port）");
+  }
+
+  return {
+    type: "shadowsocks",
+    tag,
+    server,
+    server_port: serverPort,
+    method,
+    password,
+  };
+}
+
+export function parseNodeUri(uri: string): OutboundNode {
   const trimmed = uri.trim();
   if (trimmed.startsWith("hysteria2://") || trimmed.startsWith("hy2://")) {
     return parseHysteria2(trimmed);
   }
-  return null;
+  if (trimmed.startsWith("anytls://")) {
+    return parseAnytls(trimmed);
+  }
+  if (trimmed.startsWith("ss://")) {
+    return parseShadowsocks(trimmed);
+  }
+  throw new Error(`不支持的节点协议：${trimmed.split("://")[0] || trimmed}（只支持 ss/hysteria2/hy2/anytls）`);
 }
 
 export function findSingBox(): string {
   if (process.env.SING_BOX) return process.env.SING_BOX;
   const which = Bun.which("sing-box");
   if (which) return which;
-  const installDir = `${homedir()}/.local/share/mise/installs/sing-box`;
-  try {
-    const versions = readdirSync(installDir).sort().reverse();
-    for (const version of versions) {
-      const binary = `${installDir}/${version}/sing-box`;
-      if (existsSync(binary)) return binary;
-    }
-  } catch {}
   return "sing-box";
 }
 
-async function isSublinkReady(): Promise<boolean> {
-  try {
-    const res = await fetch(`${SUBLINK_URL}/`, {
-      signal: AbortSignal.timeout(1000),
-    });
-    return res.status < 500;
-  } catch {
-    return false;
-  }
-}
-
-/** 解析后端就绪：复用已在运行的容器，否则按固定镜像拉起并等它就绪。 */
-export async function ensureSublink(): Promise<void> {
-  const running = Bun.spawnSync([
-    "docker",
-    "ps",
-    "-q",
-    "-f",
-    `name=^/${CONTAINER_NAME}$`,
-  ]).stdout.toString().trim();
-
-  if (running && (await isSublinkReady())) return;
-
-  console.log(`[sublink] 启动解析后端 ${SUBLINK_IMAGE}（端口 ${SUBLINK_PORT}）`);
-  Bun.spawnSync(["docker", "rm", "-f", CONTAINER_NAME]);
-  const run = Bun.spawnSync([
-    "docker",
-    "run",
-    "-d",
-    "--name",
-    CONTAINER_NAME,
-    "-p",
-    `${SUBLINK_PORT}:8787`,
-    "--rm",
-    SUBLINK_IMAGE,
-  ]);
-  if (run.exitCode !== 0) {
-    throw new Error(`启动 sublink 容器失败：${run.stderr.toString().trim()}`);
-  }
-  for (let i = 0; i < 20; i++) {
-    await Bun.sleep(500);
-    if (await isSublinkReady()) return;
-  }
-  throw new Error("等待 sublink 容器就绪超时（10s）");
-}
-
-/**
- * 交给解析后端取出实体节点出站。
- */
-export async function parseViaSublink(source: string): Promise<OutboundNode[]> {
-  await ensureSublink();
-  const url = new URL(`${SUBLINK_URL}/singbox`);
-  url.searchParams.set("config", source);
-
-  const res = await fetch(url.toString());
+/** 抓取机场订阅原文（通常为 base64 编码的 URI 列表）。 */
+export async function fetchRemoteSubscription(url: string): Promise<string> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
-    throw new Error(
-      `解析后端返回 HTTP ${res.status}：${(await res.text()).trim()}`,
-    );
+    throw new Error(`订阅返回 HTTP ${res.status}：${url}`);
   }
-  const payload = (await res.json()) as { outbounds?: OutboundNode[] };
-  return (payload.outbounds ?? []).filter(
-    (outbound) => !NON_NODE_TYPES.has(outbound.type),
-  );
+  return res.text();
+}
+
+/** base64 → URI 列表 → 节点数组；任何无法解析的行都带行号报错。 */
+export function parseSubscriptionBody(body: string): OutboundNode[] {
+  let decoded = body.trim();
+  if (!decoded.includes("://")) {
+    try {
+      decoded = Buffer.from(decoded.replace(/\s+/g, ""), "base64").toString("utf-8");
+    } catch {
+      throw new Error("订阅内容 base64 解码失败");
+    }
+  }
+  const lines = decoded.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) {
+    throw new Error("订阅内容为空");
+  }
+  return lines.map((line, i) => {
+    try {
+      return parseNodeUri(line);
+    } catch (e) {
+      throw new Error(`订阅第 ${i + 1} 行解析失败：${(e as Error).message}`);
+    }
+  });
 }
 
 /** 节点标签唯一化：让开保留标签与彼此重名，名字只影响显示。 */
@@ -226,79 +291,91 @@ function assignTags(nodes: OutboundNode[]): void {
 }
 
 /**
- * 单 URL 契约的组装函数：后续 HTTP 外壳直接调用它。
+ * 深度合并本地专有配置 (local.json)
+ * - dns.servers: 覆盖同 tag 服务，或追加新服务
+ * - route.rules: 本地专有规则置顶 (unshift)，确保优先命中
+ * - outbounds: 合并或追加出站
+ */
+export function mergeLocalConfig(
+  template: SingBoxTemplate,
+  local: Record<string, unknown>,
+): void {
+  if (!local || typeof local !== "object") return;
+
+  if (local.dns && typeof local.dns === "object") {
+    const localDns = local.dns as {
+      servers?: Array<{ tag: string; [key: string]: unknown }>;
+      rules?: Array<Record<string, unknown>>;
+    };
+    if (Array.isArray(localDns.servers) && template.dns?.servers) {
+      for (const server of localDns.servers) {
+        if (!server?.tag) continue;
+        const idx = template.dns.servers.findIndex((s) => s.tag === server.tag);
+        if (idx >= 0) {
+          template.dns.servers[idx] = { ...template.dns.servers[idx], ...server };
+        } else {
+          template.dns.servers.unshift(server);
+        }
+      }
+    }
+    if (Array.isArray(localDns.rules) && template.dns?.rules) {
+      template.dns.rules.unshift(...localDns.rules);
+    }
+  }
+
+  if (local.route && typeof local.route === "object") {
+    const localRoute = local.route as {
+      rules?: Array<Record<string, unknown>>;
+    };
+    if (Array.isArray(localRoute.rules) && template.route?.rules) {
+      template.route.rules.unshift(...localRoute.rules);
+    }
+  }
+
+  if (Array.isArray(local.outbounds) && Array.isArray(template.outbounds)) {
+    template.outbounds.push(...local.outbounds);
+  }
+}
+
+/**
+ * 源列表契约的组装函数：后续 HTTP 外壳直接调用它。
  */
 export async function buildConfig(
   input: BuildConfigInput,
   deps: BuildDeps = {},
 ): Promise<SingBoxTemplate> {
-  const parse = deps.parse ?? parseViaSublink;
+  const fetchSubscription = deps.fetchSubscription ?? fetchRemoteSubscription;
   const template = structuredClone(deps.template ?? loadTemplate());
-  const { source, sub, nodes: rawNodes = [], dns, zone } = input;
+  const { sources, localConfigPath } = input;
 
-  const privateNodes: OutboundNode[] = [];
-  const airportNodes: OutboundNode[] = [];
-
-  // 1. 私有节点严格处理（严格保留顺序并固定在实体节点首部，默认作为首选）
-  for (const n of rawNodes) {
-    if (typeof n === "object" && n !== null) {
-      privateNodes.push(n as OutboundNode);
-    } else if (typeof n === "string") {
-      const parsed = parseNodeUri(n);
-      if (parsed) {
-        privateNodes.push(parsed);
-      } else {
-        const parsedList = await parse(n);
-        privateNodes.push(...parsedList);
-      }
+  // 合并本地专有配置（若存在）
+  const localPath = localConfigPath ?? resolve(ROOT_DIR, "config/sing-box/local.json");
+  if (existsSync(localPath)) {
+    try {
+      const localData = JSON.parse(readFileSync(localPath, "utf-8")) as Record<string, unknown>;
+      mergeLocalConfig(template, localData);
+    } catch (e) {
+      console.warn(`[sing-box] 警告: 读取本地专有配置 ${localPath} 失败: ${(e as Error).message}`);
     }
   }
 
-  // 2. 订阅节点处理（严格保留物理先后顺序追加）
-  if (sub) {
-    airportNodes.push(...(await parse(sub)));
-  } else if (source) {
-    const lines = source.split("\n").map((l) => l.trim()).filter(Boolean);
-    const subLines: string[] = [];
-    for (const line of lines) {
-      const parsed = parseNodeUri(line);
-      if (parsed) {
-        privateNodes.push(parsed);
-      } else {
-        subLines.push(line);
-      }
-    }
-    if (subLines.length > 0) {
-      airportNodes.push(...(await parse(subLines.join("\n"))));
+  // 逐源解析：URI 形态=私有节点（保序前插），http(s) 形态=机场订阅（原序追加）
+  const privateNodes: OutboundNode[] = [];
+  const airportNodes: OutboundNode[] = [];
+  for (const source of (sources ?? "").split("|").map((s) => s.trim()).filter(Boolean)) {
+    if (source.startsWith("http://") || source.startsWith("https://")) {
+      airportNodes.push(...parseSubscriptionBody(await fetchSubscription(source)));
+    } else {
+      privateNodes.push(parseNodeUri(source));
     }
   }
 
   const nodes = [...privateNodes, ...airportNodes];
   if (nodes.length === 0) {
-    throw new Error("未解析出任何节点：请检查订阅内容或节点链接");
+    throw new Error("未解析出任何节点：请检查源列表内容");
   }
   assignTags(nodes);
   const tags = nodes.map((node) => node.tag);
-
-  if (dns) {
-    const internal = template.dns?.servers?.find(
-      (server) => server.tag === "dns-internal",
-    );
-    if (!internal) {
-      throw new Error("底模里找不到 dns-internal 上游，无法覆盖内网 DNS");
-    }
-    internal.server = dns;
-  }
-
-  if (zone) {
-    const zoneSet = template.route?.rule_set?.find(
-      (ruleSet) => ruleSet.tag === "zone-internal",
-    );
-    if (!zoneSet) {
-      throw new Error("底模里找不到 zone-internal 规则集，无法覆盖内网域名后缀");
-    }
-    zoneSet.rules = [{ domain_suffix: [zone] }];
-  }
 
   const declaredSelectors = (template.outbounds ?? []).filter(
     (o) => o.type === "selector",
@@ -373,19 +450,15 @@ export async function serveEndpoint({
           `不支持的 target：${target || "(空路径)"}（当前只实现 darwin）`,
         );
       }
-      const sub = url.searchParams.get("sub");
-      if (!sub) return fail(400, "缺少 sub 参数");
-      const nodeLinks = url.searchParams.getAll("node").filter((n) => n && n.trim());
+      // 源列表：优先 s 参数（base64(|分隔原文)），缺省回退服务端 .env
+      const encoded = url.searchParams.get("s");
+      let sources = encoded ? Buffer.from(encoded, "base64").toString("utf-8") : undefined;
+      if (!sources) {
+        sources = resolveEnvSources();
+        if (!sources) return fail(400, "缺少 s 参数，且服务端未配置 .env");
+      }
       try {
-        const config = await buildConfig(
-          {
-            sub,
-            nodes: nodeLinks,
-            dns: url.searchParams.get("dns") ?? undefined,
-            zone: url.searchParams.get("zone") ?? undefined,
-          },
-          deps,
-        );
+        const config = await buildConfig({ sources }, deps);
         return new Response(JSON.stringify(config, null, 2) + "\n", {
           headers: { "content-type": "application/json; charset=utf-8" },
         });
@@ -397,10 +470,25 @@ export async function serveEndpoint({
   });
 
   console.log(
-    `端点已监听 http://${hostname}:${server.port}/darwin?sub=…&node=…`,
+    `端点已监听 http://${hostname}:${server.port}/darwin?s=<base64(源列表)>`,
   );
   return server;
 }
+
+/** 服务端默认源：SUB_URL 与 NODE_URI 环境变量，或仓库 .env 文件。 */
+function resolveEnvSources(): string | undefined {
+  const parts: string[] = [];
+  if (process.env.NODE_URI) parts.push(process.env.NODE_URI);
+  if (process.env.SUB_URL) parts.push(process.env.SUB_URL);
+  if (parts.length > 0) return parts.join("|");
+  const envPath = resolve(ROOT_DIR, ".env");
+  if (!existsSync(envPath)) return undefined;
+  const env = parseEnvContent(readFileSync(envPath, "utf-8"));
+  if (env.NODE_URI) parts.push(env.NODE_URI);
+  if (env.SUB_URL) parts.push(env.SUB_URL);
+  return parts.length > 0 ? parts.join("|") : undefined;
+}
+
 
 function parseEnvContent(content: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -423,46 +511,31 @@ function parseEnvContent(content: string): Record<string, string> {
 }
 
 interface ResolvedSource {
-  sub?: string;
-  source?: string;
-  nodes: string[];
+  sources?: string;
 }
 
-/** 解析源参数，支持 .env、本地文件或直接的订阅 URL。 */
-function resolveSource(sourceArg: string, nodeLinks: string[]): ResolvedSource {
+/** 解析 CLI 源参数：直接源列表 / .env 文件 / 环境变量。 */
+function resolveSource(sourceArg: string): ResolvedSource {
   const filePath = resolve(process.cwd(), sourceArg);
   if (existsSync(filePath)) {
     const content = readFileSync(filePath, "utf-8");
-    if (sourceArg.endsWith(".env") || content.includes("SUB_URL=")) {
+    if (sourceArg.endsWith(".env") || content.includes("SUB_URL=") || content.includes("NODE_URI=")) {
       const env = parseEnvContent(content);
-      const sub = env.SUB_URL;
-      const nodes = [...nodeLinks];
-      if (env.NODE_URI) nodes.unshift(env.NODE_URI);
-      return { sub, nodes };
+      const parts: string[] = [];
+      if (env.NODE_URI) parts.push(env.NODE_URI);
+      if (env.SUB_URL) parts.push(env.SUB_URL);
+      return { sources: parts.join("|") || undefined };
     }
-    const lines = content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"));
-    lines.push(...nodeLinks);
-    return { source: lines.join("\n"), nodes: [] };
+    // 纯文本：每行一个源
+    return { sources: content.split("\n").map((l) => l.trim()).filter(Boolean).join("|") };
   }
-
-  const isUrl =
-    sourceArg.startsWith("http://") || sourceArg.startsWith("https://");
-  if (isUrl) {
-    return { sub: sourceArg, nodes: nodeLinks };
-  }
-  return { source: [sourceArg, ...nodeLinks].join("\n"), nodes: [] };
+  return { sources: sourceArg };
 }
 
 interface ParsedCliOptions {
   source?: string;
   output?: string;
-  sub?: string;
-  dns?: string;
-  zone?: string;
-  nodes: string[];
+  localConfigPath?: string;
   serve: boolean;
   port?: number;
   host?: string;
@@ -472,9 +545,6 @@ function parseArgs(argv: string[]): ParsedCliOptions {
   const options: ParsedCliOptions = {
     source: undefined,
     output: undefined,
-    dns: undefined,
-    zone: undefined,
-    nodes: [],
     serve: false,
     port: undefined,
     host: undefined,
@@ -482,9 +552,7 @@ function parseArgs(argv: string[]): ParsedCliOptions {
   const positionals: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--node") options.nodes.push(argv[++i]);
-    else if (arg === "--dns") options.dns = argv[++i];
-    else if (arg === "--zone") options.zone = argv[++i];
+    if (arg === "--local") options.localConfigPath = argv[++i];
     else if (arg === "--serve") options.serve = true;
     else if (arg === "--port") options.port = Number(argv[++i]);
     else if (arg === "--host") options.host = argv[++i];
@@ -511,30 +579,27 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!options.source) {
-    if (process.env.SUB_URL) {
-      options.sub = process.env.SUB_URL;
-      if (process.env.NODE_URI) options.nodes.unshift(process.env.NODE_URI);
-    } else if (existsSync(".env")) {
-      options.source = ".env";
-    } else {
+  let resolved: ResolvedSource;
+  if (options.source) {
+    resolved = resolveSource(options.source);
+  } else {
+    const envSources = resolveEnvSources();
+    if (!envSources) {
       console.error(
         [
-          "用法（本地校验）：just verify-endpoint [订阅URL或文件] [输出路径=/tmp/singbox.json] [--node <节点链接>]...",
+          "用法（本地校验）：just verify-endpoint [源列表|.env|订阅URL] [输出路径=/tmp/singbox.json]",
+          "源列表格式：      URL|hy2://…|anytls://… （| 分隔，可混合）",
           "用法（起端点）：  just serve [端口] [绑定地址]",
         ].join("\n"),
       );
       process.exit(1);
     }
+    resolved = { sources: envSources };
   }
   const outputPath = resolve(process.cwd(), options.output ?? "/tmp/singbox.json");
-  const resolved = options.sub
-    ? { sub: options.sub, nodes: options.nodes }
-    : resolveSource(options.source!, options.nodes);
   const config = await buildConfig({
-    ...resolved,
-    dns: options.dns,
-    zone: options.zone,
+    sources: resolved.sources,
+    localConfigPath: options.localConfigPath,
   });
 
   mkdirSync(dirname(outputPath), { recursive: true });
