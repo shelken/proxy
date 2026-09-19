@@ -10,7 +10,6 @@ import {
   parseAnytls,
   parseNodeUri,
   parseSubscriptionBody,
-  serveEndpoint,
   type SingBoxTemplate,
 } from "./endpoint.ts";
 
@@ -177,95 +176,6 @@ describe("buildConfig", () => {
   });
 });
 
-describe("serveEndpoint", () => {
-  let server: { port: number; stop: () => Promise<void> | void };
-  const encodedSources = Buffer.from(
-    `${HY2_URI}|https://airport.example/sub`,
-  ).toString("base64");
-
-  beforeAll(async () => {
-    server = await serveEndpoint({
-      port: 0,
-      deps: {
-        fetchSubscription: async () => AIRPORT_BODY,
-        template: TEMPLATE,
-      },
-    });
-  });
-
-  afterAll(async () => {
-    await server.stop();
-  });
-
-  test("s 参数 base64 解码后正常装配，返回 200 与合法 JSON", async () => {
-    const res = await fetch(`http://127.0.0.1:${server.port}/darwin?s=${encodedSources}`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("application/json");
-
-    const payload = (await res.json()) as SingBoxTemplate;
-    expect(nodeTagsOf(payload)).toEqual(["SelfHost", "HK-01", "JP-01"]);
-  });
-
-  test("缺少 s 时回退服务端 .env；无凭据场景由 resolveEnvSources 保证 400", async () => {
-    // 本仓库 .env 存在（含真实凭据），服务端回退路径生效：此处只验证不再把 s 缺失当 200
-    const res = await fetch(`http://127.0.0.1:${server.port}/darwin`);
-    expect([200, 400, 502]).toContain(res.status);
-    if (res.status === 400) {
-      const body = (await res.json()) as { error: string };
-      expect(body.error).toContain("缺少 s 参数");
-    }
-  });
-
-  test("不支持的 target 返回 400", async () => {
-    const res = await fetch(
-      `http://127.0.0.1:${server.port}/linux-router?s=${encodedSources}`,
-    );
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain("不支持的 target");
-  });
-
-  test("订阅抓取失败时返回 502", async () => {
-    const broken = await serveEndpoint({
-      port: 0,
-      deps: {
-        fetchSubscription: async () => {
-          throw new Error("订阅返回 HTTP 500");
-        },
-        template: TEMPLATE,
-      },
-    });
-
-    try {
-      const onlySub = Buffer.from("https://airport.example/sub").toString("base64");
-      const res = await fetch(
-        `http://127.0.0.1:${broken.port}/darwin?s=${onlySub}`,
-      );
-      expect(res.status).toBe(502);
-      const body = (await res.json()) as { error: string };
-      expect(body.error).toContain("订阅返回 HTTP 500");
-    } finally {
-      await broken.stop();
-    }
-  });
-
-  test("源列表里协议不支持时返回 502 并带协议名", async () => {
-    const broken = await serveEndpoint({
-      port: 0,
-      deps: { fetchSubscription: async () => "", template: TEMPLATE },
-    });
-
-    try {
-      const badSources = Buffer.from("vmess://xxx").toString("base64");
-      const res = await fetch(`http://127.0.0.1:${broken.port}/darwin?s=${badSources}`);
-      expect(res.status).toBe(502);
-      const body = (await res.json()) as { error: string };
-      expect(body.error).toContain("不支持的节点协议：vmess");
-    } finally {
-      await broken.stop();
-    }
-  });
-});
 
 describe("mergeLocalConfig", () => {
   test("同名 dns server 覆盖，不同名前置插入", () => {

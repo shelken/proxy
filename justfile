@@ -65,27 +65,10 @@ test-sandbox: sync-sandbox
 sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 
-# 生成供 SFM 或其他 sing-box 客户端导入的单配置
-# 用法: just build [输出路径]
-build output="/tmp/singbox.json":
-    @bun run scripts/endpoint.ts --output {{output}}
-
-
 # --- 生产底模校验与容器化订阅验证 ---
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
-
-# 本地等价验证单 URL 契约：解析后端取节点 → 底模装配 → sing-box check，全程零上传
-# 用法：just verify-endpoint [订阅URL或文件] [/tmp/singbox.json]
-verify-endpoint source="" output="/tmp/singbox.json":
-    @bun run scripts/endpoint.ts {{source}} {{output}}
-
-# 本地点起端点（单 URL 契约）：
-#   just serve                     → http://127.0.0.1:8080/darwin?sub=…&node=…
-#   just serve 8080 192.168.5.2    → 绑到沙箱 VM 能访问的地址，让 VM 当"设备"直接取配置
-serve port="8080" host="127.0.0.1":
-    @bun run scripts/endpoint.ts --serve --port {{port}} --host {{host}}
 
 
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点

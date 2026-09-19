@@ -17,16 +17,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          bun-version: "1.3.14"
+          targets: aarch64-apple-darwin
 
-      - name: Compile sb-sync (arm64 macOS)
-        run: |
-          bun build scripts/sb-sync.ts \
-            --compile \
-            --target=bun-arm64-macos \
-            --outfile sb-sync-aarch64-apple-darwin
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scripts/sb-sync-rs/target
+          key: sb-sync-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+
+      - name: Test
+        working-directory: scripts/sb-sync-rs
+        run: cargo test --release
+
+      - name: Build sb-sync (arm64 macOS)
+        working-directory: scripts/sb-sync-rs
+        run: cargo build --release && cp target/release/sb-sync ../../sb-sync-aarch64-apple-darwin
 
       - name: Smoke test binary
         run: |
