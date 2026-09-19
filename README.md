@@ -80,6 +80,7 @@ just test-sandbox  # Lima VM 沙箱网络行为测试
 
 ## 目录索引
 
+- `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)（sb-sync CLI 同步等）
 - `scripts/sb-sync-rs/`：sb-sync Rust 源码（设备侧同步 CLI）
 - `config/sing-box/`：sing-box 标准底模与沙箱测试套件
 - `config/rules/`：分流规则源清单与自定义列表
