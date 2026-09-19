@@ -75,6 +75,7 @@ sb-sync sync
 ```bash
 sb-sync check    # 零网络：产物结构、节点数、策略组、local 注入状态
 sb-sync doctor   # 分层自检：配置 / DNS 解析链 / 直连·代理·CDN 计时
+sb-sync profile  # 查看 SFM profiles 与产物的同源性（详见 01-mac-sfm.md）
 ```
 
 `doctor` 输出示例：

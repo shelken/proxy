@@ -76,6 +76,7 @@ just test-sandbox  # Lima VM 沙箱网络行为测试
 | `dev` | `SelfHost` | 优先自建节点，备选香港节点 |
 | `adultnsfw` | `SelfHost` | 优先自建节点，备选直连与专用节点 |
 | `appleai` | `direct` | 优先直连，备选自建节点与主代理 |
+| `ptcg` | `SelfHost` | 优先自建节点，备选主代理与直连，日本节点正则匹配 |
 | `japansite` | `proxy` | 优先跟随主代理，备选日本节点 |
 | `opencode` | `proxy` | 优先跟随主代理，备选全量节点 |
 

@@ -58,8 +58,22 @@ SFM 原生支持 remote profile（`Profiles` → `New Profile` → 类型 `Remot
 ## 验证闭环
 
 ```bash
-sb-sync doctor
+sb-sync profile      # 列出 SFM profiles 与产物的同源性比对
+sb-sync doctor       # 网络分层自检：配置 / DNS 解析链 / 直连·代理·CDN 计时
 ```
 
-预期：配置校验通过、DNS 解析链成功、直连/代理/CDN 全部 HTTP 2xx。若 SFM 已启动而 doctor 的
-代理站点失败，先确认菜单栏开关已 ON、面板 Proxies 页各策略组已选中可用节点。
+`sb-sync profile` 输出示例：
+
+```text
+profiles:
+  [2] test-local (remote)  configs/config_2.json  修改 …  指纹 efe12… ← 与产物同源
+  [3] singbox (local)      configs/config_3.json  修改 …  指纹 28d7b…
+
+激活提示: 最近修改的 local profile 是 [3] singbox。未验证是否为当前激活项
+（无可靠数据源），请以 SFM 菜单为准
+```
+
+更新 profile 后用 `sb-sync profile configs/config_N.json` 校验是否拷贝成功（不一致退出码为 1）。
+当前激活的 profile 没有可靠的外部数据源，以 SFM 菜单勾选为准。
+
+若 SFM 已启动而 doctor 的代理站点失败，先确认菜单栏开关已 ON、面板 Proxies 页各策略组已选中可用节点。
