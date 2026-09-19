@@ -277,12 +277,18 @@ fn cmd_sync() -> Result<(), String> {
         .output
         .map(std::path::PathBuf::from)
         .unwrap_or_else(paths::output_path);
+    // reload 归属判定基准：本次覆盖前的旧产物指纹（首次 sync 为 None）
+    let previous_fingerprint = std::fs::read_to_string(&output)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .map(|v| profile::fingerprint_of(&v));
     write_output_atomic(&output, &content)?;
 
     println!("[sb-sync] 完成 ({}ms)", started.elapsed().as_millis());
     println!("  底模: {} | 规则集: {}", source.as_str(), rule_sets);
     println!("  产物: {}", output.display());
     reload_hint();
+    profile::reload_after_sync(&output, previous_fingerprint)?;
     Ok(())
 }
 

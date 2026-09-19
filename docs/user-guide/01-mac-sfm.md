@@ -24,14 +24,20 @@ cp ~/.config/sing-box/singbox.json "$SFM_DIR/configs/config_N.json"
 
 ## 日常更新循环
 
-配置变更（订阅节点变化、底模更新、local 覆盖调整）生效三步：
+配置变更（订阅节点变化、底模更新、local 覆盖调整）生效两步：
 
 ```bash
-sb-sync sync                    # 1. 更新产物
-cp ~/.config/sing-box/singbox.json "$SFM_DIR/configs/config_N.json"   # 2. 覆盖 profile
+sb-sync sync    # 步骤 1: 更新产物并自动写入归属的 SFM profile
 ```
 
-3. SFM 菜单栏开关 OFF→ON 重载
+步骤 2: SFM 菜单栏开关 OFF→ON 重载
+
+sync 会找到与上一份产物同源的 local profile 并自动覆盖为新产物（即「上次装到哪个 profile，
+就更新哪个」）。行为边界：
+
+- 与产物同源的 remote profile 不会自动写入（内容由 remoteURL 管理，写入会被下次拉取覆盖）
+- 首次 sync 或找不到同源 profile 时跳过，改用 `sb-sync profile <文件>` 显式校验归属后手动 `cp`
+- 你在 SFM 里手工改过的 profile（指纹已偏离产物）不会被覆盖
 
 sb-sync sync 检测到 SFM 面板在线时会打印重载提示。
 

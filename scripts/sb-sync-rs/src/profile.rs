@@ -92,6 +92,10 @@ fn read_profiles(db: &PathBuf) -> Result<Vec<ProfileRow>, String> {
 }
 
 /// 归一化指纹: 排除 experimental 段（SFM 保存时会重写该段）后序列化哈希。
+pub fn fingerprint_of(v: &serde_json::Value) -> String {
+    fingerprint(v)
+}
+
 fn fingerprint(v: &serde_json::Value) -> String {
     let mut v = v.clone();
     if let Some(obj) = v.as_object_mut() {
@@ -137,6 +141,91 @@ fn md5_of_json(v: &serde_json::Value) -> u64 {
 
 fn fmt_ts() -> String {
     String::new()
+}
+
+/// sync 后自动更新 SFM profile：
+/// 找到与「本次写入前的旧产物」同源的 profile（即上次 sync 安装目标），覆盖为新产物。
+///
+/// 归属判定依据：profile 是拷贝式，与旧产物同源 = 上次从这里安装。
+/// 防覆盖保护：目标当前内容必须仍与旧产物同源（用户在 SFM 手工改过则跳过）。
+/// SFM 不监听文件变化，写入后仍需菜单栏开关 OFF→ON 重载。
+pub fn reload_after_sync(
+    product_path: &std::path::Path,
+    previous_fingerprint: Option<String>,
+) -> Result<(), String> {
+    let Some(old_fp) = previous_fingerprint else {
+        println!("  SFM profile 自动更新: 跳过（首次 sync，无旧产物可判定归属）");
+        return Ok(());
+    };
+    let Some(container) = sfm_container_dir() else {
+        return Ok(()); // 无 SFM 设备：静默跳过
+    };
+    let profiles = read_profiles(&container.join("settings.db"))?;
+    let new_fp = fingerprint(
+        &serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(product_path).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("产物解析失败: {e}"))?,
+    );
+
+    let mut targets: Vec<&ProfileRow> = Vec::new();
+    let mut matched_any = false;
+    for p in &profiles {
+        let file = container.join(&p.path);
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let fp = fingerprint(&v);
+        if fp == new_fp || fp == old_fp {
+            matched_any = true;
+        }
+        if fp == new_fp {
+            // 已经是新产物（重复 sync 或 remote profile 已拉取），无需写入
+            println!("  SFM profile [{id}] {name} 已是最新", id = p.id, name = p.name);
+        } else if fp == old_fp {
+            // remote profile 的内容由 SFM 从 remoteURL 拉取，写入会被下次拉取覆盖，不自动写
+            if p.kind == "local" {
+                targets.push(p);
+            } else {
+                println!(
+                    "  SFM profile [{id}] {name} 与旧产物同源但为 remote 类型，跳过自动写入（内容由 remoteURL 管理）",
+                    id = p.id,
+                    name = p.name
+                );
+            }
+        }
+    }
+    match targets.len() {
+        0 if matched_any => {} // 已有「已是最新/remote 跳过」输出，无需重复提示
+        0 => println!("  SFM profile 自动更新: 未找到与旧产物同源的 profile（用 sb-sync profile <文件> 显式指定）"),
+        1 => {
+            let p = targets[0];
+            let file = container.join(&p.path);
+            std::fs::copy(product_path, &file)
+                .map_err(|e| format!("写入 SFM profile 失败: {e}"))?;
+            println!(
+                "  已更新 SFM profile [{id}] {name}（{}）— 菜单栏开关 OFF→ON 生效",
+                p.path,
+                id = p.id,
+                name = p.name
+            );
+        }
+        _ => {
+            let names: Vec<String> = targets
+                .iter()
+                .map(|p| format!("[{}] {}", p.id, p.name))
+                .collect();
+            println!(
+                "  SFM profile 自动更新: 跳过（{} 个 profile 同源，无法判定唯一目标: {}）",
+                targets.len(),
+                names.join(" ")
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn run(target: Option<&str>) -> Result<(), String> {
