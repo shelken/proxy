@@ -3,9 +3,9 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
-  POLICY_GROUPS,
-  RESERVED_TAGS,
   buildConfig,
+  getPolicyGroups,
+  getReservedTags,
   mergeLocalConfig,
   parseAnytls,
   parseNodeUri,
@@ -19,7 +19,7 @@ const TEMPLATE = JSON.parse(
 ) as SingBoxTemplate;
 
 /** 期望的策略组顺序：主分组在前，其余分流分组随后。 */
-const GROUP_TAGS = ["proxy", ...POLICY_GROUPS];
+const GROUP_TAGS = ["proxy", ...getPolicyGroups()];
 
 const HY2_URI = "hy2://pass@192.0.2.1:8388?sni=example.com#SelfHost";
 const ANYTLS_URI = "anytls://pass2@192.0.2.2:8443?sni=cdn.example.net#AnyNode";
@@ -129,7 +129,7 @@ describe("buildConfig", () => {
 
   test("保留标签表与底模的契约一致", () => {
     const expected = (TEMPLATE.outbounds ?? []).map((o) => o.tag);
-    expect(RESERVED_TAGS).toEqual(expected);
+    expect(getReservedTags()).toEqual(expected);
   });
 
   test("解析不出节点时当场失败", async () => {

@@ -1,0 +1,41 @@
+# sb-sync 单二进制发布：打 tag 后编译 arm64 macOS 产物并上传 GitHub Release。
+# 产物消费者：mise [tools."github:shelken/proxy"] 与无 nix 设备的手动安装。
+name: release-sb-sync
+
+on:
+  push:
+    tags:
+      # 仅 sb-sync 语义版本 tag：sb-sync-v1.0.0
+      - "sb-sync-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Compile sb-sync (arm64 macOS)
+        run: |
+          bun build scripts/sb-sync.ts \
+            --compile \
+            --target=bun-arm64-macos \
+            --outfile sb-sync
+
+      - name: Smoke test binary
+        run: |
+          file sb-sync
+          ./sb-sync | head -3
+          HOME="$(mktemp -d)" ./sb-sync init
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sb-sync
+          generate_release_notes: true

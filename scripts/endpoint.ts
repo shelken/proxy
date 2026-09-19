@@ -70,13 +70,30 @@ function loadTemplate(): SingBoxTemplate {
   return JSON.parse(readFileSync(TEMPLATE_PATH, "utf-8")) as SingBoxTemplate;
 }
 
+// 惰性求值：单二进制场景（bun compile）下模块加载时仓库文件不存在，
+// 底模来源由调用方注入（sb-sync 传远程/内嵌底模），仓库文件只是兜底
+let injectedTemplate: SingBoxTemplate | null = null;
+let cachedReservedTags: string[] | null = null;
+
+/**
+ * 注入底模供保留标签计算使用（sb-sync 编译态必经路径）。
+ * 同时重置缓存，保证换底模后标签集随之更新。
+ */
+export function setReservedTagsSource(template: SingBoxTemplate): void {
+  injectedTemplate = template;
+  cachedReservedTags = null;
+}
+
 /** 底模 route.rules 引用的出站标签，节点名撞上时必须让位。 */
-export const RESERVED_TAGS: string[] = (loadTemplate().outbounds ?? []).map((o) => o.tag);
+export function getReservedTags(): string[] {
+  cachedReservedTags ??= ((injectedTemplate ?? loadTemplate()).outbounds ?? []).map((o) => o.tag);
+  return cachedReservedTags;
+}
 
 /** 主分组之外的分流分组：默认跟随主分组，成员里排上全部节点。 */
-export const POLICY_GROUPS: string[] = RESERVED_TAGS.filter(
-  (tag) => tag !== "direct" && tag !== "proxy",
-);
+export function getPolicyGroups(): string[] {
+  return getReservedTags().filter((tag) => tag !== "direct" && tag !== "proxy");
+}
 
 export function parseHysteria2(raw: string): OutboundNode {
   const u = new URL(raw);
@@ -276,7 +293,7 @@ export function parseSubscriptionBody(body: string): OutboundNode[] {
 
 /** 节点标签唯一化：让开保留标签与彼此重名，名字只影响显示。 */
 function assignTags(nodes: OutboundNode[]): void {
-  const taken = new Set<string>(RESERVED_TAGS);
+  const taken = new Set<string>(getReservedTags());
   nodes.forEach((node, index) => {
     const base = String(node.tag ?? "").trim() || `node-${index + 1}`;
     let tag = base;
