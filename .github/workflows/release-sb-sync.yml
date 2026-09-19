@@ -41,7 +41,7 @@ jobs:
       - name: Smoke test binary
         run: |
           file sb-sync-aarch64-apple-darwin
-          ./sb-sync-aarch64-apple-darwin | head -3
+          ./sb-sync-aarch64-apple-darwin version | grep -q "sb-sync ${GITHUB_REF_NAME#v}" || { echo "version 不匹配"; exit 1; }
           HOME="$(mktemp -d)" ./sb-sync-aarch64-apple-darwin init
 
       - name: Upload to release

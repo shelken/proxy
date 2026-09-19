@@ -29,6 +29,10 @@ fn main() {
         Some("list") => cmd_list(),
         Some("template") => cmd_template(rest),
         Some("sync") => cmd_sync(),
+        Some("version") | Some("--version") | Some("-V") => {
+            println!("sb-sync {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some("output") => {
             println!("{}", store::load_store().output.map(std::path::PathBuf::from).unwrap_or_else(paths::output_path).display());
             Ok(())
@@ -65,6 +69,7 @@ fn usage() -> String {
         "  sb-sync check                 验证本地产物（零网络）",
         "  sb-sync doctor                网络分层自检（DNS/直连/代理逐层计时）",
         "  sb-sync output                打印产物路径",
+        "  sb-sync version               打印版本号",
     ]
     .join("\n")
 }
