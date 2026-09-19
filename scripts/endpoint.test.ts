@@ -39,9 +39,9 @@ function nodeTagsOf(config: SingBoxTemplate): string[] {
 }
 
 /** 用注入的订阅响应跑一次组装（源列表里必有 1 个机场订阅）。 */
-function assemble(sources: string, airportBody = AIRPORT_BODY) {
+function assemble(sources: string, inputOverride: Partial<{ sources: string; localConfigPath: string }> = {}, airportBody = AIRPORT_BODY) {
   return buildConfig(
-    { sources },
+    { sources, ...inputOverride },
     {
       fetchSubscription: async () => airportBody,
       template: TEMPLATE,
@@ -137,7 +137,8 @@ describe("buildConfig", () => {
   });
 
   test("公共底模不包含任何私有 zone-internal 或内网私有 DNS", async () => {
-    const baseline = await assemble(HY2_URI);
+    // localConfigPath 置空路径显式禁用本机 local.json 注入，保证断言的是"装配器公共产物"
+    const baseline = await assemble(HY2_URI, { localConfigPath: "/nonexistent/local.json" });
     const baselineDns = baseline.dns?.servers?.find(
       (server) => server.tag === "dns-internal",
     );

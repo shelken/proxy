@@ -84,14 +84,15 @@ async function main(): Promise<void> {
   console.log(`[TRACE] 装配端点统一单文件配置...`);
   const envContent = existsSync(".env") ? readFileSync(".env", "utf-8") : "";
   const env = parseEnv(envContent);
-  const sub = env.SUB_URL;
-  const nodes = env.NODE_URI ? [env.NODE_URI] : [];
+  const parts: string[] = [];
+  if (env.NODE_URI) parts.push(...env.NODE_URI.split("|").map((s: string) => s.trim()).filter(Boolean));
+  if (env.SUB_URL) parts.push(env.SUB_URL.trim());
 
-  if (!sub && nodes.length === 0) {
+  if (parts.length === 0) {
     throw new Error("未在 .env 中找到 SUB_URL 或 NODE_URI，无法装配真实节点配置");
   }
 
-  const config = (await buildConfig({ sub, nodes })) as unknown as SingBoxConfig;
+  const config = (await buildConfig({ sources: parts.join("|") })) as unknown as SingBoxConfig;
 
   config.log = { level: "debug" };
   delete config.route.default_http_client;
@@ -217,6 +218,20 @@ async function main(): Promise<void> {
   console.log(`[TRACE] 内核就绪 (${Date.now() - startWait}ms)，正在注入测试流量...`);
 
   // 6. 注入测试请求
+  // 6a. DNS 探测:向 TUN 派生 DNS 地址(auto_route 劫持入内核)发查询,逼内核留下完整 DNS 决策日志
+  const tunInbound = config.inbounds?.find(
+    (i): i is { type: string; address?: string[] } =>
+      typeof i === "object" && i !== null && "type" in i && i.type === "tun",
+  );
+  const tunAddr = Array.isArray(tunInbound?.address)
+    ? tunInbound.address.find((a) => typeof a === "string" && /^(172\.|10\.|192\.168\.)/.test(a))
+    : undefined;
+  if (tunAddr) {
+    const dnsAddr = tunAddr.split("/")[0].replace(/\.1$/, ".2");
+    sh(`/usr/bin/dig +short +time=3 +tries=1 ${domain} @${dnsAddr} > /dev/null 2>&1 || true`);
+  }
+
+  // 6b. HTTP 探测:经 mixed 入站走完整路由链
   const probeStart = Date.now();
   const probe = sh(`
     /opt/proxy-test/bin/bun -e '
@@ -242,6 +257,10 @@ async function main(): Promise<void> {
   let matchedRule = "未命中特定规则 (走 route.final 兜底)";
   let policyGroup = "proxy";
   let leafNode = "未知节点";
+  // DNS 决策：抓内核对目标域名的解析走线（本地服务器应答 vs 经隧道转发）与最终答案
+  let dnsExchangeMs = "";
+  let dnsAnswer = "";
+  let dnsPath = "未观察到内核解析 (可能客户端直发或命中缓存)";
 
   for (const line of logs.split("\n")) {
     if (line.includes("sniffed protocol:")) {
@@ -262,6 +281,23 @@ async function main(): Promise<void> {
         leafNode = m[1];
       }
     }
+    // DNS 走线证据链
+    const exchange = line.match(new RegExp(`dns:\\s+exchange\\s+${domain.replace(/\./g, "\\.")}\\.?\\s+IN`, "i"));
+    if (exchange) {
+      const ms = line.match(/\]\s*\[.*?\s(\d+(?:\.\d+)?m?s)\]/) ?? line.match(/\s(\d+m?s)\]\s*dns: exchange/);
+      dnsExchangeMs = ms?.[1] ?? "";
+    }
+    const answered = line.match(new RegExp(`exchanged\\s+A\\s+${domain.replace(/\./g, "\\.")}\\.?\\s+\\d+\\s+IN\\s+A\\s+(\\S+)`, "i"));
+    if (answered?.[1]) dnsAnswer = answered[1];
+  }
+  if (dnsAnswer) {
+    const isPrivateIp =
+      /^10\./.test(dnsAnswer) ||
+      /^192\.168\./.test(dnsAnswer) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(dnsAnswer);
+    dnsPath = isPrivateIp
+      ? `内网答案 (命中本地/内网 DNS 规则)`
+      : `公网答案 (走 final 上游, 经代理隧道)`;
   }
 
   const probeOutput = probe.out.trim();
@@ -270,6 +306,8 @@ async function main(): Promise<void> {
   console.log(`\n======================================================`);
   console.log(`📊 [全链路路由诊断报告] 目标: ${domain}`);
   console.log(`======================================================`);
+  console.log(`├─ DNS 走线:   ${dnsPath}${dnsExchangeMs ? ` (解析耗时 ${dnsExchangeMs})` : ""}`);
+  console.log(`├─ DNS 答案:   ${dnsAnswer || "(未捕获 A 记录)"}`);
   console.log(`├─ 协议嗅探:   ${sniffProtocol}`);
   console.log(`├─ 路由匹配:   ${matchedRule}`);
   console.log(`├─ 策略分组:   ${policyGroup}`);
