@@ -5,8 +5,8 @@ name: release-sb-sync
 on:
   push:
     tags:
-      # 仅 sb-sync 语义版本 tag：sb-sync-v1.0.0
-      - "sb-sync-v*"
+      # 语义版本 tag（mise github 后端按 v<semver> 查询 release）
+      - "v*"
 
 permissions:
   contents: write
