@@ -26,16 +26,16 @@ jobs:
           bun build scripts/sb-sync.ts \
             --compile \
             --target=bun-arm64-macos \
-            --outfile sb-sync
+            --outfile sb-sync-aarch64-apple-darwin
 
       - name: Smoke test binary
         run: |
-          file sb-sync
-          ./sb-sync | head -3
-          HOME="$(mktemp -d)" ./sb-sync init
+          file sb-sync-aarch64-apple-darwin
+          ./sb-sync-aarch64-apple-darwin | head -3
+          HOME="$(mktemp -d)" ./sb-sync-aarch64-apple-darwin init
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: sb-sync
+          files: sb-sync-aarch64-apple-darwin
           generate_release_notes: true
