@@ -319,6 +319,36 @@ function maskUri(uri: string): string {
   return `${scheme}://***${uri.includes("#") ? `#${uri.split("#")[1]}` : ""}`;
 }
 
+/** check：对本地产物做全项验证（结构、check、local 合并痕迹），零网络。 */
+function cmdCheck(): void {
+  const output = resolve(loadStore().output ?? OUTPUT_PATH);
+  if (!existsSync(output)) {
+    throw new Error(`产物不存在: ${output}（先执行 sb-sync sync）`);
+  }
+  const state = readJson<State>(STATE_PATH, { templateSource: "embedded" });
+  const cfg = JSON.parse(readFileSync(output, "utf-8")) as SingBoxTemplate;
+
+  // 1. 内核语法校验（不启动、不接管网络）
+  const check = Bun.spawnSync([findSingBox(), "check", "-c", output]);
+  if (check.exitCode !== 0) {
+    throw new Error(check.stderr.toString().trim() || "sing-box check 失败");
+  }
+
+  const nodes = (cfg.outbounds ?? []).filter((o) => typeof o.server === "string");
+  const selectors = (cfg.outbounds ?? []).filter((o) => o.type === "selector");
+  const ruleSets = (cfg.route?.rule_set as Array<{ tag?: string }>)?.length ?? 0;
+  const localApplied =
+    (cfg.dns?.rules as Array<Record<string, unknown>>)?.[0]?.domain_suffix !== undefined ||
+    (cfg.route?.rules as Array<Record<string, unknown>>)?.[0]?.domain_suffix !== undefined;
+
+  console.log(`产物:     ${output}`);
+  console.log(`底模来源: ${state.templateSource} | 上次同步: ${state.lastSyncAt ?? "从未"}${state.lastSyncOk === false ? " (失败!)" : " (OK)"}`);
+  console.log(`节点:     ${nodes.length} 个 (首选 ${nodes[0]?.tag ?? "-"})`);
+  console.log(`策略组:   ${selectors.length} 个 | 规则集: ${ruleSets} 份`);
+  console.log(`local 覆盖: ${existsSync(LOCAL_PATH) ? (localApplied ? "已注入 ✓" : "存在但产物未见注入(可能为空)") : "未配置"}`);
+  console.log(`sing-box check: 通过 ✓`);
+}
+
 // ---------------------------------------------------------------------------
 // 入口
 // ---------------------------------------------------------------------------
@@ -360,6 +390,9 @@ async function main(): Promise<void> {
     case "output":
       console.log(resolve(loadStore().output ?? OUTPUT_PATH));
       break;
+    case "check":
+      cmdCheck();
+      break;
     default:
       console.error(
         [
@@ -374,6 +407,7 @@ async function main(): Promise<void> {
           "  sb-sync remove sub|node <#>   移除指定源",
           "  sb-sync template update|reset 手动刷新/重置远程底模",
           "  sb-sync sync                  拉订阅+自动更新底模+原子产出",
+          "  sb-sync check                 验证本地产物（零网络）",
           "  sb-sync output                打印产物路径",
         ].join("\n"),
       );
