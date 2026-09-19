@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn ten_groups_populated_correctly() {
+    fn all_groups_populated_correctly() {
         let config = assemble(&format!("{HY2_URI}|https://airport.example/sub"));
         let selectors: Vec<&str> = config["outbounds"]
             .as_array()
@@ -124,7 +124,7 @@ mod tests {
             .filter(|o| o["type"] == "selector")
             .filter_map(|o| o["tag"].as_str())
             .collect();
-        // 底模声明 10 个 selector 组，顺序与底模一致
+        // 底模声明全部 selector 组，顺序与底模一致
         let tpl = embedded_template();
         let tpl_selectors: Vec<&str> = tpl["outbounds"]
             .as_array()

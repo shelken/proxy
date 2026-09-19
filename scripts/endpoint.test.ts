@@ -100,7 +100,7 @@ describe("parseNodeUri / parseSubscriptionBody", () => {
 });
 
 describe("buildConfig", () => {
-  test("十个策略组齐全，且候选池正确展开", async () => {
+  test("全部策略组齐全，且候选池正确展开", async () => {
     const config = await assemble(`${HY2_URI}|https://airport.example/sub`);
     const outbounds = config.outbounds ?? [];
 

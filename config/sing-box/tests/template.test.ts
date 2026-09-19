@@ -35,9 +35,9 @@ describe("template.json structural verification", () => {
     expect(excluded).toContain("100.64.0.0/10");
   });
 
-  test("declares all 27 public rule sets", () => {
+  test("declares all 32 public rule sets", () => {
     const ruleSets = template.route?.rule_set ?? [];
-    expect(ruleSets.length).toBe(27);
+    expect(ruleSets.length).toBe(32);
     const tags = ruleSets.map((r) => r.tag);
     expect(tags).not.toContain("zone-internal");
     expect(tags).toContain("OpenAI");
@@ -55,8 +55,52 @@ describe("template.json structural verification", () => {
     expect(quicRule.port).toContain(80);
   });
 
-  test("configures ipv4_only DNS strategy", () => {
-    expect(template.dns?.strategy).toBe("ipv4_only");
+  test("configures prefer_ipv4 DNS strategy", () => {
+    expect(template.dns?.strategy).toBe("prefer_ipv4");
+  });
+
+  test("DNS uses FakeIP for A/AAAA with real-server final", () => {
+    const servers = template.dns?.servers ?? [];
+    const fakeip = servers.find((s) => s.type === "fakeip");
+    expect(fakeip).toBeDefined();
+    expect(fakeip.inet4_range).toBe("198.18.0.0/15");
+    // final 不能是 fakeip（内核限制），且必须是真实服务器
+    expect(template.dns?.final).not.toBe(fakeip?.tag);
+    // A/AAAA 查询导流到 fakeip
+    const fakeipRule = (template.dns?.rules ?? []).find(
+      (r) => r.server === fakeip?.tag,
+    );
+    expect(fakeipRule?.query_type).toContain("A");
+    expect(fakeipRule?.query_type).toContain("AAAA");
+    // TUN 网段必须同时避开排除段（尸检 001: DNS 黑洞）与 FakeIP 池
+    const tun = template.inbounds.find((i) => i.type === "tun");
+    expect(tun.address[0]).not.toBe("198.18.0.1/30");
+  });
+
+  test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
+    const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
+    const [tunIp, tunBits] = tunAddr.split("/");
+    const toInt = (ip) =>
+      ip.split(".").reduce((acc, o) => acc * 256 + Number(o), 0);
+    const tunStart = toInt(tunIp);
+    const tunEnd = tunStart + (2 ** (32 - Number(tunBits || 32)) - 1);
+    const rangeOf = (cidr) => {
+      const [ip, bits] = cidr.split("/");
+      const start = toInt(ip);
+      return [start, start + (2 ** (32 - Number(bits)) - 1)];
+    };
+    // 与排除段互斥（尸检 001: TUN 落入排除段 → 劫持 DNS 包绕过 TUN → 系统解析器黑洞）
+    for (const cidr of template.inbounds.find((i) => i.type === "tun")
+      .route_exclude_address) {
+      const [s, e] = rangeOf(cidr);
+      expect(tunEnd < s || tunStart > e).toBe(true);
+    }
+    // 与 FakeIP 池互斥（fakeip 从池首地址顺序分配，会争用 TUN 自身地址）
+    const fakeip = (template.dns?.servers ?? []).find(
+      (s) => s.type === "fakeip",
+    );
+    const [ps, pe] = rangeOf(fakeip.inet4_range);
+    expect(tunEnd < ps || tunStart > pe).toBe(true);
   });
 
   test("persists SFM selector choices", () => {

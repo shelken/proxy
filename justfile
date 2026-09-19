@@ -56,7 +56,7 @@ sync-sandbox:
     {{lima_shell}} cp -r {{repo_in_guest}}/config/rules/generated/singbox/. /work/sing-box/rules/
     {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/template.json /work/sing-box/template.json
     {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
-    {{lima_shell}} /opt/proxy-test/bin/bun -e 'import { buildConfig } from "/host-home/Code/active/proxy/scripts/endpoint.ts"; const cfg = await buildConfig({ nodes: ["hysteria2://pass@1.1.1.1:443#SelfHost"] }, { parse: async () => [{ type: "direct", tag: "mock-airport" }] }); cfg.route.rule_set = cfg.route.rule_set.map(rs => rs.type === "remote" ? { type: "local", tag: rs.tag, format: "binary", path: `/work/sing-box/rules/${rs.tag}.srs` } : rs); await Bun.write("/work/sing-box/config.json", JSON.stringify(cfg, null, 2));'
+    {{lima_shell}} /opt/proxy-test/bin/bun -e 'import { buildConfig } from "/host-home/Code/active/proxy/scripts/endpoint.ts"; const cfg = await buildConfig({ sources: "hysteria2://pass@1.1.1.1:443#selfhost" }); cfg.route.rule_set = cfg.route.rule_set.map(rs => rs.type === "remote" ? { type: "local", tag: rs.tag, format: "binary", path: `/work/sing-box/rules/${rs.tag}.srs` } : rs); await Bun.write("/work/sing-box/config.json", JSON.stringify(cfg, null, 2));'
 
 # 在沙箱内运行全部网络行为测试
 test-sandbox: sync-sandbox
