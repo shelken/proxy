@@ -6,7 +6,7 @@
 
 import { rm, stat } from "node:fs/promises";
 
-export const SING_BOX = "/opt/proxy-test/bin/sing-box";
+export const SING_BOX = process.env.SING_BOX || "/opt/proxy-test/bin/sing-box";
 
 // /host-home 是只读挂载，sing-box 的 -D 与 cache.db 都需要可写位置。
 export const WORK = "/work/sing-box";

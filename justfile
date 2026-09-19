@@ -51,7 +51,8 @@ vm-delete:
 # 同步点：把生产底模、规则集与测试用例复制到 VM，并生成本地规则等价配置
 sync-sandbox:
     {{lima_shell}} rm -rf /work/sing-box
-    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/rules
+    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/rules /work/sing-box/ui
+    {{lima_shell}} touch /work/sing-box/ui/index.html
     {{lima_shell}} cp -r {{repo_in_guest}}/config/rules/generated/singbox/. /work/sing-box/rules/
     {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/template.json /work/sing-box/template.json
     {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
@@ -63,18 +64,17 @@ test-sandbox: sync-sandbox
 # 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
 sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
+
+# 生成供 SFM 或其他 sing-box 客户端导入的单配置
+# 用法: just build [输出路径]
+build output="/tmp/singbox.json":
+    @bun run scripts/endpoint.ts --output {{output}}
+
+
 # --- 生产底模校验与容器化订阅验证 ---
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
-
-# 启动本地 sublink 转换容器
-sublink-up:
-    @docker run -d --name proxy-sublink -p 8787:8787 --rm ghcr.io/7sageer/sublink-worker:latest >/dev/null && echo "sublink-worker running on http://127.0.0.1:8787"
-
-# 停止本地 sublink 容器
-sublink-down:
-    @docker stop proxy-sublink >/dev/null 2>&1 || true
 
 # 本地等价验证单 URL 契约：解析后端取节点 → 底模装配 → sing-box check，全程零上传
 # 用法：just verify-endpoint [订阅URL或文件] [/tmp/singbox.json]

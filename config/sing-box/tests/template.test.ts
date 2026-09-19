@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { SING_BOX } from "./lib/sandbox.js";
+import { SING_BOX } from "./lib/sandbox.ts";
 
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
@@ -35,11 +35,11 @@ describe("template.json structural verification", () => {
     expect(excluded).toContain("100.64.0.0/10");
   });
 
-  test("declares all 28 rule sets", () => {
+  test("declares all 27 public rule sets", () => {
     const ruleSets = template.route?.rule_set ?? [];
-    expect(ruleSets.length).toBe(28);
+    expect(ruleSets.length).toBe(27);
     const tags = ruleSets.map((r) => r.tag);
-    expect(tags).toContain("zone-internal");
+    expect(tags).not.toContain("zone-internal");
     expect(tags).toContain("OpenAI");
     expect(tags).toContain("Gemini");
     expect(tags).toContain("ChinaMax");
@@ -58,6 +58,14 @@ describe("template.json structural verification", () => {
   test("configures ipv4_only DNS strategy", () => {
     expect(template.dns?.strategy).toBe("ipv4_only");
   });
+
+  test("persists SFM selector choices", () => {
+    expect(template.experimental?.cache_file).toMatchObject({
+      enabled: true,
+      path: "cache.db",
+    });
+  });
+
 
   test("declares all 9 native strategy groups", () => {
     const selectors = (template.outbounds ?? []).filter((o) => o.type === "selector");
