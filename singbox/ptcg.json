@@ -3,9 +3,12 @@
   "rules": [
     {
       "domain_suffix": [
-        "pokemontcgpocket.com",
+        "akamaized.net",
+        "nintendo.co.jp",
         "nintendo.com",
-        "akamaized.net"
+        "nintendo.net",
+        "nintendoswitch.com",
+        "pokemontcgpocket.com"
       ]
     },
     {

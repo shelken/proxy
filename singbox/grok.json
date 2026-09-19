@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "accounts.x.ai",
+        "api.x.ai",
+        "cli-chat-proxy.grok.com"
+      ]
+    }
+  ]
+}
