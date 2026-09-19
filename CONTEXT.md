@@ -12,7 +12,7 @@
 设备侧配置同步 CLI。Rust 编译的静态单二进制。职责：拉取通用底模 → 拉订阅/节点 → 本机装配 → 融合设备 local 覆盖 → 原子产出 singbox.json。
 
 **底模（template）**
-sing-box 配置的公共骨架：双入站、内网穿透、10 大分流策略组、route_exclude_address。来源三级：远程 main 分支 → 设备缓存 `~/.config/sing-box/template.json` → 二进制内嵌版。
+sing-box 配置的公共骨架：双入站、内网穿透、22 大分流策略组、route_exclude_address。来源三级：远程 main 分支 → 设备缓存 `~/.config/sing-box/template.json` → 二进制内嵌版。
 
 **产物（output）**
 装配完成的最终配置文件 `~/.config/sing-box/singbox.json`，SFM Local Profile 的来源。

@@ -44,7 +44,7 @@ sb-sync sync 检测到 SFM 面板在线时会打印重载提示。
 ## 面板与节点切换
 
 - 菜单栏图标 → `Open Dashboard`（或浏览器访问 `http://127.0.0.1:9090/ui`）打开 Web 面板
-- `Proxies` 页：10 大策略组，点击组内节点即切换出口；`openai` 组等专用组独立切换
+- `Proxies` 页：22 大策略组，点击组内节点即切换出口；`openai` 组等专用组独立切换
 - `Connections` 页：实时连接与命中规则排查
 
 ## Remote Profile（可选，多设备场景）
@@ -54,9 +54,11 @@ SFM 原生支持 remote profile（`Profiles` → `New Profile` → 类型 `Remot
 
 ## 已知行为与坑
 
-- **TUN 网段被 SFM 改写**：产物写 `198.18.0.1/30`，SFM 导入后实际以 `172.19.0.1/30` 运行（客户端行为）。
-  由此产生过一个真实故障：系统 DNS 解析器若落在此网段会被 `route_exclude_address` 排除逻辑误伤，
-  现象为 DNS 解析链断裂。sb-sync doctor 会检出该问题（输出「系统解析器落在排除段」告警）
+- **三个网段必须互斥**：TUN 网段 `198.51.100.1/30`（TEST-NET-2 保留段）、FakeIP 池
+  `198.18.0.0/15`、`route_exclude_address`（内网直连段）。历史教训：
+  TUN 曾用 `172.19.0.1/30` 落在排除段 `172.16.0.0/12` 内 → 劫持 DNS 包绕过 TUN →
+  系统解析器黑洞（尸检 001）；SFM 不会改写 TUN 网段，产物写什么就是什么。
+  sb-sync doctor 会检出「系统解析器落在排除段」问题
 - **Local Profile 无自动更新**：SFM 对 Local Profile 不做任何自动拉取，更新全靠上面「日常更新循环」
 - **profile 内容漂移**：SFM 保存 profile 时会重写 `experimental` 段（如补 `external_ui`），
   属正常现象，不影响与产物的一致性比对（比对时排除该段）

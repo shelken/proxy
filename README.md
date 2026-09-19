@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **统一底模**：全平台标准化 sing-box 底模，包含双入站、内网穿透与 10 大分流策略组
+- **统一底模**：全平台标准化 sing-box 底模，包含双入站、内网穿透与 22 大分流策略组
 - **sb-sync 设备同步**：Rust 单二进制（约 2MB），任意 arm Mac 上一条命令完成底模更新、订阅装配、本地产出
 - **分层网络自检**：`sb-sync doctor` 逐层定位 DNS / 直连 / 代理链路问题
 - **纯本地沙箱验证**：基于 Lima VM 仿真双入站与路由表，毫秒级黑盒诊断分流链路
@@ -81,6 +81,18 @@ just test-sandbox  # Lima VM 沙箱网络行为测试
 | `japansite` | `proxy` | 优先跟随主代理，备选日本节点 |
 | `opencode` | `proxy` | 优先跟随主代理，备选全量节点 |
 | `zai` | `proxy` | z.ai（智谱 GLM）家族域名，优先跟随主代理 |
+| `hk` | 首个命中节点 | 地区组：名称匹配香港正则，无节点时兜底 `proxy` |
+| `jp` | 首个命中节点 | 地区组：名称匹配日本正则，无节点时兜底 `proxy` |
+| `us` | 首个命中节点 | 地区组：名称匹配美国正则，无节点时兜底 `proxy` |
+| `tw` | 首个命中节点 | 地区组：名称匹配台湾正则，无节点时兜底 `proxy` |
+| `sg` | 首个命中节点 | 地区组：名称匹配新加坡正则，无节点时兜底 `proxy` |
+| `kr` | 首个命中节点 | 地区组：名称匹配韩国正则，无节点时兜底 `proxy` |
+| `microsoft` | `proxy` | Microsoft 域名（blackmatrix7），可切直连 |
+| `apple` | `direct` | Apple 域名（blackmatrix7），直连优先，与 `appleai` 互不重叠 |
+| `paypal` | `direct` | PayPal 域名（blackmatrix7），直连优先 |
+| `grok` | `proxy` | Grok (xAI) 域名，来源 Loon 个人规则 |
+| `1024` | `proxy` | 域名关键词 `1024proxy`，来源 Loon 个人规则 |
+| `tailscale` | `proxy` | Tailscale 场景组，暂无域名规则，按需切换 |
 
 ## 目录索引
 

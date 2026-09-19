@@ -65,3 +65,17 @@ TUN 网段改用 `198.18.0.1/30`（RFC 2544 基准测试保留网段，真实网
   2. `dig +short +time=2 +tries=1 <从未访问过的域名>`（用随机子域避开一切缓存，如 `test$(date +%s).example.com` 的 NS 或直接一个生僻域名）必须在 2s 内返回或 NXDOMAIN，超时即失败
 - UDP"连通性测试"不要用 `nc -vzu`（UDP 无连接恒假阴性）；以"是否收到预期应答"为准（dig 有输出或明确 NXDOMAIN）
 - 内核侧零日志 + 系统栈超时的组合 = 包没进内核，先查路由表（`netstat -rn | grep <网段>`）再查内核配置
+
+## 后续补充（同日引入 FakeIP 时追加）
+
+1. **"SFM 会把 TUN 网段改写为 172.19.0.1/30"是当时的错误归因**。实机验证
+   （`scutil --dns` 解析器 = 配置写的 198.18.0.2；源码 `libbox/tun.go` 平台接口
+   原样透传 `Inet4Address`）：SFM/libbox 完全尊重配置里的 `tun.address`，不改写。
+   当时 scutil 看到 172.19.0.2 只是因为产物本来就是旧底模生成的 172.19。
+2. **FakeIP 引入后的新约束**：fakeip 池与 TUN 网段也必须互斥。
+   源码 `dns/transport/fakeip/store.go` 分配是**从池首地址顺序递增**
+   （`inet4Current = inet4Range.Addr().Next()`，即 198.18.0.1 起），
+   TUN 若落在池内会与假 IP 争用地址。
+3. **最终网段方案**：TUN `198.51.100.1/30`（TEST-NET-2，不在排除段、不在池内）
+   + FakeIP 池 `198.18.0.0/15` + 排除段不动。三方互斥已固化为
+   `template.test.ts::"TUN 网段与排除段、FakeIP 池三方互斥"` 断言。
