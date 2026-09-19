@@ -25,6 +25,7 @@
     }
   ],
   "dns": {
+    "strategy": "ipv4_only",
     "servers": [
       {
         "type": "udp",
@@ -73,6 +74,14 @@
         ],
         "action": "route",
         "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject"
       },
       {
         "rule_set": [
@@ -384,6 +393,98 @@
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "outbounds": [
+        "SelfHost",
+        ".*"
+      ],
+      "default": "SelfHost"
+    },
+    {
+      "type": "selector",
+      "tag": "openai",
+      "outbounds": [
+        "SelfHost",
+        "proxy",
+        "(?i)(港|日本|台湾|GPT|美)"
+      ],
+      "default": "SelfHost"
+    },
+    {
+      "type": "selector",
+      "tag": "gemini",
+      "outbounds": [
+        "openai",
+        "SelfHost",
+        "proxy",
+        "(?i)(日本|川日|东京|大阪|JP|Japan)"
+      ],
+      "default": "openai"
+    },
+    {
+      "type": "selector",
+      "tag": "dev",
+      "outbounds": [
+        "SelfHost",
+        "proxy",
+        "(?i)(港|HK|Hong)"
+      ],
+      "default": "SelfHost"
+    },
+    {
+      "type": "selector",
+      "tag": "adultnsfw",
+      "outbounds": [
+        "SelfHost",
+        "proxy",
+        "direct",
+        "(?i)(vps|hys|港)"
+      ],
+      "default": "SelfHost"
+    },
+    {
+      "type": "selector",
+      "tag": "appleai",
+      "outbounds": [
+        "direct",
+        "SelfHost",
+        "proxy"
+      ],
+      "default": "direct"
+    },
+    {
+      "type": "selector",
+      "tag": "ptcg",
+      "outbounds": [
+        "SelfHost",
+        "proxy",
+        "direct",
+        "(?i)(日本|JP)"
+      ],
+      "default": "SelfHost"
+    },
+    {
+      "type": "selector",
+      "tag": "japansite",
+      "outbounds": [
+        "proxy",
+        "SelfHost",
+        "(?i)(日本|川日|东京|大阪|JP|Japan)"
+      ],
+      "default": "proxy"
+    },
+    {
+      "type": "selector",
+      "tag": "opencode",
+      "outbounds": [
+        "proxy",
+        "SelfHost",
+        ".*"
+      ],
+      "default": "proxy"
     }
   ]
 }
