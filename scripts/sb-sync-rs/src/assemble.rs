@@ -132,18 +132,12 @@ pub fn merge_local_config(template: &mut Value, local: &Value) {
 
 /// 正则字符串 → regex（TS 版 (?i) 前缀语义对齐）。非法正则返回 None（该项跳过，不 fail）。
 fn compile_pattern(item: &str) -> Option<regex::Regex> {
-    let (pat, flags) = match item.strip_prefix("(?i)") {
-        Some(rest) => (rest, "(?i)"),
-        None => (item, ""),
-    };
-    // regex crate 用 (?i) 内联 flag 表达大小写不敏感
-    let _ = flags;
-    regex::Regex::new(&if item.starts_with("(?i)") {
-        pat.to_string()
-    } else {
-        item.to_string()
-    })
-    .ok()
+    // strip 后必须重新拼回 (?i)：直接用剥掉前缀的 pat 编译会变成大小写敏感，
+    // 节点名的小写国家后缀（hk-01 等）全部漏匹配。
+    match item.strip_prefix("(?i)") {
+        Some(rest) => regex::Regex::new(&format!("(?i){rest}")).ok(),
+        None => regex::Regex::new(item).ok(),
+    }
 }
 
 /// 策略组填充：底模声明 selector/urltest 的 outbounds 占位项展开为真实节点标签。
@@ -237,4 +231,52 @@ pub fn build_config(template: &Value, input: &AssembleInput) -> Result<Value, St
     tpl["outbounds"] = Value::Array(outbounds);
 
     Ok(tpl)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：(?i) 前缀必须保留大小写不敏感语义。
+    /// 修复前 strip 掉前缀后直接编译，小写节点名（hk-02 等）全部漏匹配。
+    #[test]
+    fn case_insensitive_prefix_is_preserved() {
+        let re = compile_pattern("(?i)(港|HK|Hong)").expect("编译失败");
+        assert!(re.is_match("HK-01"));
+        assert!(re.is_match("hk-02"));
+        assert!(re.is_match("HkNode"));
+        assert!(!re.is_match("JP-01"));
+
+        let re2 = compile_pattern("(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)").unwrap();
+        assert!(re2.is_match("jp-osaka-01"));
+        assert!(re2.is_match("JP-01"));
+
+        // 无前缀的模式保持原语义（大小写敏感）
+        let re3 = compile_pattern("HK").unwrap();
+        assert!(re3.is_match("HK-01"));
+        assert!(!re3.is_match("hk-02"));
+    }
+
+    /// 回归：分组填充端到端——底模 HK 组 (?i) 模式应命中小写节点。
+    #[test]
+    fn hk_group_matches_lowercase_tags() {
+        let tpl = crate::template::embedded_template();
+        let input = AssembleInput {
+            sources: "hy2://pass@192.0.2.1:8388#hk-02".into(),
+            local: None,
+            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        };
+        let config = build_config(&tpl, &input).unwrap();
+        let hk = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["tag"] == "hk")
+            .expect("hk 组缺失");
+        let expanded = hk["outbounds"].as_array().unwrap();
+        assert!(
+            expanded.iter().any(|t| t == "hk-02"),
+            "hk 组应包含小写节点 hk-02，实际: {expanded:?}"
+        );
+    }
 }
