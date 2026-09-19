@@ -4,7 +4,7 @@
       "type": "tun",
       "tag": "tun-in",
       "address": [
-        "198.18.0.1/30"
+        "198.51.100.1/30"
       ],
       "auto_route": true,
       "dns_mode": "hijack",
@@ -25,17 +25,17 @@
     }
   ],
   "dns": {
-    "strategy": "ipv4_only",
+    "strategy": "prefer_ipv4",
+    "optimistic": true,
     "servers": [
       {
         "type": "local",
         "tag": "dns-system"
       },
       {
-        "type": "udp",
-        "tag": "dns-foreign",
-        "server": "1.1.1.1",
-        "detour": "proxy"
+        "type": "fakeip",
+        "tag": "dns-fakeip",
+        "inet4_range": "198.18.0.0/15"
       }
     ],
     "rules": [
@@ -48,9 +48,16 @@
           "ChinaMax-dns"
         ],
         "server": "dns-system"
+      },
+      {
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "dns-fakeip"
       }
     ],
-    "final": "dns-foreign"
+    "final": "dns-system"
   },
   "route": {
     "auto_detect_interface": true,
