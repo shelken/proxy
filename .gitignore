@@ -3,17 +3,11 @@
 __pycache__/
 *.pyc
 
-# 私有拓扑（含真实地址、域名与节点），只提交 .example 模板
-config/sing-box/local/*.json
-!config/sing-box/local/*.example
-
-# 生成产物
-config/sing-box/conf.d/45-ruleset.json
+# 规则生成产物
 config/rules/generated/
 
-# sing-box 运行期文件
+# sing-box 运行期缓存与数据库
 config/sing-box/cache.db
 
 # 本地私密环境变量
 .env*
-20-nodes.json
