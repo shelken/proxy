@@ -28,14 +28,8 @@
     "strategy": "ipv4_only",
     "servers": [
       {
-        "type": "udp",
-        "tag": "dns-internal",
-        "server": "192.168.6.1"
-      },
-      {
-        "type": "udp",
-        "tag": "dns-cn",
-        "server": "223.5.5.5"
+        "type": "local",
+        "tag": "dns-system"
       },
       {
         "type": "udp",
@@ -46,18 +40,14 @@
     ],
     "rules": [
       {
-        "rule_set": [
-          "zone-internal"
-        ],
-        "action": "route",
-        "server": "dns-internal"
+        "clash_mode": "direct",
+        "server": "dns-system"
       },
       {
         "rule_set": [
           "ChinaMax-dns"
         ],
-        "action": "route",
-        "server": "dns-cn"
+        "server": "dns-system"
       }
     ],
     "final": "dns-foreign"
@@ -69,11 +59,14 @@
         "action": "sniff"
       },
       {
-        "rule_set": [
-          "zone-internal"
-        ],
+        "clash_mode": "direct",
         "action": "route",
         "outbound": "direct"
+      },
+      {
+        "clash_mode": "global",
+        "action": "route",
+        "outbound": "proxy"
       },
       {
         "network": "udp",
@@ -177,21 +170,10 @@
     ],
     "final": "proxy",
     "default_domain_resolver": {
-      "server": "dns-cn"
+      "server": "dns-system"
     },
     "default_http_client": "rule-set-dl",
     "rule_set": [
-      {
-        "type": "inline",
-        "tag": "zone-internal",
-        "rules": [
-          {
-            "domain_suffix": [
-              "ooooo.space"
-            ]
-          }
-        ]
-      },
       {
         "type": "remote",
         "tag": "Adult",
@@ -486,5 +468,16 @@
       ],
       "default": "proxy"
     }
-  ]
+  ],
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "external_ui": "ui",
+      "default_mode": "rule"
+    },
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db"
+    }
+  }
 }
