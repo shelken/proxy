@@ -141,14 +141,15 @@ mod tests {
             .iter()
             .find(|o| o["type"] == "selector" && o["tag"] == "proxy")
             .unwrap();
-        assert_eq!(proxy["outbounds"], json!(["SelfHost", "HK-01", "JP-01"]));
+        assert_eq!(proxy["outbounds"], json!(["SelfHost", "SelfHost-node", "HK-01", "JP-01"]));
         assert_eq!(proxy["default"], "SelfHost");
     }
 
     #[test]
     fn private_nodes_first_airport_appended_in_order() {
         let config = assemble(&format!("https://airport.example/sub|{HY2_URI}|{ANYTLS_URI}"));
-        assert_eq!(node_tags_of(&config), vec!["SelfHost", "AnyNode", "HK-01", "JP-01"]);
+        // "SelfHost" 现为 urltest 组的保留 tag，同名节点自动改名
+        assert_eq!(node_tags_of(&config), vec!["SelfHost-node", "AnyNode", "HK-01", "JP-01"]);
     }
 
     #[test]
@@ -157,7 +158,27 @@ mod tests {
         let tags = node_tags_of(&config);
         let set: std::collections::HashSet<&String> = tags.iter().collect();
         assert_eq!(set.len(), tags.len());
-        assert_eq!(tags[0], "SelfHost");
+        assert_eq!(tags[0], "SelfHost-node");
+    }
+
+    #[test]
+    fn selfhost_urltest_group_assembled() {
+        let config = assemble(&format!("{HY2_URI}|https://airport.example/sub"));
+        let groups = config["outbounds"].as_array().unwrap();
+
+        // urltest 组存在，候选由 (?i)(vps|hy2|SelfHost) 展开（命中同名私有节点）
+        let urltest = groups
+            .iter()
+            .find(|o| o["type"] == "urltest" && o["tag"] == "SelfHost")
+            .expect("SelfHost urltest 组缺失");
+        assert_eq!(urltest["outbounds"], json!(["SelfHost-node"]));
+
+        // proxy 组的 "SelfHost" 占位解析为组引用而非被丢弃
+        let proxy = groups
+            .iter()
+            .find(|o| o["type"] == "selector" && o["tag"] == "proxy")
+            .unwrap();
+        assert_eq!(proxy["outbounds"][0], "SelfHost");
     }
 
     #[test]

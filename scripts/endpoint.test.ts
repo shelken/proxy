@@ -102,11 +102,18 @@ describe("parseNodeUri / parseSubscriptionBody", () => {
 describe("buildConfig", () => {
   test("九个策略组齐全，且候选池正确展开", async () => {
     const config = await assemble(`${HY2_URI}|https://airport.example/sub`);
-    const selectors = (config.outbounds ?? []).filter((o) => o.type === "selector");
+    const outbounds = config.outbounds ?? [];
+
+    // SelfHost urltest 组存在且排在主分组前（底模顺序）
+    const selfhost = outbounds.find((o) => o.type === "urltest" && o.tag === "SelfHost");
+    expect(selfhost?.outbounds).toEqual(["SelfHost-node"]);
+
+    const selectors = outbounds.filter((o) => o.type === "selector");
     expect(selectors.map((s) => s.tag)).toEqual(GROUP_TAGS);
 
     const proxy = selectors.find((s) => s.tag === "proxy")!;
-    expect(proxy.outbounds).toEqual(["SelfHost", "HK-01", "JP-01"]);
+    // "SelfHost" 为 urltest 组引用；同名节点让位为 SelfHost-node 由 .* 展开
+    expect(proxy.outbounds).toEqual(["SelfHost", "SelfHost-node", "HK-01", "JP-01"]);
     expect(proxy.default).toBe("SelfHost");
   });
 
@@ -114,7 +121,8 @@ describe("buildConfig", () => {
     const config = await assemble(
       `https://airport.example/sub|${HY2_URI}|${ANYTLS_URI}`,
     );
-    expect(nodeTagsOf(config)).toEqual(["SelfHost", "AnyNode", "HK-01", "JP-01"]);
+    // "SelfHost" 现为 urltest 组的保留 tag，同名节点自动改名
+    expect(nodeTagsOf(config)).toEqual(["SelfHost-node", "AnyNode", "HK-01", "JP-01"]);
   });
 
   test("多源混合与重复名让位，产物内标签唯一", async () => {
@@ -123,7 +131,8 @@ describe("buildConfig", () => {
     );
     const tags = nodeTagsOf(config);
     expect(new Set(tags).size).toBe(tags.length);
-    expect(tags[0]).toBe("SelfHost");
+    // "SelfHost" 为 urltest 组保留 tag，同名节点让位
+    expect(tags[0]).toBe("SelfHost-node");
   });
 
   test("保留标签表与底模的契约一致", () => {

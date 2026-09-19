@@ -90,9 +90,13 @@ export function getReservedTags(): string[] {
   return cachedReservedTags;
 }
 
-/** 主分组之外的分流分组：默认跟随主分组，成员里排上全部节点。 */
+/** 主分组之外的分流分组：默认跟随主分组，成员里排上全部节点。不含 urltest 组与主代理组。 */
 export function getPolicyGroups(): string[] {
-  return getReservedTags().filter((tag) => tag !== "direct" && tag !== "proxy");
+  const tpl = injectedTemplate ?? loadTemplate();
+  const policyTypes = new Set(["selector"]);
+  return (tpl.outbounds ?? [])
+    .filter((o) => policyTypes.has(o.type) && o.tag !== "proxy")
+    .map((o) => o.tag);
 }
 
 export function parseHysteria2(raw: string): OutboundNode {
@@ -395,7 +399,7 @@ export async function buildConfig(
   const tags = nodes.map((node) => node.tag);
 
   const declaredSelectors = (template.outbounds ?? []).filter(
-    (o) => o.type === "selector",
+    (o) => o.type === "selector" || o.type === "urltest",
   );
   const selectorTagSet = new Set<string>(declaredSelectors.map((s) => s.tag));
 
@@ -420,10 +424,8 @@ export async function buildConfig(
     }
     const combined = [...new Set(expanded.filter((t) => t !== sel.tag))];
     return {
-      type: "selector",
-      tag: sel.tag,
+      ...sel,
       outbounds: combined,
-      default: combined[0] ?? "direct",
     };
   });
 

@@ -146,17 +146,21 @@ fn compile_pattern(item: &str) -> Option<regex::Regex> {
     .ok()
 }
 
-/// 策略组填充：底模声明 selector 的 outbounds 占位项展开为真实节点标签。
+/// 策略组填充：底模声明 selector/urltest 的 outbounds 占位项展开为真实节点标签。
 fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
     let declared: Vec<&Value> = template["outbounds"]
         .as_array()
-        .map(|a| a.iter().filter(|o| o["type"] == "selector").collect())
+        .map(|a| {
+            a.iter()
+                .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
+                .collect()
+        })
         .unwrap_or_default();
     let selector_tags: std::collections::HashSet<&str> =
         declared.iter().filter_map(|s| s["tag"].as_str()).collect();
 
     declared
-        .iter()
+        .into_iter()
         .map(|sel| {
             let mut expanded: Vec<String> = Vec::new();
             for item in sel["outbounds"].as_array().map(|a| a.iter()).unwrap_or_default() {
@@ -172,14 +176,11 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
             // 去重 + 排除自身
             let mut seen = std::collections::HashSet::new();
             expanded.retain(|t| t != sel["tag"].as_str().unwrap_or("") && seen.insert(t.clone()));
-            json!({
-                "type": "selector",
-                "tag": sel["tag"],
-                "outbounds": expanded,
-                "default": expanded.first().cloned().unwrap_or_else(|| "direct".into()),
-            })
+            let mut out = sel.clone();
+            out["outbounds"] = json!(expanded);
+            out
         })
-        .collect()
+        .collect::<Vec<Value>>()
 }
 
 #[derive(Default)]
