@@ -11,3 +11,6 @@ config/sing-box/cache.db
 
 # 本地私密环境变量
 .env*
+
+# 本地专有私密配置（包含机器特有的自建节点、特殊内网 DNS 或私有规则）
+config/sing-box/local.json
