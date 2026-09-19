@@ -70,6 +70,7 @@ just test-sandbox  # Lima VM 沙箱网络行为测试
 
 | 策略组 Tag | 默认出口 | 候选池规则 |
 | :--- | :--- | :--- |
+| `SelfHost`（urltest） | 自动测速最快 | 私有节点（tag 匹配 `vps`/`hy2`/`SelfHost`），每 2 分钟测速 |
 | `proxy` | `SelfHost` | 自建私有节点首发，机场专线节点全量追加 |
 | `openai` | `SelfHost` | 优先自建节点，备选港、日、台、美节点 |
 | `gemini` | `openai` | 优先跟随 OpenAI 分组，备选日本节点 |
