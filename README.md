@@ -28,6 +28,7 @@ sb-sync sync
 ```
 
 产物 `~/.config/sing-box/singbox.json` 导入 SFM（Local Profile），菜单栏开关 OFF→ON 重载。
+导入与日常更新详见[用户指南：Mac+SFM](./docs/user-guide/01-mac-sfm.md)。
 
 日常操作：
 
