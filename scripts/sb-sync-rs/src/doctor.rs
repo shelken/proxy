@@ -78,6 +78,49 @@ fn ip_in_cidr(ip: &str, cidr: &str) -> Option<bool> {
     Some((ip_num & mask) == (net_num & mask))
 }
 
+/// TUN 网段冲突检查（001 号尸检根因固化进 check）：
+/// 1) TUN address 与 route_exclude_address 有交集 → exclude 优先级更高，
+///    TUN 自身劫持网段被排除 → 劫持地址不可达 → 系统 DNS 黑洞。
+/// 2) TUN 网段落在私有段（10/8、172.16/12、192.168/16、100.64/10）→ 同类病根。
+/// 返回错误列表；空列表 = 无冲突。
+pub fn tun_conflicts(cfg: &Value) -> Vec<String> {
+    const PRIVATE_V4: [&str; 4] = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"];
+    let tun = cfg["inbounds"]
+        .as_array()
+        .and_then(|a| a.iter().find(|i| i["type"] == "tun"));
+    let Some(tun) = tun else { return Vec::new() };
+    let tun_nets: Vec<&str> = tun["inet4_address"]
+        .as_array()
+        .or_else(|| tun["address"].as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    if tun_nets.is_empty() {
+        return Vec::new();
+    }
+    let excludes: Vec<&str> = tun["route_exclude_address"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    let mut errs = Vec::new();
+    for net in &tun_nets {
+        let base = net.split_once('/').map(|(b, _)| b).unwrap_or(net);
+        for ex in &excludes {
+            if ip_in_cidr(base, ex).unwrap_or(false) {
+                errs.push(format!(
+                    "TUN 网段 {net} 被自身 route_exclude_address {ex} 覆盖 (001 号尸检同款黑洞!)"
+                ));
+            }
+        }
+        for p in &PRIVATE_V4 {
+            if ip_in_cidr(base, p).unwrap_or(false) {
+                errs.push(format!("TUN 网段 {net} 落在私有段 {p} 内，与内网/Tailscale 路由冲突"));
+            }
+        }
+    }
+    errs
+}
+
 /// 配置层检查：sing-box check（有内核才做）+ 系统解析器网段判定。
 fn config_layer(cfg: Option<&Value>) -> Vec<String> {
     let mut lines = Vec::new();

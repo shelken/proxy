@@ -344,6 +344,15 @@ fn cmd_check() -> Result<(), String> {
     }
     result?;
 
+    // 001 号尸检根因固化：TUN 网段冲突（exclude 覆盖 / 私有段重叠）fail-fast
+    let conflicts = doctor::tun_conflicts(&cfg);
+    for e in &conflicts {
+        eprintln!("[sb-sync] ✗ {e}");
+    }
+    if !conflicts.is_empty() {
+        return Err(format!("TUN 网段冲突 {} 处，先修正 template/local 再 sync", conflicts.len()));
+    }
+
     let nodes = cfg["outbounds"]
         .as_array()
         .map(|a| a.iter().filter(|o| o["server"].is_string()).count())
@@ -452,5 +461,50 @@ mod tests {
     fn mask_uri_keeps_tag() {
         assert_eq!(mask_uri("hysteria2://pass@1.2.3.4:443#MyNode"), "hysteria2://***#MyNode");
         assert_eq!(mask_uri("https://sub.example.com/x"), "https://***");
+    }
+
+    #[test]
+    fn tun_conflict_exclude_covers_tun_is_error() {
+        // 001 号尸检复现：TUN 172.19.0.1/30 被 exclude 172.16.0.0/12 覆盖
+        let cfg: Value = serde_json::from_str(
+            r#"{"inbounds":[{"type":"tun","inet4_address":["172.19.0.1/30"],
+                "route_exclude_address":["10.0.0.0/8","172.16.0.0/12"]}]}"#,
+        )
+        .unwrap();
+        let errs = doctor::tun_conflicts(&cfg);
+        // 172.19.0.1/30 既被 exclude 覆盖、也在私有段内：两条规则各自报
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(errs[0].contains("001"));
+        assert!(errs[1].contains("172.16.0.0/12"));
+    }
+
+    #[test]
+    fn tun_conflict_current_template_shape_passes() {
+        // 现行模板形态：TUN 在 198.51.100.0/24 测试段，exclude 全私有段 → 无冲突
+        let cfg: Value = serde_json::from_str(
+            r#"{"inbounds":[{"type":"tun","inet4_address":["198.51.100.1/30"],
+                "route_exclude_address":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10"]}]}"#,
+        )
+        .unwrap();
+        assert!(doctor::tun_conflicts(&cfg).is_empty());
+    }
+
+    #[test]
+    fn tun_conflict_private_overlap_is_error() {
+        let cfg: Value = serde_json::from_str(
+            r#"{"inbounds":[{"type":"tun","address":["192.168.6.1/24"]}]}"#,
+        )
+        .unwrap();
+        let errs = doctor::tun_conflicts(&cfg);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].contains("192.168.0.0/16"));
+    }
+
+    #[test]
+    fn tun_conflict_no_tun_or_no_address_is_silent() {
+        let no_tun: Value = serde_json::from_str(r#"{"inbounds":[{"type":"mixed"}]}"#).unwrap();
+        assert!(doctor::tun_conflicts(&no_tun).is_empty());
+        let no_addr: Value = serde_json::from_str(r#"{"inbounds":[{"type":"tun"}]}"#).unwrap();
+        assert!(doctor::tun_conflicts(&no_addr).is_empty());
     }
 }
