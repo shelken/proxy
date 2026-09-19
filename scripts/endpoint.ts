@@ -3,12 +3,7 @@
  * 端点核心：单 URL 契约（`sub` / `node` / `dns` / `zone`）→ 完整 sing-box 配置。
  *
  * 契约来自 Issue #8／#13：零上传、零会话、零留存。底模随仓库提供，协议解析交给
- * sublink-worker 容器，最终装配（底模 + 节点 + 9 个策略组）由本文件完成——容器实测
- * 表明 sublink 的构建器会无条件覆写 route.rule_set 与 route.final、且不创建本仓库需要的
- * 策略组，所以它只能当解析后端用。
- *
- * 本文件不解析任何代理协议；仓库内不保留手写协议解析代码。
- * 后续部署（Docker / Worker）只需在 HTTP 外壳里调用 buildConfig 并回写 JSON。
+ * sublink-worker 容器，最终装配（底模 + 节点 + 9 个策略组）由本文件完成。
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -22,8 +17,58 @@ const SUBLINK_URL = `http://127.0.0.1:${SUBLINK_PORT}`;
 const ROOT_DIR = resolve(import.meta.dir, "..");
 const TEMPLATE_PATH = resolve(ROOT_DIR, "config/sing-box/template.json");
 
+export interface OutboundNode {
+  type: string;
+  tag: string;
+  server?: string;
+  server_port?: number;
+  password?: string;
+  obfs?: {
+    type: string;
+    password?: string;
+  };
+  tls?: {
+    enabled: boolean;
+    server_name?: string;
+    insecure?: boolean;
+  };
+  outbounds?: string[];
+  default?: string;
+  [key: string]: unknown;
+}
+
+export interface SingBoxTemplate {
+  inbounds?: OutboundNode[];
+  dns?: {
+    servers?: Array<{ tag: string; server?: string; [key: string]: unknown }>;
+    rules?: Array<{ [key: string]: unknown }>;
+    strategy?: string;
+    [key: string]: unknown;
+  };
+  route?: {
+    rules?: Array<{ [key: string]: unknown }>;
+    rule_set?: Array<{ tag: string; rules?: unknown; [key: string]: unknown }>;
+    [key: string]: unknown;
+  };
+  outbounds?: OutboundNode[];
+  [key: string]: unknown;
+}
+
+export interface BuildConfigInput {
+  source?: string;
+  sub?: string;
+  nodes?: Array<string | OutboundNode>;
+  dns?: string;
+  zone?: string;
+}
+
+export interface BuildDeps {
+  parse?: (source: string) => Promise<OutboundNode[]>;
+  template?: SingBoxTemplate;
+}
+
 /** 出站里非实体节点的类型：解析后端返回的分组与内置出站，装配时一律丢弃。 */
-export const NON_NODE_TYPES = new Set([
+export const NON_NODE_TYPES = new Set<string>([
   "selector",
   "urltest",
   "direct",
@@ -31,14 +76,19 @@ export const NON_NODE_TYPES = new Set([
   "dns",
 ]);
 
+function loadTemplate(): SingBoxTemplate {
+  return JSON.parse(readFileSync(TEMPLATE_PATH, "utf-8")) as SingBoxTemplate;
+}
+
 /** 底模 route.rules 引用的出站标签，节点名撞上时必须让位。 */
-export const RESERVED_TAGS = (loadTemplate().outbounds ?? []).map((o) => o.tag);
+export const RESERVED_TAGS: string[] = (loadTemplate().outbounds ?? []).map((o) => o.tag);
 
 /** 主分组之外的分流分组：默认跟随主分组，成员里排上全部节点。 */
-export const POLICY_GROUPS = RESERVED_TAGS.filter(
+export const POLICY_GROUPS: string[] = RESERVED_TAGS.filter(
   (tag) => tag !== "direct" && tag !== "proxy",
 );
-export function parseHysteria2(raw) {
+
+export function parseHysteria2(raw: string): OutboundNode {
   const u = new URL(raw);
   const tag = decodeURIComponent(u.hash ? u.hash.slice(1) : "SelfHost");
   const auth = decodeURIComponent(u.username || u.password || "");
@@ -48,7 +98,7 @@ export function parseHysteria2(raw) {
   const obfsType = u.searchParams.get("obfs");
   const obfsPassword = u.searchParams.get("obfs-password");
 
-  const outbound = {
+  const outbound: OutboundNode = {
     type: "hysteria2",
     tag,
     server: u.hostname,
@@ -69,8 +119,8 @@ export function parseHysteria2(raw) {
   return outbound;
 }
 
-export function parseNodeUri(uri) {
-  if (typeof uri !== "string") return uri;
+export function parseNodeUri(uri: unknown): OutboundNode | null {
+  if (typeof uri !== "string") return null;
   const trimmed = uri.trim();
   if (trimmed.startsWith("hysteria2://") || trimmed.startsWith("hy2://")) {
     return parseHysteria2(trimmed);
@@ -78,7 +128,7 @@ export function parseNodeUri(uri) {
   return null;
 }
 
-export function findSingBox() {
+export function findSingBox(): string {
   if (process.env.SING_BOX) return process.env.SING_BOX;
   const which = Bun.which("sing-box");
   if (which) return which;
@@ -93,11 +143,7 @@ export function findSingBox() {
   return "sing-box";
 }
 
-function loadTemplate() {
-  return JSON.parse(readFileSync(TEMPLATE_PATH, "utf-8"));
-}
-
-async function isSublinkReady() {
+async function isSublinkReady(): Promise<boolean> {
   try {
     const res = await fetch(`${SUBLINK_URL}/`, {
       signal: AbortSignal.timeout(1000),
@@ -109,7 +155,7 @@ async function isSublinkReady() {
 }
 
 /** 解析后端就绪：复用已在运行的容器，否则按固定镜像拉起并等它就绪。 */
-export async function ensureSublink() {
+export async function ensureSublink(): Promise<void> {
   const running = Bun.spawnSync([
     "docker",
     "ps",
@@ -145,10 +191,8 @@ export async function ensureSublink() {
 
 /**
  * 交给解析后端取出实体节点出站。
- *
- * 只带 `config`，不带任何预先登记的配置 ID：底模由本仓库装配，解析后端不参与、也不上传。
  */
-export async function parseViaSublink(source) {
+export async function parseViaSublink(source: string): Promise<OutboundNode[]> {
   await ensureSublink();
   const url = new URL(`${SUBLINK_URL}/singbox`);
   url.searchParams.set("config", source);
@@ -159,15 +203,15 @@ export async function parseViaSublink(source) {
       `解析后端返回 HTTP ${res.status}：${(await res.text()).trim()}`,
     );
   }
-  const payload = await res.json();
+  const payload = (await res.json()) as { outbounds?: OutboundNode[] };
   return (payload.outbounds ?? []).filter(
     (outbound) => !NON_NODE_TYPES.has(outbound.type),
   );
 }
 
 /** 节点标签唯一化：让开保留标签与彼此重名，名字只影响显示。 */
-function assignTags(nodes) {
-  const taken = new Set(RESERVED_TAGS);
+function assignTags(nodes: OutboundNode[]): void {
+  const taken = new Set<string>(RESERVED_TAGS);
   nodes.forEach((node, index) => {
     const base = String(node.tag ?? "").trim() || `node-${index + 1}`;
     let tag = base;
@@ -183,21 +227,22 @@ function assignTags(nodes) {
 
 /**
  * 单 URL 契约的组装函数：后续 HTTP 外壳直接调用它。
- *
- * `deps.parse` 与 `deps.template` 可注入，便于不依赖 Docker 的单元测试。
  */
-export async function buildConfig(input, deps = {}) {
+export async function buildConfig(
+  input: BuildConfigInput,
+  deps: BuildDeps = {},
+): Promise<SingBoxTemplate> {
   const parse = deps.parse ?? parseViaSublink;
   const template = structuredClone(deps.template ?? loadTemplate());
   const { source, sub, nodes: rawNodes = [], dns, zone } = input;
 
-  const privateNodes = [];
-  const airportNodes = [];
+  const privateNodes: OutboundNode[] = [];
+  const airportNodes: OutboundNode[] = [];
 
   // 1. 私有节点严格处理（严格保留顺序并固定在实体节点首部，默认作为首选）
   for (const n of rawNodes) {
     if (typeof n === "object" && n !== null) {
-      privateNodes.push(n);
+      privateNodes.push(n as OutboundNode);
     } else if (typeof n === "string") {
       const parsed = parseNodeUri(n);
       if (parsed) {
@@ -214,7 +259,7 @@ export async function buildConfig(input, deps = {}) {
     airportNodes.push(...(await parse(sub)));
   } else if (source) {
     const lines = source.split("\n").map((l) => l.trim()).filter(Boolean);
-    const subLines = [];
+    const subLines: string[] = [];
     for (const line of lines) {
       const parsed = parseNodeUri(line);
       if (parsed) {
@@ -258,11 +303,11 @@ export async function buildConfig(input, deps = {}) {
   const declaredSelectors = (template.outbounds ?? []).filter(
     (o) => o.type === "selector",
   );
-  const selectorTagSet = new Set(declaredSelectors.map((s) => s.tag));
+  const selectorTagSet = new Set<string>(declaredSelectors.map((s) => s.tag));
 
-  const populatedSelectors = declaredSelectors.map((sel) => {
-    const expanded = [];
-    for (const item of (sel.outbounds ?? [])) {
+  const populatedSelectors: OutboundNode[] = declaredSelectors.map((sel) => {
+    const expanded: string[] = [];
+    for (const item of sel.outbounds ?? []) {
       if (item === "direct" || selectorTagSet.has(item) || tags.includes(item)) {
         expanded.push(item);
       } else {
@@ -298,13 +343,19 @@ export async function buildConfig(input, deps = {}) {
   };
 }
 
+export interface ServeOptions {
+  port?: number;
+  hostname?: string;
+  deps?: BuildDeps;
+}
+
 /** HTTP 外壳：把单 URL 契约直接暴露成可 GET 的端点，客户端拿到的就是本函数的响应体。 */
 export async function serveEndpoint({
   port = 8080,
   hostname = "127.0.0.1",
   deps = {},
-} = {}) {
-  const fail = (status, message) =>
+}: ServeOptions = {}) {
+  const fail = (status: number, message: string) =>
     new Response(JSON.stringify({ error: message }) + "\n", {
       status,
       headers: { "content-type": "application/json; charset=utf-8" },
@@ -338,8 +389,9 @@ export async function serveEndpoint({
         return new Response(JSON.stringify(config, null, 2) + "\n", {
           headers: { "content-type": "application/json; charset=utf-8" },
         });
-      } catch (error) {
-        return fail(502, error.message);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return fail(502, msg);
       }
     },
   });
@@ -350,8 +402,8 @@ export async function serveEndpoint({
   return server;
 }
 
-function parseEnvContent(content) {
-  const env = {};
+function parseEnvContent(content: string): Record<string, string> {
+  const env: Record<string, string> = {};
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -370,8 +422,14 @@ function parseEnvContent(content) {
   return env;
 }
 
+interface ResolvedSource {
+  sub?: string;
+  source?: string;
+  nodes: string[];
+}
+
 /** 解析源参数，支持 .env、本地文件或直接的订阅 URL。 */
-function resolveSource(sourceArg, nodeLinks) {
+function resolveSource(sourceArg: string, nodeLinks: string[]): ResolvedSource {
   const filePath = resolve(process.cwd(), sourceArg);
   if (existsSync(filePath)) {
     const content = readFileSync(filePath, "utf-8");
@@ -398,8 +456,20 @@ function resolveSource(sourceArg, nodeLinks) {
   return { source: [sourceArg, ...nodeLinks].join("\n"), nodes: [] };
 }
 
-function parseArgs(argv) {
-  const options = {
+interface ParsedCliOptions {
+  source?: string;
+  output?: string;
+  sub?: string;
+  dns?: string;
+  zone?: string;
+  nodes: string[];
+  serve: boolean;
+  port?: number;
+  host?: string;
+}
+
+function parseArgs(argv: string[]): ParsedCliOptions {
+  const options: ParsedCliOptions = {
     source: undefined,
     output: undefined,
     dns: undefined,
@@ -409,7 +479,7 @@ function parseArgs(argv) {
     port: undefined,
     host: undefined,
   };
-  const positionals = [];
+  const positionals: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--node") options.nodes.push(argv[++i]);
@@ -433,7 +503,7 @@ function parseArgs(argv) {
   return options;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
   if (options.serve) {
@@ -460,15 +530,12 @@ async function main() {
   const outputPath = resolve(process.cwd(), options.output ?? "/tmp/singbox.json");
   const resolved = options.sub
     ? { sub: options.sub, nodes: options.nodes }
-    : resolveSource(options.source, options.nodes);
+    : resolveSource(options.source!, options.nodes);
   const config = await buildConfig({
     ...resolved,
     dns: options.dns,
     zone: options.zone,
   });
-  const nodeCount = config.outbounds.filter(
-    (outbound) => !NON_NODE_TYPES.has(outbound.type),
-  ).length;
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
@@ -478,13 +545,14 @@ async function main() {
     process.stderr.write(check.stderr);
     process.exit(1);
   }
-  console.log(`[sing-box] sing-box check 通过（规则集 ${config.route.rule_set.length}）`);
+  console.log(`[sing-box] sing-box check 通过（规则集 ${(config.route?.rule_set as unknown[])?.length ?? 0}）`);
   console.log(`输出路径: ${outputPath}`);
 }
 
 if (import.meta.main) {
-  main().catch((error) => {
-    console.error(`ERROR: ${error.message}`);
+  main().catch((error: unknown) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`ERROR: ${msg}`);
     process.exit(1);
   });
 }

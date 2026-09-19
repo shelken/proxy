@@ -3,23 +3,62 @@
  *
  * 特性：
  * 1. 纯本地等价行为：直接复用 config/rules/generated/singbox/*.srs 本地编译产物，零远程下载。
- * 2. 真实节点注入：挂载从 .env 解析装配的 20-nodes.json 实体节点与策略组。
+ * 2. 真实节点注入：挂载从 .env 解析装配的实体节点与策略组。
  * 3. 毫秒级就绪：内核在 500ms 内启动完成，立即注入流量并抓取完整决策链路。
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { buildConfig } from "./endpoint.mjs";
+import { buildConfig } from "./endpoint.ts";
 
-const domain = process.argv[2] || "google.com";
+const domain: string = process.argv[2] || "google.com";
 const VM_NAME = "proxy-test";
 
-function sh(cmd) {
-  const p = Bun.spawnSync(["limactl", "shell", "--workdir", "/work", VM_NAME, "sh", "-c", cmd]);
-  return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+interface SingBoxRuleSet {
+  type: string;
+  tag: string;
+  format?: string;
+  path?: string;
+  [key: string]: unknown;
 }
 
-function parseEnv(content) {
-  const env = {};
+interface SingBoxConfig {
+  log?: { level?: string };
+  route: {
+    rule_set: SingBoxRuleSet[];
+    rules?: Record<string, unknown>[];
+    default_http_client?: unknown;
+    [key: string]: unknown;
+  };
+  default_http_client?: unknown;
+  http_clients?: unknown;
+  [key: string]: unknown;
+}
+interface ShellResult {
+  code: number | null;
+  out: string;
+  err: string;
+}
+
+function sh(cmd: string): ShellResult {
+  const p = Bun.spawnSync([
+    "limactl",
+    "shell",
+    "--workdir",
+    "/work",
+    VM_NAME,
+    "sh",
+    "-c",
+    cmd,
+  ]);
+  return {
+    code: p.exitCode,
+    out: p.stdout.toString(),
+    err: p.stderr.toString(),
+  };
+}
+
+function parseEnv(content: string): Record<string, string> {
+  const env: Record<string, string> = {};
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -27,7 +66,10 @@ function parseEnv(content) {
     if (eq === -1) continue;
     const k = trimmed.slice(0, eq).trim();
     let v = trimmed.slice(eq + 1).trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    if (
+      (v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'"))
+    ) {
       v = v.slice(1, -1);
     }
     env[k] = v;
@@ -35,7 +77,7 @@ function parseEnv(content) {
   return env;
 }
 
-async function main() {
+async function main(): Promise<void> {
   console.log(`\n🔍 [TRACE] 开始全链路探测: ${domain}`);
 
   // 1. 从 .env 装配单份完整配置
@@ -49,7 +91,7 @@ async function main() {
     throw new Error("未在 .env 中找到 SUB_URL 或 NODE_URI，无法装配真实节点配置");
   }
 
-  const config = await buildConfig({ sub, nodes });
+  const config = (await buildConfig({ sub, nodes })) as unknown as SingBoxConfig;
 
   config.log = { level: "debug" };
   delete config.route.default_http_client;
@@ -57,7 +99,7 @@ async function main() {
   delete config.http_clients;
 
   // 2. 本地规则集等价模型：将 remote 规则集重写为本地 /work/sing-box/rules/*.srs (零网络下载)
-  config.route.rule_set = config.route.rule_set.map((rs) => {
+  config.route.rule_set = config.route.rule_set.map((rs: SingBoxRuleSet) => {
     if (rs.type === "remote") {
       return {
         type: "local",
@@ -77,12 +119,21 @@ async function main() {
     cp -r /host-home/Code/active/proxy/config/rules/generated/singbox/. /work/sing-box/rules/
   `);
   // 将单一配置推入 VM
-  const configSync = Bun.spawnSync([
-    "limactl", "shell", "--workdir", "/work", VM_NAME,
-    "sh", "-c", "cat > /work/sing-box/config.json"
-  ], {
-    stdin: Buffer.from(JSON.stringify(config, null, 2))
-  });
+  const configSync = Bun.spawnSync(
+    [
+      "limactl",
+      "shell",
+      "--workdir",
+      "/work",
+      VM_NAME,
+      "sh",
+      "-c",
+      "cat > /work/sing-box/config.json",
+    ],
+    {
+      stdin: Buffer.from(JSON.stringify(config, null, 2)),
+    },
+  );
   if (configSync.exitCode !== 0) {
     throw new Error(`同步 config.json 失败: ${configSync.stderr.toString()}`);
   }
@@ -98,27 +149,30 @@ async function main() {
   // 5. 启动内核进程（先清理旧残留，再后台捕获输出）
   sh("sudo -n pkill -9 -x sing-box || true; sleep 0.3");
   console.log(`[TRACE] 启动沙箱 sing-box 内核...`);
-  const sbProc = Bun.spawn([
-    "limactl",
-    "shell",
-    "--workdir",
-    "/work/sing-box",
-    VM_NAME,
-    "sudo",
-    "-n",
-    "/opt/proxy-test/bin/sing-box",
-    "run",
-    "-D",
-    "/work/sing-box",
-    "-c",
-    "/work/sing-box/config.json",
-  ], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const sbProc = Bun.spawn(
+    [
+      "limactl",
+      "shell",
+      "--workdir",
+      "/work/sing-box",
+      VM_NAME,
+      "sudo",
+      "-n",
+      "/opt/proxy-test/bin/sing-box",
+      "run",
+      "-D",
+      "/work/sing-box",
+      "-c",
+      "/work/sing-box/config.json",
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
 
   let logs = "";
-  const appendLog = (chunk) => {
+  const appendLog = (chunk: string | Uint8Array) => {
     logs += chunk.toString();
   };
 
@@ -144,7 +198,10 @@ async function main() {
     sbProc.kill();
   };
 
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit(0);
+  });
   process.on("exit", cleanup);
 
   // 等待内核就绪（纯本地秒级启动）
@@ -189,19 +246,19 @@ async function main() {
   for (const line of logs.split("\n")) {
     if (line.includes("sniffed protocol:")) {
       const m = line.match(/sniffed protocol:\s*(\w+)/);
-      if (m) sniffProtocol = m[1].toUpperCase();
+      if (m && m[1]) sniffProtocol = m[1].toUpperCase();
     }
     if (line.includes("router: match")) {
       const candidate = line.replace(/.*router:\s*/, "").trim();
       if (!candidate.includes("=> sniff")) {
         matchedRule = candidate;
         const m = matchedRule.match(/=>\s*route\((\w+)\)/);
-        if (m) policyGroup = m[1];
+        if (m && m[1]) policyGroup = m[1];
       }
     }
     if (line.includes("outbound/") && line.includes(domain)) {
       const m = line.match(/outbound\/\w+\[([^\]]+)\]:\s*outbound connection/);
-      if (m) {
+      if (m && m[1]) {
         leafNode = m[1];
       }
     }
@@ -222,7 +279,7 @@ async function main() {
   console.log(`======================================================\n`);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error("Trace 执行出错:", err);
   process.exit(1);
 });

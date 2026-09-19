@@ -24,7 +24,7 @@ test:
 
 # 运行指定测试（按关键字过滤，如 just run-test cmcc）
 run-test name:
-    @bun run scripts/test-by-name.mjs {{name}}
+    @bun run scripts/test-by-name.ts {{name}}
 
 # 中国移动签到插件测试
 test-sign:
@@ -48,40 +48,18 @@ vm-delete:
     limactl delete --force {{vm_name}}
 
 # --- 沙箱测试 ---
-# 同步点：把被测配置与装配代码复制到 VM 内的可写工作目录。
-# 只复制手写的公开层模板：生成的登记引用磁盘上的规则集产物，而沙箱里既没有那些产物，
-# 它的 tag 也会与测试覆盖层的内联定义撞车。
+# 同步点：把生产底模、规则集与测试用例复制到 VM，并生成本地规则等价配置
 sync-sandbox:
     {{lima_shell}} rm -rf /work/sing-box
-    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/conf.d /work/sing-box/rules
+    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/rules
     {{lima_shell}} cp -r {{repo_in_guest}}/config/rules/generated/singbox/. /work/sing-box/rules/
-    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/tests/overlay.json /work/sing-box/conf.d/00-local.json
-    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/tests/base.json /work/sing-box/conf.d/10-rules.json
-    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/tests/base.json /work/sing-box/public.json
     {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/template.json /work/sing-box/template.json
     {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
+    {{lima_shell}} /opt/proxy-test/bin/bun -e 'import { buildConfig } from "/host-home/Code/active/proxy/scripts/endpoint.ts"; const cfg = await buildConfig({ nodes: ["hysteria2://pass@1.1.1.1:443#SelfHost"] }, { parse: async () => [{ type: "direct", tag: "mock-airport" }] }); cfg.route.rule_set = cfg.route.rule_set.map(rs => rs.type === "remote" ? { type: "local", tag: rs.tag, format: "binary", path: `/work/sing-box/rules/${rs.tag}.srs` } : rs); await Bun.write("/work/sing-box/config.json", JSON.stringify(cfg, null, 2));'
+
 # 在沙箱内运行全部网络行为测试
 test-sandbox: sync-sandbox
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests
-
-# 只跑某一层，例如 just test-sandbox-layer dns
-test-sandbox-layer name: sync-sandbox
-    {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests/{{name}}.test.js
-
-# 在沙箱内校验配置（公开层 + 测试覆盖层）。
-# 覆盖层用同一批 tag 指向本地夹具、注入最小内联规则集，因此沙箱里不放真实拓扑与生成产物。
-check-sandbox: sync-sandbox
-    {{lima_shell}} /opt/proxy-test/bin/sing-box check -C /work/sing-box/conf.d
-
-# --- 规则生成与校验（跑在宿主机，需要联网拉第三方列表） ---
-# 生成全部客户端的规则产物
-build-rules:
-    uv run python -B scripts/singbox_rules.py build --all
-
-# 生成器的单元测试（不触网）
-test-rules:
-    bun test scripts/singbox_rules.test.js
-
 # 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
 sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
@@ -101,13 +79,13 @@ sublink-down:
 # 本地等价验证单 URL 契约：解析后端取节点 → 底模装配 → sing-box check，全程零上传
 # 用法：just verify-endpoint [订阅URL或文件] [/tmp/singbox.json]
 verify-endpoint source="" output="/tmp/singbox.json":
-    @bun run scripts/endpoint.mjs {{source}} {{output}}
+    @bun run scripts/endpoint.ts {{source}} {{output}}
 
 # 本地点起端点（单 URL 契约）：
 #   just serve                     → http://127.0.0.1:8080/darwin?sub=…&node=…
 #   just serve 8080 192.168.5.2    → 绑到沙箱 VM 能访问的地址，让 VM 当"设备"直接取配置
 serve port="8080" host="127.0.0.1":
-    @bun run scripts/endpoint.mjs --serve --port {{port}} --host {{host}}
+    @bun run scripts/endpoint.ts --serve --port {{port}} --host {{host}}
 
 
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点
@@ -115,4 +93,4 @@ serve port="8080" host="127.0.0.1":
 #       just trace api.openai.com
 #       just trace foo.ooooo.space
 trace domain="google.com":
-    @bun run scripts/trace-route.mjs {{domain}}
+    @bun run scripts/trace-route.ts {{domain}}
