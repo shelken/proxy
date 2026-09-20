@@ -8,6 +8,7 @@ mod paths;
 mod profile;
 mod store;
 mod template;
+mod trace;
 
 use std::fs;
 use std::path::Path;
@@ -40,6 +41,13 @@ fn main() {
         }
         Some("check") => cmd_check(),
         Some("profile") => profile::run(rest.first().map(String::as_str)),
+        Some("trace") => match rest.first() {
+            Some(domain) => {
+                trace::trace(domain);
+                Ok(())
+            }
+            None => Err("用法: sb-sync trace <域名>".into()),
+        },
         Some("doctor") => {
             doctor::run();
             Ok(())
@@ -69,6 +77,7 @@ fn usage() -> String {
         "  sb-sync template update|reset 手动刷新/重置远程底模",
         "  sb-sync sync                  拉订阅+自动更新底模+原子产出",
         "  sb-sync check                 验证本地产物（零网络）",
+        "  sb-sync trace <域名>          全链路探测 DNS/出口/规则命中",
         "  sb-sync doctor                网络分层自检（DNS/直连/代理逐层计时）",
         "  sb-sync output                打印产物路径",
         "  sb-sync version               打印版本号",

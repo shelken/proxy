@@ -11,6 +11,7 @@ pub mod paths;
 pub mod profile;
 pub mod store;
 pub mod template;
+pub mod trace;
 
 #[cfg(test)]
 mod lib_tests;

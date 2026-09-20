@@ -285,3 +285,69 @@ mod tests {
         assert_eq!(servers[0]["tag"], "dns-home");
     }
 }
+
+#[cfg(test)]
+mod trace_tests {
+    use crate::trace::{build_query, parse_a_answer, system_resolve, tun_dns_server, udp_resolve_a};
+    use serde_json::json;
+
+    /// /30 派生:198.51.100.1 → 198.51.100.2(sing-box 劫持入口)。
+    #[test]
+    fn tun_dns_server_derives_half30_peer() {
+        let cfg = json!({
+            "inbounds": [{"type": "tun", "address": ["198.51.100.1/30"]}]
+        });
+        assert_eq!(tun_dns_server(&cfg).as_deref(), Some("198.51.100.2"));
+    }
+
+    /// 手写 DNS 查询报文:头 12 字节 + 域名 + QTYPE/QCLASS。
+    #[test]
+    fn build_query_encodes_domain_labels() {
+        let q = build_query(0x1234, "example.com");
+        assert_eq!(&q[0..2], &[0x12, 0x34]);
+        assert_eq!(&q[12], &7); // "example" 长度
+        assert_eq!(&q[q.len() - 4..], &[0x00, 0x01, 0x00, 0x01]);
+    }
+
+    /// 应答解析:仅接受 ID 匹配且问题段一致的报文,提取首个 A。
+    #[test]
+    fn parse_a_answer_extracts_ip() {
+        let domain = "example.com";
+        let query = build_query(0x00AA, domain);
+        // 构造应答:头 + 问题段 + 一条 A 记录
+        let mut resp = query.clone();
+        resp[2] = 0x81; // QR=1 RD=1
+        resp[3] = 0x80; // RA=1
+        resp[7] = 1; // ANCOUNT=1
+        resp.extend_from_slice(&[0xC0, 0x0C]); // NAME 指针→问题段
+        resp.extend_from_slice(&[0x00, 0x01]); // TYPE A
+        resp.extend_from_slice(&[0x00, 0x01]); // CLASS IN
+        resp.extend_from_slice(&[0x00, 0x00, 0x00, 0x3C]); // TTL
+        resp.extend_from_slice(&[0x00, 0x04]); // RDLEN=4
+        resp.extend_from_slice(&[93, 184, 216, 34]); // 93.184.216.34
+        assert_eq!(
+            parse_a_answer(&resp, 0x00AA, domain).as_deref(),
+            Some("93.184.216.34")
+        );
+        // ID 不匹配应拒绝
+        assert_eq!(parse_a_answer(&resp, 0x00BB, domain), None);
+    }
+
+    /// 真实上游联测:223.5.5.5 必须能回 A(网络故障时跳过而非失败)。
+    #[test]
+    fn udp_resolve_a_against_public_dns() {
+        match udp_resolve_a("www.baidu.com", "223.5.5.5") {
+            Some((ip, ms)) => assert!(!ip.starts_with("198.18."), "不应返回 fakeip: {ip} ({ms}ms)"),
+            None => eprintln!("跳过:网络不可达"),
+        }
+    }
+
+    /// 系统 resolver 联测:域名必须可解析(同上,网络故障跳过)。
+    #[test]
+    fn system_resolve_smoke() {
+        match system_resolve("www.baidu.com") {
+            Some((ip, _)) => assert!(!ip.is_empty()),
+            None => eprintln!("跳过:网络不可达"),
+        }
+    }
+}
