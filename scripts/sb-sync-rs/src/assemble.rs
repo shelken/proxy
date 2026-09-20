@@ -155,7 +155,7 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
 
     declared
         .into_iter()
-        .map(|sel| {
+        .filter_map(|sel| {
             let mut expanded: Vec<String> = Vec::new();
             for item in sel["outbounds"].as_array().map(|a| a.iter()).unwrap_or_default() {
                 let Some(item_str) = item.as_str() else { continue };
@@ -170,9 +170,18 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
             // 去重 + 排除自身
             let mut seen = std::collections::HashSet::new();
             expanded.retain(|t| t != sel["tag"].as_str().unwrap_or("") && seen.insert(t.clone()));
+            if expanded.is_empty() {
+                // 空组(订阅无匹配节点)会让 sing-box FATAL "missing tags",整体跳过:
+                // 产物少一个组,路由不炸(国家组均不被 route 规则引用)。
+                eprintln!(
+                    "[sb-sync] 策略组 '{}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)",
+                    sel["tag"].as_str().unwrap_or("?")
+                );
+                return None;
+            }
             let mut out = sel.clone();
             out["outbounds"] = json!(expanded);
-            out
+            Some(out)
         })
         .collect::<Vec<Value>>()
 }
@@ -255,6 +264,38 @@ mod tests {
         let re3 = compile_pattern("HK").unwrap();
         assert!(re3.is_match("HK-01"));
         assert!(!re3.is_match("hk-02"));
+    }
+
+    /// 回归:订阅无匹配节点时空 urltest 组会被 sing-box 拒绝(missing tags),
+    /// 装配器必须跳过该组而不是产出空 outbounds。
+    #[test]
+    fn empty_group_is_skipped() {
+        let tpl = crate::template::embedded_template();
+        let input = AssembleInput {
+            // 仅一个日本节点:kr/sg/tw/us/hk 等组展开为空,应整体消失
+            sources: "hy2://pass@192.0.2.1:8388#jp-osaka-01".into(),
+            local: None,
+            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        };
+        let config = build_config(&tpl, &input).unwrap();
+        let groups: Vec<&Value> = config["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
+            .collect();
+        assert!(
+            groups.iter().all(|g| !g["outbounds"].as_array().unwrap().is_empty()),
+            "任何策略组都不应为空: {groups:?}"
+        );
+        assert!(
+            groups.iter().any(|g| g["tag"] == "jp"),
+            "jp 组应保留(有匹配节点)"
+        );
+        assert!(
+            !groups.iter().any(|g| g["tag"] == "kr"),
+            "kr 组应被跳过(无匹配节点)"
+        );
     }
 
     /// 回归：分组填充端到端——底模 HK 组 (?i) 模式应命中小写节点。

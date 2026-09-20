@@ -423,11 +423,17 @@ export async function buildConfig(
       }
     }
     const combined = [...new Set(expanded.filter((t) => t !== sel.tag))];
+    if (combined.length === 0) {
+      // 空组(订阅无匹配节点)会让 sing-box FATAL "missing tags",整体跳过:
+      // 产物少一个组,路由不炸(国家组均不被 route 规则引用)。
+      console.warn(`[endpoint] 策略组 '${sel.tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)`);
+      return null;
+    }
     return {
       ...sel,
       outbounds: combined,
     };
-  });
+  }).filter((s): s is OutboundNode => s !== null);
 
   return {
     ...template,
