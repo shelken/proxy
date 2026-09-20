@@ -30,7 +30,12 @@
     "servers": [
       {
         "type": "local",
-        "tag": "dns-system"
+        "tag": "dns-local-system"
+      },
+      {
+        "type": "udp",
+        "tag": "dns-direct-cn",
+        "server": "223.5.5.5"
       },
       {
         "type": "fakeip",
@@ -41,13 +46,13 @@
     "rules": [
       {
         "clash_mode": "direct",
-        "server": "dns-system"
+        "server": "dns-local-system"
       },
       {
         "rule_set": [
           "ChinaMax-dns"
         ],
-        "server": "dns-system"
+        "server": "dns-direct-cn"
       },
       {
         "query_type": [
@@ -57,7 +62,7 @@
         "server": "dns-fakeip"
       }
     ],
-    "final": "dns-system"
+    "final": "dns-direct-cn"
   },
   "route": {
     "auto_detect_interface": true,
@@ -218,7 +223,7 @@
     ],
     "final": "proxy",
     "default_domain_resolver": {
-      "server": "dns-system"
+      "server": "dns-direct-cn"
     },
     "default_http_client": "rule-set-dl",
     "rule_set": [
