@@ -112,6 +112,16 @@ async function main(): Promise<void> {
     return rs;
   });
 
+  // 沙箱 DNS 隔离:Lima NAT 网关(192.168.5.2)的上游链会透传宿主 SFM fakeip(198.18/15)
+  // 并对部分私域返回 NXDOMAIN,type:local 在 VM 内不可信。改为明确公共 UDP 上游,
+  // 保证内核拨号解析(节点 server 域名)与 DNS 决策日志在沙箱内自洽。
+  config.dns = config.dns ?? {};
+  config.dns.servers = (config.dns.servers ?? []).map((s: Record<string, unknown>) =>
+    s.type === "local" ? { type: "udp", tag: s.tag, server: "223.5.5.5" } : s,
+  );
+  // 沙箱不需要面板:external_ui 触发启动时从 GitHub 下载,断网/慢网会阻塞 sing-box started
+  delete config.experimental?.clash_api?.external_ui;
+
   // 3. 同步到沙箱 VM
   console.log(`[TRACE] 同步本地规则与单文件配置到沙箱 VM...`);
   sh(`
@@ -257,10 +267,19 @@ async function main(): Promise<void> {
   let matchedRule = "未命中特定规则 (走 route.final 兜底)";
   let policyGroup = "proxy";
   let leafNode = "未知节点";
-  // DNS 决策：抓内核对目标域名的解析走线（本地服务器应答 vs 经隧道转发）与最终答案
+  // DNS 走线：抓内核对目标域名的解析走线（本地服务器应答 vs 经隧道转发）与最终答案
   let dnsExchangeMs = "";
   let dnsAnswer = "";
   let dnsPath = "未观察到内核解析 (可能客户端直发或命中缓存)";
+
+  // 节点拨号失败证据：出站组因解析节点 server 域名失败而不可用（沙箱/上游污染典型症状）
+  const dialFailures: string[] = [];
+  for (const line of logs.split("\n")) {
+    const m = line.match(/outbound\/urltest\[[^\]]+\]: outbound (\S+) unavailable: lookup ([\w.-]+):/);
+    if (m && m[1] && m[2] && !dialFailures.some((f) => f.includes(m[1]))) {
+      dialFailures.push(`${m[1]} (解析 ${m[2]} 失败)`);
+    }
+  }
 
   for (const line of logs.split("\n")) {
     if (line.includes("sniffed protocol:")) {
@@ -313,6 +332,9 @@ async function main(): Promise<void> {
   console.log(`├─ 策略分组:   ${policyGroup}`);
   console.log(`├─ 真实节点:   🎯 [${leafNode}]`);
   console.log(`├─ 探测耗时:   ${probeDuration}ms`);
+  if (dialFailures.length > 0) {
+    console.log(`├─ 节点解析失败: ⚠️ ${dialFailures.join("; ")} — 沙箱/上游 DNS 对节点 server 域名不可达`);
+  }
   console.log(`└─ 连通状态:   ${isOk ? "✅ " + probeOutput : "⚠️ " + probeOutput}`);
   console.log(`======================================================\n`);
 }
