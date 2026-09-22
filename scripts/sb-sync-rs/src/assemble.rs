@@ -110,12 +110,28 @@ pub fn merge_local_config(template: &mut Value, local: &Value) {
     }
 
     if let Some(route_rules) = local["route"]["rules"].as_array() {
-        if !route_rules.is_empty() {
+        // node_direct_rule 独立于 rules 数组存在：用户没写自定义规则时也要合并
+        let node_rule = local["route"]["node_direct_rule"].clone();
+        if !route_rules.is_empty() || node_rule.is_object() {
             if !template["route"]["rules"].is_array() {
                 template["route"]["rules"] = json!([]);
             }
             let tpl_rules = template["route"]["rules"].as_array_mut().unwrap();
             let mut new_rules = route_rules.clone();
+            // sb-sync 自动维护的反回环规则压过用户 local 置顶规则（防回环优先级最高）
+            if node_rule.is_object() {
+                new_rules.insert(0, node_rule);
+            }
+            new_rules.extend(tpl_rules.drain(..));
+            *template["route"]["rules"].as_array_mut().unwrap() = new_rules;
+        }
+    } else if let Some(node_rule) = local["route"].get("node_direct_rule") {
+        if node_rule.is_object() {
+            if !template["route"]["rules"].is_array() {
+                template["route"]["rules"] = json!([]);
+            }
+            let tpl_rules = template["route"]["rules"].as_array_mut().unwrap();
+            let mut new_rules = vec![node_rule.clone()];
             new_rules.extend(tpl_rules.drain(..));
             *template["route"]["rules"].as_array_mut().unwrap() = new_rules;
         }
@@ -127,6 +143,116 @@ pub fn merge_local_config(template: &mut Value, local: &Value) {
         }
         let tpl = template["outbounds"].as_array_mut().unwrap();
         tpl.extend(local_outbounds.iter().cloned());
+    }
+}
+
+/// 节点全集 → 反回环直连规则（不落盘，归属由调用方决定：sb-sync 写 local.json）。
+/// IP server → ip_cidr(/32|/128)；域名 server → domain + 尽力解析 IPv4 → ip_cidr。
+/// getaddrinfo 被 TUN 劫持返回 fakeip（198.18.0.0/15 等，从底模 dns.servers 读）时，
+/// 改走 DoH（https://223.5.5.5/resolve，443 不受 53 劫持影响）拿真实 A 记录。
+pub fn generate_node_direct_rule(nodes: &[Value], template: &Value) -> Option<Value> {
+    let fakeip_ranges: Vec<(std::net::IpAddr, u8)> = template["dns"]["servers"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter(|s| s["type"] == "fakeip")
+        .filter_map(|s| s["inet4_range"].as_str().or_else(|| s["inet6_range"].as_str()))
+        .filter_map(|r| parse_cidr(r))
+        .collect();
+
+    let mut domains: Vec<String> = Vec::new();
+    let mut cidrs: Vec<String> = Vec::new();
+    for node in nodes {
+        let Some(server) = node["server"].as_str() else { continue };
+        // url crate 的 host_str() 对 IPv6 返回 "[2001:db8::1]"，剥括号
+        let server = server.trim().trim_start_matches('[').trim_end_matches(']');
+        if server.is_empty() {
+            continue;
+        }
+        match server.parse::<std::net::IpAddr>() {
+            Ok(ip) => {
+                let cidr = if ip.is_ipv6() { format!("{server}/128") } else { format!("{server}/32") };
+                if !cidrs.contains(&cidr) {
+                    cidrs.push(cidr);
+                }
+            }
+            Err(_) => {
+                if domains.iter().any(|d| d == server) {
+                    continue;
+                }
+                domains.push(server.to_string());
+                // getaddrinfo → fakeip? → DoH 兜底；两级都失败则只留 domain 规则
+                let ip = crate::trace::system_resolve(server)
+                    .map(|(ip, _)| ip)
+                    .filter(|ip| {
+                        ip.parse::<std::net::IpAddr>()
+                            .map(|p| !fakeip_ranges.iter().any(|r| cidr_contains(*r, &p)))
+                            .unwrap_or(false)
+                    })
+                    .or_else(|| doh_resolve_a(server));
+                if let Some(ip) = ip {
+                    let cidr = format!("{ip}/32");
+                    if !cidrs.contains(&cidr) {
+                        cidrs.push(cidr);
+                    }
+                }
+            }
+        }
+    }
+    if domains.is_empty() && cidrs.is_empty() {
+        return None;
+    }
+    let mut rule = serde_json::Map::new();
+    if !domains.is_empty() {
+        rule.insert("domain".into(), json!(domains));
+    }
+    if !cidrs.is_empty() {
+        rule.insert("ip_cidr".into(), json!(cidrs));
+    }
+    rule.insert("outbound".into(), json!("direct"));
+    Some(Value::Object(rule))
+}
+
+/// AliDNS DoH JSON API：返回首个合法 IPv4 A 记录；任何失败静默 None。
+fn doh_resolve_a(domain: &str) -> Option<String> {
+    use std::io::Read;
+    let url = format!("https://223.5.5.5/resolve?name={domain}&type=A");
+    let res = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .ok()?;
+    let mut body = String::new();
+    res.into_reader()
+        .take(64 * 1024)
+        .read_to_string(&mut body)
+        .ok()?;
+    let v: Value = serde_json::from_str(&body).ok()?;
+    v["Answer"]
+        .as_array()?
+        .iter()
+        .filter(|a| a["type"] == 1)
+        .filter_map(|a| a["data"].as_str())
+        .find(|d| d.parse::<std::net::Ipv4Addr>().is_ok())
+        .map(str::to_string)
+}
+
+fn parse_cidr(s: &str) -> Option<(std::net::IpAddr, u8)> {
+    let (addr, len) = s.split_once('/')?;
+    let addr: std::net::IpAddr = addr.trim().parse().ok()?;
+    let len: u8 = len.trim().parse().ok()?;
+    let max = if addr.is_ipv4() { 32 } else { 128 };
+    if len > max {
+        return None;
+    }
+    Some((addr, len))
+}
+
+fn cidr_contains(cidr: (std::net::IpAddr, u8), ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr::{V4, V6};
+    match (cidr.0, *ip) {
+        (V4(a), V4(b)) => cidr.1 == 0 || (u32::from(a) >> (32 - cidr.1)) == (u32::from(b) >> (32 - cidr.1)),
+        (V6(a), V6(b)) => cidr.1 == 0 || (u128::from(a) >> (128 - cidr.1)) == (u128::from(b) >> (128 - cidr.1)),
+        _ => false,
     }
 }
 
@@ -196,19 +322,13 @@ pub struct AssembleInput {
     pub fetch_subscription: Option<Box<dyn Fn(&str) -> Result<String, String>>>,
 }
 
-/// 底模 → 完整配置。任何解析错误 fail-fast。
-pub fn build_config(template: &Value, input: &AssembleInput) -> Result<Value, String> {
-    let mut tpl = template.clone();
-
-    if let Some(local) = &input.local {
-        merge_local_config(&mut tpl, &local);
-    }
-
-    let reserved = reserved_tags(&tpl);
+/// 解析全部源 → 节点全集（私有节点保序前插，机场订阅原序追加）。
+/// 这是"所有节点确定"的唯一时点：反回环规则必须在此之后、装配之前生成。
+pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>, String> {
     let mut private_nodes: Vec<Value> = Vec::new();
     let mut airport_nodes: Vec<Value> = Vec::new();
 
-    for source in input.sources.split('|').map(str::trim).filter(|s| !s.is_empty()) {
+    for source in sources.split('|').map(str::trim).filter(|s| !s.is_empty()) {
         if source.starts_with("http://") || source.starts_with("https://") {
             let body = match &input.fetch_subscription {
                 Some(f) => f(source)?,
@@ -220,11 +340,18 @@ pub fn build_config(template: &Value, input: &AssembleInput) -> Result<Value, St
         }
     }
 
-    let mut nodes: Vec<Value> = private_nodes;
+    let mut nodes = private_nodes;
     nodes.extend(airport_nodes);
     if nodes.is_empty() {
         return Err("未解析出任何节点：请检查源列表内容".into());
     }
+    Ok(nodes)
+}
+
+/// 节点全集 + 底模 → 填充完 outbounds 的完整配置（纯内存，零网络）。
+pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
+    let reserved = reserved_tags(template);
+    let mut nodes = nodes;
     assign_tags(&mut nodes, &reserved);
     let tags: Vec<String> = nodes
         .iter()
@@ -232,13 +359,28 @@ pub fn build_config(template: &Value, input: &AssembleInput) -> Result<Value, St
         .map(str::to_string)
         .collect();
 
-    let selectors = populate_selectors(&tpl, &tags);
+    let selectors = populate_selectors(template, &tags);
 
     let mut outbounds = vec![json!({"type": "direct", "tag": "direct"})];
     outbounds.extend(nodes);
     outbounds.extend(selectors);
-    tpl["outbounds"] = Value::Array(outbounds);
+    template["outbounds"] = Value::Array(outbounds);
+    Ok(())
+}
 
+/// 底模 → 完整配置。任何解析错误 fail-fast。
+/// 生产路径（main.rs）已拆为 collect_nodes → generate → finalize；此函数保留给
+/// 测试与 TS 版对齐用（单次调用完成全流程，local 由调用方先行 merge）。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn build_config(template: &Value, input: &AssembleInput) -> Result<Value, String> {
+    let mut tpl = template.clone();
+
+    if let Some(local) = &input.local {
+        merge_local_config(&mut tpl, &local);
+    }
+
+    let nodes = collect_nodes(&input.sources, input)?;
+    finalize(&mut tpl, nodes)?;
     Ok(tpl)
 }
 
@@ -319,5 +461,68 @@ mod tests {
             expanded.iter().any(|t| t == "hk-02"),
             "hk 组应包含小写节点 hk-02，实际: {expanded:?}"
         );
+    }
+
+    /// 回归：节点反回环规则生成——在"所有节点确定后"（collect_nodes 之后）调用，
+    /// 覆盖 IP/IPv6/域名三类 server；域名用保留 TLD `.invalid` 保证解析必败，
+    /// 测试封闭不依赖网络。build_config 本体不得改动产物路由（规则归属 local）。
+    #[test]
+    fn node_direct_rule_generated_after_collect() {
+        let tpl = crate::template::embedded_template();
+        let input = AssembleInput {
+            sources: "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@node.invalid:8388#dom|anytls://pass@[2001:db8::1]:8443#v6".into(),
+            local: None,
+            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        };
+        let config = build_config(&tpl, &input).unwrap();
+        assert!(
+            config["route"]["rules"][0].get("ip_cidr").is_none(),
+            "build_config 不应直接注入规则(归属 local)"
+        );
+
+        let nodes = collect_nodes(&input.sources, &input).unwrap();
+        let rule = generate_node_direct_rule(&nodes, &tpl).expect("应生成反回环规则");
+        assert_eq!(rule["outbound"], "direct");
+        let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
+        for expected in ["192.0.2.1/32", "2001:db8::1/128"] {
+            assert!(
+                cidrs.iter().any(|c| c == expected),
+                "ip_cidr 应含 {expected}，实际: {cidrs:?}"
+            );
+        }
+        assert_eq!(rule["domain"], json!(["node.invalid"]), "域名 server 进 domain");
+    }
+
+    /// 回归：node_direct_rule 在 local 无自定义 rules 时也必须合并置顶（吞规则 bug），
+    /// 且压过用户 local 自带置顶规则。
+    #[test]
+    fn node_direct_rule_merges_above_local_rules() {
+        let tpl = crate::template::embedded_template();
+
+        // 场景 1: local 只有 node_direct_rule，无自定义 rules
+        let mut merged = tpl.clone();
+        merge_local_config(&mut merged, &json!({
+            "route": {"node_direct_rule": {
+                "domain": ["node.invalid"], "ip_cidr": ["192.0.2.1/32"], "outbound": "direct"
+            }}
+        }));
+        let rules = merged["route"]["rules"].as_array().unwrap();
+        assert_eq!(
+            rules[0],
+            json!({"domain": ["node.invalid"], "ip_cidr": ["192.0.2.1/32"], "outbound": "direct"}),
+            "仅 node_direct_rule 时也应置顶合并"
+        );
+
+        // 场景 2: local 同时有用户置顶规则 → 反回环压过它
+        let mut merged = tpl.clone();
+        merge_local_config(&mut merged, &json!({
+            "route": {
+                "node_direct_rule": {"domain": ["node.invalid"], "outbound": "direct"},
+                "rules": [{"domain_suffix": ["home.example"], "outbound": "direct"}]
+            }
+        }));
+        let rules = merged["route"]["rules"].as_array().unwrap();
+        assert_eq!(rules[0]["domain"], json!(["node.invalid"]), "反回环置顶");
+        assert_eq!(rules[1]["domain_suffix"], json!(["home.example"]), "用户规则紧随");
     }
 }

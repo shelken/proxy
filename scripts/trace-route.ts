@@ -8,7 +8,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { buildConfig } from "./endpoint.ts";
+import { buildConfig, generateNodeDirectRule } from "./endpoint.ts";
 
 const domain: string = process.argv[2] || "google.com";
 const VM_NAME = "proxy-test";
@@ -27,6 +27,11 @@ interface SingBoxConfig {
     rule_set: SingBoxRuleSet[];
     rules?: Record<string, unknown>[];
     default_http_client?: unknown;
+    [key: string]: unknown;
+  };
+  outbounds?: Array<{ server?: string; [key: string]: unknown }>;
+  dns?: {
+    servers?: Array<{ type?: string; inet4_range?: string; [key: string]: unknown }>;
     [key: string]: unknown;
   };
   default_http_client?: unknown;
@@ -93,6 +98,15 @@ async function main(): Promise<void> {
   }
 
   const config = (await buildConfig({ sources: parts.join("|") })) as unknown as SingBoxConfig;
+
+  // 沙箱等价 sb-sync 产物：反回环规则置顶（trace 无 local.json 合并链路，直接插 rules 顶部）
+  const nodeDirectRule = await generateNodeDirectRule(
+    (config.outbounds ?? []) as { server?: string }[],
+    config as never,
+  );
+  if (nodeDirectRule) {
+    config.route.rules.unshift(nodeDirectRule);
+  }
 
   config.log = { level: "debug" };
   delete config.route.default_http_client;

@@ -14,7 +14,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn main() {
     // macOS 下 Rust 忽略 SIGPIPE，`sb-sync list | head` 会 panic。
@@ -235,7 +235,7 @@ fn cmd_sync() -> Result<(), String> {
     let started = Instant::now();
 
     let assemble_result = (|| -> Result<(String, template::TemplateSource, usize), String> {
-        let (tpl, source) =
+        let (mut tpl, source) =
             template::load_template_for_sync(store.template_auto_update)?;
         let parts: Vec<String> = store
             .nodes
@@ -249,14 +249,30 @@ fn cmd_sync() -> Result<(), String> {
         let local: Option<Value> = fs::read_to_string(paths::local_path())
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok());
+        // collect_nodes 只需要 sources；local 归属 merge_local_config / stale 判断
         let input = assemble::AssembleInput {
             sources: parts.join("|"),
-            local,
+            local: None,
             fetch_subscription: None,
         };
-        let config = assemble::build_config(&tpl, &input)?;
-        let rule_sets = config["route"]["rule_set"].as_array().map(|a| a.len()).unwrap_or(0);
-        let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())? + "\n";
+        // 数据流：collect_nodes（唯一一次网络，全部节点确定）→ 生成反回环规则
+        // → 变化时写 local.json（归属设备私有覆盖，不直改产物）→ finalize 单次装配
+        let nodes = assemble::collect_nodes(&input.sources, &input)?;
+        if let Some(rule) = assemble::generate_node_direct_rule(&nodes, &tpl) {
+            if node_direct_rule_stale(&local, &rule) {
+                upsert_node_direct_rule(&rule)?;
+                // local 变了 → 重读并在装配前 merge，本次产物即带上新规则
+                let fresh_local: Option<Value> = fs::read_to_string(paths::local_path())
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok());
+                if let Some(local) = &fresh_local {
+                    assemble::merge_local_config(&mut tpl, local);
+                }
+            }
+        }
+        assemble::finalize(&mut tpl, nodes)?;
+        let rule_sets = tpl["route"]["rule_set"].as_array().map(|a| a.len()).unwrap_or(0);
+        let content = serde_json::to_string_pretty(&tpl).map_err(|e| e.to_string())? + "\n";
         Ok((content, source, rule_sets))
     })();
 
@@ -299,6 +315,35 @@ fn cmd_sync() -> Result<(), String> {
     reload_hint();
     profile::reload_after_sync(&output, previous_fingerprint)?;
     Ok(())
+}
+
+/// 比较现有 local 的 node_direct_rule 与新生成规则；不一致或缺省 → true。
+fn node_direct_rule_stale(local: &Option<Value>, rule: &Value) -> bool {
+    match local {
+        Some(l) => l["route"]["node_direct_rule"] != *rule,
+        None => true,
+    }
+}
+
+/// local.json 的 route.node_direct_rule 写入：读现有 local（缺省空对象）→ 更新 → 原子写回。
+/// local.json 是设备私有文件，sb-sync 只动这一个字段，不碰用户其余配置。
+fn upsert_node_direct_rule(rule: &Value) -> Result<(), String> {
+    let path = paths::local_path();
+    let mut local: Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| {
+            eprintln!("[sb-sync] 创建 local.json（节点反回环规则将写入 route.node_direct_rule）");
+            json!({})
+        });
+    if !local.is_object() {
+        return Err(format!("local.json 不是 JSON 对象，拒绝写入: {}", path.display()));
+    }
+    if !local["route"].is_object() {
+        local["route"] = json!({});
+    }
+    local["route"]["node_direct_rule"] = rule.clone();
+    paths::write_json_atomic(&path, &local)
 }
 
 /// 产物原子写：校验（可选内核）→ 保留 .bak → rename。
