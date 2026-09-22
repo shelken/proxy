@@ -13,6 +13,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { isIP, isIPv4 } from "node:net";
+import { promises as dnsPromises } from "node:dns";
 import { dirname, resolve } from "node:path";
 
 const ROOT_DIR = resolve(import.meta.dir, "..");
@@ -312,6 +314,103 @@ function assignTags(nodes: OutboundNode[]): void {
 }
 
 /**
+ * 节点全集 → 反回环直连规则（不落盘，归属由调用方决定）。
+ * IP server → ip_cidr(/32|/128)；域名 server → domain + 尽力解析 IPv4 → ip_cidr。
+ * getaddrinfo 被 TUN 劫持返回 fakeip 时，改走 DoH（https://223.5.5.5/resolve）拿真实 A 记录。
+ */
+export async function generateNodeDirectRule(
+  nodes: OutboundNode[],
+  template: SingBoxTemplate,
+): Promise<Record<string, unknown> | null> {
+  const fakeipRanges = (template.dns?.servers ?? [])
+    .filter((s) => s.type === "fakeip" && typeof s.inet4_range === "string")
+    .map((s) => parseIpv4Cidr(s.inet4_range as string))
+    .filter((r) => r !== null);
+
+  const domains: string[] = [];
+  const cidrs: string[] = [];
+  for (const node of nodes) {
+    const server = typeof node.server === "string" ? node.server.trim().replaceAll(/^\[|\]$/g, "") : "";
+    if (!server) continue;
+    if (isIP(server)) {
+      const cidr = server.includes(":") ? `${server}/128` : `${server}/32`;
+      if (!cidrs.includes(cidr)) cidrs.push(cidr);
+    } else if (!domains.includes(server)) {
+      domains.push(server);
+      // getaddrinfo → fakeip? → DoH 兜底；两级都失败则只留 domain 规则
+      let ip = await tryLookupIpv4(server);
+      if (ip === null || fakeipRanges.some((r) => ipv4InRange(ip as string, r))) {
+        ip = await dohResolveA(server);
+      }
+      if (ip !== null && !cidrs.includes(`${ip}/32`)) {
+        cidrs.push(`${ip}/32`);
+      }
+    }
+  }
+  if (domains.length === 0 && cidrs.length === 0) return null;
+
+  const rule: Record<string, unknown> = { outbound: "direct" };
+  if (domains.length > 0) rule.domain = domains;
+  if (cidrs.length > 0) rule.ip_cidr = cidrs;
+  return rule;
+}
+
+async function tryLookupIpv4(server: string): Promise<string | null> {
+  try {
+    const { address } = await dnsPromises.lookup(server, { family: 4 });
+    return address;
+  } catch {
+    return null;
+  }
+}
+
+/** AliDNS DoH JSON API：首个合法 IPv4 A 记录；任何失败静默 null。 */
+async function dohResolveA(domain: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://223.5.5.5/resolve?name=${encodeURIComponent(domain)}&type=A`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const v = (await res.json()) as { Answer?: Array<{ type: number; data?: string }> };
+    const answer = (v.Answer ?? []).find(
+      (a) => a.type === 1 && typeof a.data === "string" && isIPv4(a.data),
+    );
+    return answer?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** "a.b.c.d/len" → [基址数值, 掩码长度]；非法返回 null。 */
+function parseIpv4Cidr(s: string): [number, number] | null {
+  const [addr, lenStr] = s.split("/");
+  const len = Number(lenStr);
+  if (!addr || !lenStr || !Number.isInteger(len) || len < 0 || len > 32) return null;
+  const value = ipv4ToNumber(addr);
+  return value === null ? null : [value, len];
+}
+
+function ipv4ToNumber(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null;
+    const n = Number(p);
+    if (n > 255) return null;
+    value = (value << 8) | n;
+  }
+  return value;
+}
+
+function ipv4InRange(ip: string, [base, len]: [number, number]): boolean {
+  const value = ipv4ToNumber(ip);
+  if (value === null) return false;
+  if (len === 0) return true;
+  return (value >>> (32 - len)) === (base >>> (32 - len));
+}
+
+/**
  * 深度合并本地专有配置 (local.json)
  * - dns.servers: 覆盖同 tag 服务，或追加新服务
  * - route.rules: 本地专有规则置顶 (unshift)，确保优先命中
@@ -347,9 +446,19 @@ export function mergeLocalConfig(
   if (local.route && typeof local.route === "object") {
     const localRoute = local.route as {
       rules?: Array<Record<string, unknown>>;
+      node_direct_rule?: Record<string, unknown>;
     };
-    if (Array.isArray(localRoute.rules) && template.route?.rules) {
-      template.route.rules.unshift(...localRoute.rules);
+    // node_direct_rule 独立于 rules 数组存在：用户没写自定义规则时也要合并
+    if (Array.isArray(localRoute.rules) || localRoute.node_direct_rule) {
+      if (!Array.isArray(template.route?.rules)) {
+        template.route = { ...template.route, rules: [] };
+      }
+      const newRules = [...(localRoute.rules ?? [])];
+      // sb-sync 自动维护的反回环规则压过用户 local 置顶规则（防回环优先级最高）
+      if (localRoute.node_direct_rule && typeof localRoute.node_direct_rule === "object") {
+        newRules.unshift(localRoute.node_direct_rule);
+      }
+      template.route!.rules!.unshift(...newRules);
     }
   }
 
