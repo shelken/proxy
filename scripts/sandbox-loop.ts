@@ -21,7 +21,6 @@ const SB = "/opt/proxy-test/bin/sing-box";
 
 const ARTIFACT_DIR = resolve(import.meta.dir, "../.sandbox-artifacts");
 const LOCAL_BINARY = resolve(ARTIFACT_DIR, "sb-sync");
-const CLIENT_YAML = resolve(ARTIFACT_DIR, "client.yaml");
 const GUEST_BINARY = "/work/sb-sync";
 const WORK = "/work/sing-box";
 const REPO_IN_GUEST = resolve(import.meta.dir, "..").replace(
@@ -60,12 +59,12 @@ function fail(stage: string, detail: string): never {
 /**
  * 取与当前代码等价的一份 CI 产物。
  *
- * 二进制只由 `scripts/sb-sync-rs/**` 与 `config/sing-box/template.json` 决定
- * （后者经 include_str! 内嵌）。所以判据不是「commit 相等」，而是「这两处与产物
- * 构建时一致」——纯删除/文档提交的 HEAD 不会触发 release 工作流，此时回退到
- * 最近一次成功构建是安全的，且必须把实际使用的 commit 打出来。
+ * 二进制只由 `BINARY_INPUTS` 列出那几处决定（底模经 include_str! 内嵌）。所以判据
+ * 不是「commit 相等」，而是「这些路径与产物构建时一致」——纯删除/文档提交的 HEAD
+ * 不会触发 release 工作流，此时回退到最近一次成功构建是安全的，且必须把实际使用
+ * 的 commit 打出来。
  *
- * 一旦 Rust 源码或底模确有差异就直接报错：那种情况下的产物与被测代码不对应，
+ * 一旦这些路径确有差异就直接报错：那种情况下的产物与被测代码不对应，
  * 静默使用会产生最难排查的假绿。
  */
 function ensureBinary(): void {
@@ -143,12 +142,31 @@ function listRuns(filters: string[]): {
   return JSON.parse(r.out) as { databaseId: number; conclusion: string; headSha: string }[];
 }
 
+/**
+ * 决定二进制内容的路径。判据不是「commit 相等」，而是「这些路径与产物构建时一致」。
+ *
+ * `release-sb-sync.yml` 也在列：它决定 toolchain、target 与 cargo 构建参数，
+ * 并在 tag 构建时改写 Cargo.toml 的版本——改动它同样会改变产物。
+ */
+const BINARY_INPUTS = [
+  "scripts/sb-sync-rs",
+  "config/sing-box/template.json",
+  ".github/workflows/release-sb-sync.yml",
+];
+
 /** 两个 commit 之间，影响二进制内容的路径差异（空串表示产物等价）。 */
 function relevantDiff(from: string, to: string): string {
-  return host([
-    "git", "diff", "--name-only", from, to,
-    "--", "scripts/sb-sync-rs", "config/sing-box/template.json",
-  ]).out.trim();
+  const r = host(["git", "diff", "--name-only", from, to, "--", ...BINARY_INPUTS]);
+  // 退出码非零说明「能否等价」这个判断本身失效（commit 不存在、浅克隆取不到）。
+  // 此时 stdout 为空，若当成「无差异」就会复用与被测代码不匹配的产物——
+  // 正是本函数要防的那种假绿，所以必须硬失败而不是回退。
+  if (r.code !== 0) {
+    fail(
+      "比较产物差异",
+      `git diff ${from.slice(0, 8)}..${to.slice(0, 8)} 失败：${r.err.trim()}`,
+    );
+  }
+  return r.out.trim();
 }
 
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
@@ -177,28 +195,29 @@ function pushToGuest(): void {
  * - SING_BOX 要注入：VM 内内核不在 PATH 上（在 /opt/proxy-test/bin）
  * - 代理变量要清除：/etc/environment 有 lima 写入的宿主代理地址（VM 内不可达），
  *   不清会让服务端拉订阅时挂到超时
+ *
+ * 私钥全程只在 VM 内流转：keygen 与 server 在同一条 guest 命令里完成，
+ * 不经宿主的 stdout，也不作为 `limactl` 的 argv（那会进宿主进程参数表）。
  */
 function startServer(): void {
-  const k = guest(`${GUEST_BINARY} keygen`);
-  if (k.code !== 0) fail("生成密钥", k.err.trim());
-  const sk = k.out
-    .split("\n")
-    .find((l) => l.startsWith("SERVER_PRIVATE_KEY="))
-    ?.slice("SERVER_PRIVATE_KEY=".length)
-    .trim();
-  if (!sk) fail("生成密钥", `keygen 输出无 SERVER_PRIVATE_KEY:\n${k.out}`);
+  const r = guest(
+    `
+    set -e
+    # keygen 的私钥只在本 shell 内存在，不回到宿主
+    SK=$(${GUEST_BINARY} keygen | sed -n 's/^SERVER_PRIVATE_KEY=//p')
+    [ -n "$SK" ] || { echo "keygen 未产出私钥" >&2; exit 1; }
 
-  const r = guest(`
     sudo -n pkill -9 -x sb-sync 2>/dev/null || true
     env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \\
-      SING_BOX=${SB} SERVER_PRIVATE_KEY=${sk} \\
+      SING_BOX=${SB} SERVER_PRIVATE_KEY="$SK" \\
       nohup ${GUEST_BINARY} server --port ${PORT} > /work/sb-sync-server.log 2>&1 &
     for _ in $(seq 1 40); do
       curl -sS --noproxy '*' -o /dev/null "http://127.0.0.1:${PORT}/healthz" && exit 0
       sleep 0.2
     done
     echo "服务端未就绪"; cat /work/sb-sync-server.log; exit 1
-  `);
+  `,
+  );
   if (r.code !== 0) fail("启动服务端", (r.err + r.out).trim());
 }
 
@@ -239,19 +258,28 @@ function fetchAndPrepare(options: LoopOptions): void {
     `  ${JSON.stringify(overlay)}`,
     "",
   ].join("\n");
-  writeFileSync(CLIENT_YAML, yaml);
 
-  const r = guest(`
+  // 凭据只经 stdin 进 VM，不落宿主磁盘：`just trace` 传的是 .env 里的真实订阅与
+  // 节点，写到宿主工作区等于把它们长期留在默认权限的文件里（.gitignore 只挡 Git
+  // 跟踪，不挡本机读取）。VM 内用 umask 077 建文件，并在退出时清理。
+  const r = guest(
+    `
     set -e
+    umask 077
+    trap 'rm -f ${WORK}/client.yaml' EXIT
+    cat > ${WORK}/client.yaml
+
     URL=$(${GUEST_BINARY} encode -s http://127.0.0.1:${PORT} \\
-      -c ${REPO_IN_GUEST}/.sandbox-artifacts/client.yaml 2>/dev/null | grep '^http')
+      -c ${WORK}/client.yaml 2>/dev/null | grep '^http')
     [ -n "$URL" ] || { echo "encode 未产出 URL" >&2; exit 1; }
     curl -sS --noproxy '*' "$URL" -o /work/sing-box/raw.json
     python3 /work/sandbox-prepare.py /work/sing-box/raw.json ${WORK}/config.json
     ${SB} check -c ${WORK}/config.json
     # 服务端已完成使命：留着会占端口，挡住下一次引导
     sudo -n pkill -9 -x sb-sync 2>/dev/null || true
-  `);
+  `,
+    yaml,
+  );
   if (r.code !== 0) fail("取回并准备配置", (r.err + r.out).trim());
   console.log(`[引导] 闭环就绪：${WORK}/config.json`);
 }
