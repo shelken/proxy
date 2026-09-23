@@ -385,4 +385,99 @@ mod tests {
             "实际: {err}"
         );
     }
+
+    /// 反回环直连规则必须恒定置于 route.rules 首位：底模自带嗅探、clash_mode 与分流规则，
+    /// 任何一条先于它命中都会让节点自身流量走代理而形成回环。
+    /// 只用 IP 字面量节点，避免域名解析引入网络依赖。
+    #[test]
+    fn node_direct_rule_is_pinned_to_first_position() {
+        let payload = Payload {
+            subs: vec![],
+            nodes: vec![
+                "hy2://pass@192.0.2.1:8388#a".into(),
+                "anytls://pass@[2001:db8::1]:8443#b".into(),
+            ],
+            overlay: None,
+            template_url: None,
+        };
+        let (tpl, _) = assemble_base(&payload).expect("装配失败");
+
+        let rules = tpl["route"]["rules"].as_array().expect("rules 为数组");
+        let first = &rules[0];
+        assert_eq!(first["outbound"], json!("direct"), "首条规则应为直连");
+        let cidrs = first["ip_cidr"].as_array().expect("首条应含 ip_cidr");
+        for expected in ["192.0.2.1/32", "2001:db8::1/128"] {
+            assert!(
+                cidrs.iter().any(|c| c == expected),
+                "首条 ip_cidr 应含 {expected}，实际: {cidrs:?}"
+            );
+        }
+        // 底模原有的嗅探规则必须仍在，且排在反回环规则之后
+        assert!(
+            rules.iter().skip(1).any(|r| r["action"] == json!("sniff")),
+            "底模嗅探规则不应被丢弃"
+        );
+        assert!(
+            rules.len() > 3,
+            "底模原有规则应保留，实际条数: {}",
+            rules.len()
+        );
+    }
+
+    /// 节点为纯域名且解析失败时，规则仍须生成并置顶，只保留 domain 分支。
+    /// `.invalid` 是保留 TLD，解析必败，测试封闭不依赖网络。
+    #[test]
+    fn node_direct_rule_is_pinned_even_without_resolved_ip() {
+        let payload = Payload {
+            subs: vec![],
+            nodes: vec!["hy2://pass@node.invalid:8388#dom".into()],
+            overlay: None,
+            template_url: None,
+        };
+        let (tpl, _) = assemble_base(&payload).expect("装配失败");
+
+        let first = &tpl["route"]["rules"][0];
+        assert_eq!(first["outbound"], json!("direct"));
+        assert_eq!(first["domain"], json!(["node.invalid"]));
+    }
+
+    /// 无 overlay 时 merge 仍须产出配置；overlay 存在时覆盖底模同名标量。
+    /// 这两条是「提交了 overlay 却没生效」与「没提交 overlay 就失败」两类事故的分界。
+    #[test]
+    fn overlay_overrides_base_after_merge() {
+        if std::process::Command::new("sing-box")
+            .arg("version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skip: sing-box not found");
+            return;
+        }
+        let (sk_hex, pk_hex) = crypto::generate_keypair_hex();
+        let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
+        let pk = crypto::parse_public_key_hex(&pk_hex).unwrap();
+
+        // 无 overlay：merge 结果仍须是合法 JSON 且带 outbounds
+        let no_overlay = json!({
+            "subs": [],
+            "nodes": ["hy2://pass@192.0.2.1:8388#a"],
+        });
+        let ct = crypto::encrypt_payload(&pk, &serde_json::to_vec(&no_overlay).unwrap()).unwrap();
+        let (merged, _) = handle_sub(&sk, &ct).expect("无 overlay 应成功");
+        let v: Value = serde_json::from_str(&merged).unwrap();
+        assert!(v["outbounds"].is_array(), "应产出 outbounds");
+
+        // 有 overlay：log.level 被覆盖，且底模的入站结构保留（overlay 是叠加不是替换）
+        let with_overlay = json!({
+            "subs": [],
+            "nodes": ["hy2://pass@192.0.2.1:8388#a"],
+            "overlay": {"log": {"level": "debug"}},
+        });
+        let ct2 =
+            crypto::encrypt_payload(&pk, &serde_json::to_vec(&with_overlay).unwrap()).unwrap();
+        let (merged2, _) = handle_sub(&sk, &ct2).expect("有 overlay 应成功");
+        let v2: Value = serde_json::from_str(&merged2).unwrap();
+        assert_eq!(v2["log"]["level"], json!("debug"));
+        assert!(v2["inbounds"].is_array(), "底模入站不应被 overlay 抹掉");
+    }
 }
