@@ -30,7 +30,7 @@ nodes:
 生成订阅 URL（自动写剪切板，公钥从服务端实时获取）：
 
 ```bash
-sb-sync encode https://sub.example.com
+sb-sync encode -s https://sub.example.com
 ```
 
 把 URL 粘进 SFM 的 Remote Profile，之后由 SFM 按间隔自动拉取。

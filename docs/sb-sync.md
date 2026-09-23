@@ -25,7 +25,7 @@ flowchart LR
         E --> U["剪切板 URL<br/>/sub?d=&lt;base64url&gt;"]
     end
 
-    S2["server 地址<br/>(encode 命令行参数)"]
+    S2["server 地址<br/>(encode -s 命令行参数)"]
     S2 -.->|"GET /pubkey"| PUB["服务端公钥<br/>由私钥推导"]
     PUB -.-> E
 
@@ -47,7 +47,7 @@ flowchart LR
 ## 3. 客户端
 
 ```text
-sb-sync encode <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 加密 → 写剪切板
+sb-sync encode -s <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 加密 → 写剪切板
 sb-sync keygen                               # 生成服务端 X25519 密钥对（部署时一次）
 ```
 
@@ -202,7 +202,7 @@ overlay: |
 ```
 
 ```bash
-sb-sync encode https://sub.example.com
+sb-sync encode -s https://sub.example.com
 ```
 
 ### 7.2 overlay 的安全边界

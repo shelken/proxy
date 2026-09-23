@@ -20,7 +20,7 @@
 改了订阅、节点或 overlay 后，只做一件事：
 
 ```bash
-sb-sync encode <server>
+sb-sync encode -s <server>
 ```
 
 新 URL 会写入剪切板。如果 SFM 里 profile 的 URL 没变（服务端地址与密钥都没换），

@@ -61,28 +61,47 @@ fn usage() -> String {
         "sb-sync — 客户端加密编码 + 服务端原生合并",
         "",
         "用法:",
-        "  sb-sync encode <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
+        "  sb-sync encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
         "  sb-sync server [--port 8080]                 启动服务端（需 SERVER_PRIVATE_KEY 环境变量）",
-        "  sb-sync keygen                               生成服务端 X25519 公私钥对（Hex）",
-        "  sb-sync version                              显示版本",
+        "  sb-sync keygen                                 生成服务端 X25519 公私钥对（Hex）",
+        "  sb-sync version                                显示版本",
     ]
     .join("\n")
 }
 
+/// encode 的参数解析，独立成函数以便单测（`cmd_encode` 自身会发网络请求）。
+///
+/// 服务端是具名选项 `-s/--server` 而非位置参数：两个选项顺序无关，
+/// 未来新增选项时不会因位置变动而改调用方式。
+fn parse_encode_args(rest: &[String]) -> Result<(String, Option<std::path::PathBuf>), String> {
+    let usage_hint = "encode 用法: sb-sync encode -s <server> [-c <config.yaml>]";
+    let mut server: Option<String> = None;
+    let mut config_path: Option<std::path::PathBuf> = None;
+
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-s" | "--server" => {
+                server = Some(it.next().ok_or("encode: -s 需要一个服务端地址")?.clone());
+            }
+            "-c" | "--config" => {
+                let p = it.next().ok_or("encode: -c 需要一个配置文件路径")?;
+                config_path = Some(std::path::PathBuf::from(p));
+            }
+            other => return Err(format!("encode: 未知参数 {other}（{usage_hint}）")),
+        }
+    }
+    Ok((server.ok_or(usage_hint)?, config_path))
+}
+
 /// encode: 读取 YAML → 取服务端公钥 → 加密 → URL → pbcopy。
 fn cmd_encode(rest: &[String]) -> Result<(), String> {
-    let usage_hint = "encode 用法: sb-sync encode <server> [-c <config.yaml>]";
-    let (server, config_path) = match rest {
-        [server] => (server.as_str(), paths::client_config_path()?),
-        [flag, path, server] if flag == "-c" || flag == "--config" => {
-            (server.as_str(), std::path::PathBuf::from(path))
-        }
-        [server, flag, path] if flag == "-c" || flag == "--config" => {
-            (server.as_str(), std::path::PathBuf::from(path))
-        }
-        _ => return Err(usage_hint.into()),
+    let (server, config_path) = parse_encode_args(rest)?;
+    let server = config::normalize_server(&server)?;
+    let config_path = match config_path {
+        Some(p) => p,
+        None => paths::client_config_path()?,
     };
-    let server = config::normalize_server(server)?;
     let config = config::load_config(&config_path)?;
     // 先本地校验（含 template_url 合法性），再做任何网络请求：
     // 配置写错时应在本地立刻报错，不该先浪费一次 /pubkey 往返
@@ -139,5 +158,59 @@ mod tests {
         assert!(u.contains("keygen"));
         assert!(!u.contains("doctor"));
         assert!(!u.contains("sb-sync sync"));
+        assert!(u.contains("encode -s <server>"));
+    }
+
+    fn args(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| (*x).to_string()).collect()
+    }
+
+    #[test]
+    fn encode_accepts_server_flag_in_any_position() {
+        // -s 是具名选项：与 -c 的先后顺序不影响结果
+        for rest in [
+            args(&["-s", "https://a.example", "-c", "/tmp/x.yaml"]),
+            args(&["-c", "/tmp/x.yaml", "-s", "https://a.example"]),
+            args(&["--server", "https://a.example", "--config", "/tmp/x.yaml"]),
+            args(&["-s", "https://a.example"]),
+        ] {
+            let (server, cfg) = parse_encode_args(&rest).expect("应解析成功");
+            assert_eq!(server, "https://a.example");
+            if rest.len() == 4 {
+                assert_eq!(cfg.as_deref(), Some(std::path::Path::new("/tmp/x.yaml")));
+            } else {
+                assert!(cfg.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn encode_rejects_missing_or_unknown_args() {
+        // 位置参数被废弃：裸 <server> 必须报错，而不是被当作 server 接受
+        assert!(parse_encode_args(&args(&["https://a.example"])).is_err());
+        assert!(parse_encode_args(&args(&[])).is_err());
+        // 选项缺值
+        assert!(parse_encode_args(&args(&["-s"])).is_err());
+        assert!(parse_encode_args(&args(&["-c"])).is_err());
+        // 未知参数
+        assert!(parse_encode_args(&args(&["-s", "https://a.example", "-x"])).is_err());
+    }
+
+    #[test]
+    fn encode_last_flag_wins_on_duplicate() {
+        // 重复给同一选项时后者覆盖（命令行惯例），避免静默取首个造成困惑
+        let (server, cfg) = parse_encode_args(&args(&[
+            "-s",
+            "https://first.example",
+            "-s",
+            "https://second.example",
+            "-c",
+            "/tmp/a.yaml",
+            "-c",
+            "/tmp/b.yaml",
+        ]))
+        .expect("应解析成功");
+        assert_eq!(server, "https://second.example");
+        assert_eq!(cfg.as_deref(), Some(std::path::Path::new("/tmp/b.yaml")));
     }
 }

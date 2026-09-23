@@ -56,10 +56,12 @@ overlay: |
 ## 生成订阅 URL
 
 ```bash
-sb-sync encode https://sub.example.com
+sb-sync encode -s https://sub.example.com
 ```
 
-服务端地址是命令参数，不写进配置：同一份 YAML 可以指向不同服务端。
+服务端地址是 `-s/--server` 选项，不写进配置：同一份 YAML 可以指向不同服务端。
+`-s` 与 `-c` 顺序无关，两个都是具名选项，不认位置参数。
+
 命令会做三件事：
 
 1. 本地校验 YAML（含 `template_url` 合法性），配置写错在本地立刻报错
