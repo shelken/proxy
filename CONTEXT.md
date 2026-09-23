@@ -33,7 +33,7 @@ SFM 原生订阅机制。填入订阅 URL 后由 SFM 按间隔自动拉取，不
 
 - **交付走 SFM Remote Profile**：客户端直写 SFM Group Container 的 `settings.db` 与 profile 文件被 macOS 跨沙盒权限阻断且无合法修复通道，改为产出订阅 URL 由 SFM 自行拉取
 - **客户端与服务端分离**：客户端只持有服务端公钥（经 `/pubkey` 自动获取），私钥只在服务端；订阅凭据加密后传输
-- **合并用官方 CLI**：不实现合并算法，输入按 `01-overlay` / `02-base` 命名，字典序决定标量覆盖与数组拼接
+- **合并用官方 CLI**：不实现合并算法，输入按 `00-direct` / `01-overlay` / `02-base` 命名，路径字典序决定优先级（标量取先者、数组按序拼接）
 - **sb-sync 用 Rust**：静态单二进制，无运行时依赖
 - **远程底模必须严格校验**：载荷公钥公开，任何能访问 `/sub` 的人都能指定 `template_url`，故仅 https、拒内网地址、限 1MB、拒路径引用字段
 - **零警告 + 严格 lint**：规则写在 crate 属性（`forbid(unsafe_code)`、`deny(warnings)`、`deny(clippy::all, pedantic)`，生产代码禁 `unwrap`/`expect`/`panic`），编译校验全部由 `.github/workflows/ci-sb-sync.yml` 在远程执行

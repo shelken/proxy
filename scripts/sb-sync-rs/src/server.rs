@@ -90,9 +90,16 @@ impl Drop for TempMergeDir {
     }
 }
 
-/// 复用现有装配管线：sources → 节点全集 → 反回环规则 → finalize。
-/// 返回填充好的完整底模 JSON 与实际底模来源。
-fn assemble_base(payload: &Payload) -> Result<(Value, template::TemplateSource), String> {
+/// 复用现有装配管线：sources → 节点全集 → 反回环层 → finalize。
+/// 返回填充好的完整底模 JSON、反回环层（无节点时为 `None`）、实际底模来源。
+///
+/// 反回环规则单独成层而不压进底模：它必须在最终产物里排在**所有**规则之前，
+/// 包括设备 overlay 的规则。而 merge 的数组顺序由输入文件名的字典序决定
+/// （实测：与 `-c` 的 argv 顺序无关），压进底模的规则必然排在 overlay 之后，
+/// 节点拨号就可能先命中 overlay 的代理规则而形成回环。
+fn assemble_base(
+    payload: &Payload,
+) -> Result<(Value, Option<Value>, template::TemplateSource), String> {
     let mut sources: Vec<String> = Vec::with_capacity(payload.subs.len() + payload.nodes.len());
     sources.extend(payload.subs.iter().cloned());
     sources.extend(payload.nodes.iter().cloned());
@@ -104,18 +111,11 @@ fn assemble_base(payload: &Payload) -> Result<(Value, template::TemplateSource),
     let nodes = assemble::collect_nodes(&input.sources, &input)?;
 
     let (mut tpl, source) = template::load_template(payload.template_url.as_deref())?;
-    // 反回环直连规则置顶（服务端 DNS 视角尽力解析；失败则只保留 domain 规则）
-    if let Some(rule) = assemble::generate_node_direct_rule(&nodes, &tpl) {
-        if !tpl["route"]["rules"].is_array() {
-            tpl["route"]["rules"] = json!([]);
-        }
-        let rules = tpl["route"]["rules"]
-            .as_array_mut()
-            .ok_or_else(|| "底模 route.rules 必须是数组".to_string())?;
-        rules.insert(0, rule);
-    }
+    // 反回环直连规则（服务端 DNS 视角尽力解析；失败则只保留 domain 规则）
+    let direct_layer = assemble::generate_node_direct_rule(&nodes, &tpl)
+        .map(|rule| json!({"route": {"rules": [rule]}}));
     assemble::finalize(&mut tpl, nodes)?;
-    Ok((tpl, source))
+    Ok((tpl, direct_layer, source))
 }
 
 /// 订阅抓取：带 5MB 上限，防止机场响应过大拖垮服务。
@@ -138,13 +138,26 @@ fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-/// 调用内核 merge 01-overlay.json + 02-base.json，返回结果 JSON 字符串。
+/// merge 输入层的文件名。**字典序 = 合并优先级**，前缀不是序号而是语义：
+/// 数组按此序拼接（先者在前），标量取先者（first wins）。改名会让覆盖关系静默翻转。
+///
+/// - `00-direct` 反回环直连规则，必须排在所有规则之前（含设备 overlay 的规则）
+/// - `01-overlay` 设备侧覆盖，需压过底模标量
+/// - `02-base` 底模本体
+const LAYER_DIRECT: &str = "00-direct";
+const LAYER_OVERLAY: &str = "01-overlay";
+const LAYER_BASE: &str = "02-base";
+
+/// 调用内核合并各输入层，返回结果 JSON 字符串。
+///
+/// `layers` 是 `(文件名前缀, 内容)` 列表，**其名字的字典序决定合并顺序**：
+/// 数组按文件名字典序拼接、标量取字典序最前的那份（实测，与 `-c` 的 argv 顺序
+/// 无关）。调用方必须按期望优先级给出层名。
 fn run_singbox_merge(
     dir: &TempMergeDir,
-    overlay: Option<&Value>,
-    base: &Value,
+    layers: &[(&str, &Value)],
 ) -> Result<String, String> {
-    run_singbox_merge_with(&template::resolve_singbox_binary(), dir, overlay, base)
+    run_singbox_merge_with(&template::resolve_singbox_binary(), dir, layers)
 }
 
 /// merge 实现本体，内核路径由参数注入：测试需要验证「路径不存在时报错指向该路径」
@@ -152,29 +165,20 @@ fn run_singbox_merge(
 fn run_singbox_merge_with(
     bin: &std::ffi::OsStr,
     dir: &TempMergeDir,
-    overlay: Option<&Value>,
-    base: &Value,
+    layers: &[(&str, &Value)],
 ) -> Result<String, String> {
-    let base_path = dir.path.join("02-base.json");
-    std::fs::write(
-        &base_path,
-        serde_json::to_vec_pretty(base).map_err(|e| format!("底模序列化失败: {e}"))?,
-    )
-    .map_err(|e| format!("写底模失败: {e}"))?;
-
-    let mut args: Vec<String> = Vec::new();
-    if let Some(ov) = overlay {
-        let overlay_path = dir.path.join("01-overlay.json");
+    // 层按文件名字典序生效，调用方必须已按期望顺序给出；这里只按序落盘。
+    let mut args: Vec<String> = Vec::with_capacity(layers.len() * 2);
+    for (name, value) in layers {
+        let path = dir.path.join(format!("{name}.json"));
         std::fs::write(
-            &overlay_path,
-            serde_json::to_vec_pretty(ov).map_err(|e| format!("overlay 序列化失败: {e}"))?,
+            &path,
+            serde_json::to_vec_pretty(value).map_err(|e| format!("序列化 {name} 失败: {e}"))?,
         )
-        .map_err(|e| format!("写 overlay 失败: {e}"))?;
+        .map_err(|e| format!("写 {name} 失败: {e}"))?;
         args.push("-c".into());
-        args.push(overlay_path.display().to_string());
+        args.push(path.display().to_string());
     }
-    args.push("-c".into());
-    args.push(base_path.display().to_string());
 
     let result_path = dir.path.join("result.json");
     let output = std::process::Command::new(bin)
@@ -202,8 +206,17 @@ fn handle_sub(
     }
     let plaintext = crypto::decrypt_payload(secret_key, query_d)?;
     let payload = parse_payload(&plaintext)?;
-    let (base, source) = assemble_base(&payload)?;
-    let merged = run_singbox_merge(&TempMergeDir::create()?, payload.overlay.as_ref(), &base)?;
+    let (base, direct_layer, source) = assemble_base(&payload)?;
+    // 层名字典序 = 合并优先级：反回环规则优先于一切，overlay 压过底模标量。
+    let mut layers: Vec<(&str, &Value)> = Vec::with_capacity(3);
+    if let Some(direct) = direct_layer.as_ref() {
+        layers.push((LAYER_DIRECT, direct));
+    }
+    if let Some(overlay) = payload.overlay.as_ref() {
+        layers.push((LAYER_OVERLAY, overlay));
+    }
+    layers.push((LAYER_BASE, &base));
+    let merged = run_singbox_merge(&TempMergeDir::create()?, &layers)?;
     Ok((merged, source))
 }
 
@@ -417,8 +430,9 @@ mod tests {
     fn missing_kernel_error_names_the_path() {
         let dir = TempMergeDir::create().unwrap();
         let base = json!({"outbounds": []});
+        let layers = [(LAYER_BASE, &base)];
         let bad = std::ffi::OsString::from("/nonexistent/definitely-not-a-kernel");
-        let err = run_singbox_merge_with(&bad, &dir, None, &base).unwrap_err();
+        let err = run_singbox_merge_with(&bad, &dir, &layers).unwrap_err();
         assert!(
             err.contains("/nonexistent/definitely-not-a-kernel"),
             "报错须含注入的内核路径，实际: {err}"
@@ -444,7 +458,8 @@ mod tests {
         std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let base = json!({"outbounds": []});
-        let err = run_singbox_merge_with(bad.as_os_str(), &dir, None, &base).unwrap_err();
+        let layers = [(LAYER_BASE, &base)];
+        let err = run_singbox_merge_with(bad.as_os_str(), &dir, &layers).unwrap_err();
         assert!(
             err.contains("overlay 非法字段"),
             "应带上 stderr 摘要，实际: {err}"
@@ -463,9 +478,12 @@ mod tests {
         );
     }
 
-    /// 反回环直连规则必须恒定置于 route.rules 首位：底模自带嗅探、clash_mode 与分流规则，
-    /// 任何一条先于它命中都会让节点自身流量走代理而形成回环。
-    /// 只用 IP 字面量节点，避免域名解析引入网络依赖。
+    /// 反回环直连规则必须恒定置于最终产物的 route.rules 首位：底模自带嗅探、
+    /// clash_mode 与分流规则，任何一条先于它命中都会让节点自身流量走代理而形成回环。
+    ///
+    /// 断言落在**合并产物**上而不是底模层上：规则曾放在底模里，合并后会被设备
+    /// overlay 的规则挤到后面（数组按文件名字典序拼接，overlay 在 base 之前），
+    /// 只查底模层会漏掉这个回归。
     #[test]
     fn node_direct_rule_is_pinned_to_first_position() {
         let payload = Payload {
@@ -477,9 +495,11 @@ mod tests {
             overlay: None,
             template_url: None,
         };
-        let (tpl, _) = assemble_base(&payload).expect("装配失败");
+        let (base, direct_layer, _) = assemble_base(&payload).expect("装配失败");
+        let direct = direct_layer.expect("应生成反回环层");
+        let merged = merge_layers_for_test(&direct, None, &base);
+        let rules = merged["route"]["rules"].as_array().expect("rules 为数组");
 
-        let rules = tpl["route"]["rules"].as_array().expect("rules 为数组");
         let first = &rules[0];
         assert_eq!(first["outbound"], json!("direct"), "首条规则应为直连");
         let cidrs = first["ip_cidr"].as_array().expect("首条应含 ip_cidr");
@@ -501,8 +521,49 @@ mod tests {
         );
     }
 
-    /// 节点为纯域名且解析失败时，规则仍须生成并置顶，只保留 domain 分支。
+    /// 反回环规则必须压过**设备 overlay 的规则**：最危险的用例是 overlay 带一条
+    /// 宽泛的代理规则（如按域名后缀把节点域名也代理掉），若它先命中就会形成回环。
+    #[test]
+    fn node_direct_rule_outranks_overlay_rules() {
+        let payload = Payload {
+            subs: vec![],
+            nodes: vec!["hy2://pass@192.0.2.1:8388#a".into()],
+            overlay: None,
+            template_url: None,
+        };
+        let (base, direct_layer, _) = assemble_base(&payload).expect("装配失败");
+        let direct = direct_layer.expect("应生成反回环层");
+        let overlay = json!({
+            "route": {"rules": [{"domain_suffix": ["192.0.2.1"], "outbound": "proxy"}]}
+        });
+
+        let merged = merge_layers_for_test(&direct, Some(&overlay), &base);
+        let rules = merged["route"]["rules"].as_array().expect("rules 为数组");
+        assert_eq!(
+            rules[0]["outbound"],
+            json!("direct"),
+            "overlay 的规则不得越过反回环规则，实际首条: {}",
+            rules[0]
+        );
+    }
+
+    /// 按生产同样的层名与顺序合并（`handle_sub` 的层构造逻辑）。
+    fn merge_layers_for_test(direct: &Value, overlay: Option<&Value>, base: &Value) -> Value {
+        let dir = TempMergeDir::create().expect("临时目录");
+        let mut layers: Vec<(&str, &Value)> = vec![(LAYER_DIRECT, direct)];
+        if let Some(ov) = overlay {
+            layers.push((LAYER_OVERLAY, ov));
+        }
+        layers.push((LAYER_BASE, base));
+        let merged = run_singbox_merge(&dir, &layers).expect("合并成功");
+        serde_json::from_str(&merged).expect("合法 JSON")
+    }
+
+    /// 节点为纯域名且解析失败时，规则仍须生成，只保留 domain 分支。
     /// `.invalid` 是保留 TLD，解析必败，测试封闭不依赖网络。
+    ///
+    /// 断言落在反回环层（规则生成产物）上，不经过内核：置顶语义由
+    /// `node_direct_rule_is_pinned_to_first_position` 在合并产物上覆盖。
     #[test]
     fn node_direct_rule_is_pinned_even_without_resolved_ip() {
         let payload = Payload {
@@ -511,11 +572,11 @@ mod tests {
             overlay: None,
             template_url: None,
         };
-        let (tpl, _) = assemble_base(&payload).expect("装配失败");
+        let (_, direct_layer, _) = assemble_base(&payload).expect("装配失败");
+        let rule = &direct_layer.expect("应生成反回环层")["route"]["rules"][0];
 
-        let first = &tpl["route"]["rules"][0];
-        assert_eq!(first["outbound"], json!("direct"));
-        assert_eq!(first["domain"], json!(["node.invalid"]));
+        assert_eq!(rule["outbound"], json!("direct"));
+        assert_eq!(rule["domain"], json!(["node.invalid"]));
     }
 
     /// 无 overlay 时 merge 仍须产出配置；overlay 存在时覆盖底模同名标量。

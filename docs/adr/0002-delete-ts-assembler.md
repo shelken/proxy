@@ -6,5 +6,5 @@
 
 - 装配语义只有一处事实来源，漂移风险消失
 - 沙箱不再能脱离服务端独立生成配置，运行前需先取得 Linux 二进制
-- `local.json` 本地覆盖链路随之废弃。Rust 侧的本机覆盖已由客户端 `overlay` 承担
-- `endpoint.test.ts` 覆盖的断言语义需先移植到 Rust 单测或沙箱，不可静默丢弃
+- `local.json` 本地覆盖链路随之废弃。Rust 侧的本机覆盖改由客户端 `overlay` 承担，但**语义不完全等价**：`overlay` 经官方 `sing-box merge` 生效，能覆盖标量（`log.level` 这类）并追加数组元素，**不能**按 tag 替换底模已有的 `dns.servers` 条目——原 `mergeLocalConfig` 的按 tag 覆盖未迁移（当前无使用需求）
+- `endpoint.test.ts` 覆盖的断言语义需先移植到 Rust 单测或沙箱，不可静默丢弃。已迁移：反回环规则置顶由 `server.rs::node_direct_rule_is_pinned_to_first_position` 与 `node_direct_rule_outranks_overlay_rules` 在**合并产物**上覆盖；同名 `dns.servers` 按 tag 覆盖未迁移（当前无需求，见上一条）
