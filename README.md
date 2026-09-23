@@ -105,7 +105,7 @@ Apple-AI|appleai|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/
 ## 目录索引
 
 - `config/rules/`：分流规则源（`index.txt` + `custom/`）与编译器 `scripts/rules-compile.ts`，详见其 [README](./config/rules/README.md)
-- `config/sing-box/`：sing-box 标准底模、本地覆盖示例与沙箱套件
+- `config/sing-box/`：sing-box 标准底模与沙箱闭环套件
 - `config/loon/`：Loon 配置文件与插件
 - `scripts/sb-sync-rs/`：sb-sync Rust 源码（客户端编码 + 服务端装配）
 - `docs/ARCH.md`：系统顶层架构
@@ -138,9 +138,14 @@ just rules-build    # 全量编译各端产物（CI 也会在推送后自动做�
 ```bash
 just vm-create      # 一次性创建 Lima VM
 just vm-start
-just test-sandbox   # 在 VM 内运行全部网络行为测试
+just test-sandbox   # 引导闭环 + 在 VM 内跑全部网络行为测试
+just test-loop      # 只跑闭环断言（引导已完成时用）
 just vm-stop
 ```
+
+`test-sandbox` 会先自动取当前 HEAD 的 Linux 产物、在 VM 内起服务端并取回它实际响应的
+配置，再驱动内核做规则集装载与 18 个命中断言。产物需先由
+`gh workflow run release-sb-sync.yml --ref <分支>` 构建（或已存在的同名分支构建）。
 
 Rust 部分（`scripts/sb-sync-rs/`）的编译校验由远程 CI 承担
 （`.github/workflows/ci-sb-sync.yml`：fmt + clippy 严格规则 + 测试 + 镜像构建）。

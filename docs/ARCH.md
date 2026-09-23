@@ -77,13 +77,17 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant Dev as 开发与配置调整
-    participant ASM as 装配引擎 (endpoint.ts)
+    participant CI as CI (release-sb-sync)
+    participant ASM as 装配引擎 (服务端 sb-sync)
     participant VM as Lima VM 沙箱 (proxy-test)
     participant Probe as 探针 (just trace)
 
-    Dev->>ASM: 输入订阅与自建节点
-    ASM->>VM: 生成配置并推入沙箱 (规则集本地挂载)
-    VM->>VM: 启动 sing-box 内核 (100ms 纯本地启动)
+    Dev->>CI: 推分支，取 HEAD 的 Linux 产物
+    CI-->>Dev: sb-sync-aarch64-unknown-linux-musl
+    Dev->>VM: 拷入二进制与规则产物
+    Dev->>ASM: VM 内起服务端 (客户端 encode 生成订阅 URL)
+    ASM-->>Dev: /sub 返回真实装配产物 (解密 -> 装配 -> 官方 CLI 合并)
+    Dev->>VM: 后处理为可运行配置并启动内核
     Dev->>Probe: 发起目标探测 (如 api.openai.com)
     Probe->>VM: 向 127.0.0.1:2080 注入请求
     VM-->>Probe: 捕获内核日志 (嗅探 -> 规则 -> 策略组 -> 物理出口)

@@ -278,9 +278,7 @@ Dockerfile                     三阶段构建
 
 ## 9. 已知遗留
 
-- `assemble.rs` 的 `merge_local_config` 与 `AssembleInput.local` 在生产路径已无调用者（客户端 local 覆盖改由 `overlay` 承担），仅测试引用
-- `libc` 依赖在 `main.rs` 重写后已无使用点
-- `scripts/endpoint.ts` 与 `scripts/trace-route.ts` 是沙箱测试用的 TS 装配实现，与 Rust 版并行维护，两者的策略组语义必须同步
+- `assemble.rs` 的 `merge_local_config` 与 `AssembleInput.local` 在生产路径已无调用者，仅测试引用
 
 ## 10. 关键文件
 
