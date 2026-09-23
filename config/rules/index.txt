@@ -5,7 +5,10 @@
 #   policy  路由策略，对应 sing-box 的 outbound 名；reject 会编译成 action: reject
 #   source  仓库相对路径则读本地文件；以 http 开头则按 URL 拉取
 #
-# 只编辑本文件与 custom/ 下的列表，各客户端产物由 scripts/singbox_rules.py 生成。
+# 只编辑本文件与 custom/ 下的列表：各客户端产物（sing-box .srs / clash yaml / plain）
+# 由 scripts/rules-compile.ts 编译，CI 自动发布到 sing-box-rules 分支，底模按
+# update_interval 远程引用。policy 列必须与底模 route.rules 的去向一致，
+# 否则 `just rules-check` 与 CI 都会报错。
 # 详见 config/rules/README.md
 
 MyReject|reject|config/rules/custom/MyReject.list
@@ -21,7 +24,7 @@ Japan|japansite|config/rules/custom/Japan.list
 opencode|opencode|config/rules/custom/opencode.list
 cftunnel|direct|config/rules/custom/cftunnel.list
 Advertising|reject|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Advertising/Advertising.list
-Apple|direct|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Apple/Apple_Domain.list
+Apple|apple|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Apple/Apple_Domain.list
 ChinaMax|direct|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/ChinaMax/ChinaMax.list
 Facebook|proxy|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Facebook/Facebook.list
 geoip-cn|direct|https://raw.githubusercontent.com/Loon0x00/LoonLiteRules/main/direct/cn.list

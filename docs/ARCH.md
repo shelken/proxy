@@ -18,9 +18,9 @@ proxy/
 
 ```mermaid
 flowchart TD
-    subgraph S1 ["1. 规则编译 (CI / 定时任务)"]
-        R_SRC["规则源 (config/rules/)"] --> GHA["GitHub Actions 编译器"]
-        GHA --> R_BIN["二进制规则集 (*.srs)\n(发布于 sing-box-rules 分支)"]
+    subgraph S1 ["1. 规则编译 (CI)"]
+        R_SRC["规则清单 (config/rules/index.txt + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
+        GHA --> R_BIN["各端产物\n(singbox 64 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
     end
 
     subgraph S2 ["2. 设备侧装配 (sb-sync)"]
@@ -40,6 +40,8 @@ flowchart TD
 
 要点：
 
+- **规则产物自动重建**：改 `index.txt` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
+- **清单与底模强一致**：CI 校验每个 tag 的 policy 与底模 `route.rules` 的去向一致，漂移即失败（底模是手写单一配置源，编译器只报错不改写）
 - **装配全部本地化**：订阅抓取、URI 解析、策略组填充都在设备上完成，凭据零外泄
 - **内核校验是可选依赖**：`SING_BOX` 环境变量 → PATH 上的 sing-box → SFM 面板在线探测 → 全无则跳过（`.bak` 回滚保底）
 - **不耦合仓库目录**：底模来自远程 main 分支或二进制内嵌版，产物与状态在 `~/.config/sing-box/`

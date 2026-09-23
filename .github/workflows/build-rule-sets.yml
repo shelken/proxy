@@ -1,0 +1,116 @@
+# 规则产物构建：config/rules 变更后编译各端产物并发布到 sing-box-rules 分支。
+#
+# 底模（config/sing-box/template.json）以 update_interval: 1d 远程引用该分支的 .srs：
+# 少了这条链路，改了清单客户端也只会一直拉到旧规则。
+name: build-rule-sets
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      # 发布分支自身由本工作流写入，不该再触发一轮
+      - "sing-box-rules"
+    paths:
+      - "config/rules/index.txt"
+      - "config/rules/custom/**"
+      - "config/sing-box/template.json"
+      - "scripts/rules-compile.ts"
+      - "scripts/rules-compile.test.ts"
+      - ".github/workflows/build-rule-sets.yml"
+  schedule:
+    # 每天 20:23 UTC（北京 04:23）。上游清单（blackmatrix7 等）的内容会变，
+    # 只靠仓库文件变更触发的话，上游新增的域名永远进不来。
+    # 错开整点：GitHub 在 0 分附近排队最重。
+    - cron: "23 20 * * *"
+
+# 多次 push 各自触发一次运行，每次都 force push 同一条发布分支。后跑完的覆盖整棵树，
+# 所以先触发的那次若后完成，分支上留的是旧产物。排队而不是取消：取消若恰落在
+# force push 中途，分支状态不确定。
+concurrency:
+  group: build-rule-sets
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 生成器只读工作树，发布走独立临时仓，都不需要完整历史
+          fetch-depth: 1
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # sing-box 版本由 .mise.toml 固定（1.14.1）：编译 .srs 的行为随版本变化，
+      # 跟着 mise 走可保证本地与 CI 编出同一份二进制。
+      # 只装 sing-box 一个工具，缓存没有可命中的内容，关掉省一次无用往返。
+      - uses: jdx/mise-action@v4
+        with:
+          cache: false
+
+      - name: 单元测试
+        run: bun test scripts/rules-compile.test.ts
+
+      - name: 校验清单与底模一致
+        run: bun scripts/rules-compile.ts check
+
+      - name: 构建全部产物
+        run: bun scripts/rules-compile.ts build --all
+
+      - name: 汇总产物
+        shell: bash
+        run: |
+          rm -rf publish
+          mkdir -p publish/singbox publish/clash publish/plain
+          cp config/rules/generated/singbox/*.json publish/singbox/
+          cp config/rules/generated/singbox/*.srs publish/singbox/
+          cp config/rules/generated/clash/*.yaml publish/clash/
+          cp config/rules/generated/plain/*.list publish/plain/
+          cp config/rules/generated/45-ruleset-remote.json publish/45-ruleset.json
+          echo "产物统计:"
+          for d in singbox clash plain; do echo "  $d: $(ls -1 publish/$d | wc -l)"; done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rule-sets
+          path: publish
+          if-no-files-found: error
+
+      - name: 发布到 sing-box-rules 分支
+        # 只在默认分支上发布：PR 未合并就覆盖生产分支，等于让未审核的规则立刻生效。
+        # schedule 只在默认分支运行，无需额外判断 event_name，只看 ref。
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          rm -rf publish-repo
+          mkdir publish-repo
+          cd publish-repo
+          git init
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch --depth=1 origin sing-box-rules; then
+            git checkout -B sing-box-rules FETCH_HEAD
+          else
+            git checkout --orphan sing-box-rules
+          fi
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R ../publish/. .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "产物无变化，跳过发布"
+            exit 0
+          fi
+          # 每次发布都是整棵树快照，父提交对产物消费者没有意义：
+          # 用 commit-tree 造一个无父提交，避免分支历史线性膨胀。
+          TREE_ID="$(git write-tree)"
+          COMMIT_ID="$(printf '%s\n' 'build: update rule sets' | git commit-tree "${TREE_ID}")"
+          git reset --hard "${COMMIT_ID}"
+          git push --force origin HEAD:sing-box-rules
