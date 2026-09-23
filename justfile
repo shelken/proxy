@@ -71,6 +71,21 @@ check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
 
+# --- 规则产物 ---
+# 编译全部规则产物（联网拉上游清单，需 sing-box 编译 .srs）
+rules-build:
+    @bun scripts/rules-compile.ts build --all
+
+# 只构建单个 tag（如 just rules-build-one OpenAI）
+rules-build-one tag:
+    @bun scripts/rules-compile.ts build {{tag}}
+
+# 校验清单（index.txt）与底模（template.json）路由是否一致
+# 改了底模的路由分组却忘了同步清单 policy 时，这里会直接报出是哪个 tag
+rules-check:
+    @bun scripts/rules-compile.ts check
+
+
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点
 # 用法: just trace google.com
 #       just trace api.openai.com
