@@ -59,7 +59,7 @@ TUN 网段改用 `198.18.0.1/30`（RFC 2544 基准测试保留网段，真实网
 
 ## 预防
 
-- TUN 网段必须避开 `route_exclude_address` 覆盖范围：改 `tun.address` 或 `route_exclude_address` 任一后，执行 `python3 -c "import ipaddress, json; t=json.load(open('config/sing-box/template.json'))['inbounds'][0]; [print('CONFLICT') for ex in t['route_exclude_address'] for a in t['address'] if ipaddress.ip_network(a.split('/')[0]+'/32').subnets_of(ipaddress.ip_network(ex))]"` 之类的网段包含检查（已计划固化为 sb-sync check 项）
+- TUN 网段必须避开 `route_exclude_address` 覆盖范围：改 `tun.address` 或 `route_exclude_address` 任一后，执行 `python3 -c "import ipaddress, json; t=json.load(open('config/sing-box/template.json'))['inbounds'][0]; [print('CONFLICT') for ex in t['route_exclude_address'] for a in t['address'] if ipaddress.ip_network(a.split('/')[0]+'/32').subnets_of(ipaddress.ip_network(ex))]"` 之类的网段包含检查（`sb-sync check` 子命令已随交付模型改版删除，现改用上述命令手工检查）
 - 配置变更后必须做"系统解析器可达性"端到端验证，而非只跑 `sing-box check`（check 只验语法）：
   1. `scutil --dns | head` 确认解析器地址
   2. `dig +short +time=2 +tries=1 <从未访问过的域名>`（用随机子域避开一切缓存，如 `test$(date +%s).example.com` 的 NS 或直接一个生僻域名）必须在 2s 内返回或 NXDOMAIN，超时即失败

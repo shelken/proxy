@@ -5,16 +5,18 @@
 ```text
 proxy/
 ├── scripts/
-│   └── sb-sync-rs/       # sb-sync 设备侧同步 CLI（Rust 单二进制）
+│   └── sb-sync-rs/       # sb-sync 客户端编码 + 服务端装配（Rust 单二进制）
 ├── config/
 │   ├── rules/            # 分流规则源 (自定义 .list 与上游 index.txt)
 │   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
-├── .github/workflows/    # CI：tag v* 触发 sb-sync 编译发布
+├── docs/                 # 架构 (ARCH / sb-sync) 与用户指南
+├── .github/workflows/    # CI：ci-sb-sync 门禁；tag v* 触发二进制与镜像发布
+├── Dockerfile            # 服务端镜像（sing-box CLI + sb-sync）
 └── justfile              # 统一测试与运维指令入口
 ```
 
-## 2. 链路一：设备侧配置交付链路 (Device Config Pipeline)
+## 2. 链路一：配置交付链路 (Config Delivery Pipeline)
 
 ```mermaid
 flowchart TD
@@ -23,18 +25,21 @@ flowchart TD
         GHA --> R_BIN["各端产物\n(singbox 64 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
     end
 
-    subgraph S2 ["2. 设备侧装配 (sb-sync)"]
-        TPL_R["远程底模 (main 分支)\n失败→缓存→内嵌, 三级回退"] --> ASM["sb-sync sync"]
-        SUB["机场订阅 (store.json)"] --> ASM
-        NODE["自建私有节点 (store.json)"] --> ASM
-        LOCAL["设备 local 覆盖\n(~/.config/sing-box/local.json)"] --> ASM
-        R_BIN -.->|rule_set 远程引用| ASM
-        ASM -->|"原子写(tmp→校验→.bak→rename)"| CFG["~/.config/sing-box/singbox.json"]
+    subgraph S2 ["2. 客户端编码 (sb-sync encode)"]
+        YAML["config.yaml\nsubs / nodes / overlay / template_url"] --> ENC["校验 + 加密\nX25519 + HKDF + AES-256-GCM"]
+        PK["服务端公钥\nGET /pubkey 自动获取"] --> ENC
+        ENC --> URL["订阅 URL\n/sub?d=&lt;密文&gt;"]
     end
 
-    subgraph S3 ["3. 运行环境消费"]
-        CFG --> SFM["SFM (Local Profile)\n菜单栏开关 OFF→ON 重载"]
-        CFG --> SANDBOX["Lima VM 隔离沙箱 (回归测试 / 路由探测)"]
+    subgraph S3 ["3. 服务端装配 (sb-sync server)"]
+        URL --> SRV["解密 + 装配节点\n反回环直连规则置顶"]
+        SRV --> MG["官方 sing-box merge\n(不自研合并)"]
+        R_BIN -.->|rule_set 远程引用| SRV
+    end
+
+    subgraph S4 ["4. 运行环境消费"]
+        MG --> SFM["SFM (Remote Profile)\n按间隔自动拉取"]
+        MG --> SANDBOX["Lima VM 隔离沙箱 (回归测试 / 路由探测)"]
     end
 ```
 
@@ -42,9 +47,10 @@ flowchart TD
 
 - **规则产物自动重建**：改 `index.txt` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
 - **清单与底模强一致**：CI 校验每个 tag 的 policy 与底模 `route.rules` 的去向一致，漂移即失败（底模是手写单一配置源，编译器只报错不改写）
-- **装配全部本地化**：订阅抓取、URI 解析、策略组填充都在设备上完成，凭据零外泄
-- **内核校验是可选依赖**：`SING_BOX` 环境变量 → PATH 上的 sing-box → SFM 面板在线探测 → 全无则跳过（`.bak` 回滚保底）
-- **不耦合仓库目录**：底模来自远程 main 分支或二进制内嵌版，产物与状态在 `~/.config/sing-box/`
+- **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
+- **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `01-overlay` / `02-base` 命名，字典序决定标量覆盖与数组拼接
+- **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态
+- 细节见 [sb-sync 架构](./sb-sync.md)
 
 ## 3. 链路二：运行时流量决策链路 (Runtime Traffic Pipeline)
 
@@ -84,11 +90,17 @@ sequenceDiagram
     Probe-->>Dev: 输出链路审计报告 (0 污染宿主网络)
 ```
 
-## 5. 发布链路
+## 5. 发布与门禁链路
 
 ```text
-git tag v* → GitHub Actions (release-sb-sync.yml)
-  → cargo test --release → cargo build --release
+每次改动 (scripts/sb-sync-rs/** 或 template.json) → ci-sb-sync.yml
+  → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
+  → 装 sing-box 1.14.1 → cargo test → cargo build --release
+  → docker build（不推送）+ 起容器验 /healthz 与 /pubkey
+
+git tag v* → release-sb-sync.yml
+  → macOS 上 cargo test --release → cargo build --release
   → 上传 sb-sync-aarch64-apple-darwin 到 GitHub Release
+  → 构建并推送 sb-sync-server 镜像到 GHCR
   → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取
 ```

@@ -5,12 +5,12 @@
 ## 功能
 
 - **统一底模**：全平台标准化 sing-box 底模，包含双入站、内网穿透与 22 大分流策略组
-- **sb-sync 设备同步**：Rust 单二进制（约 2MB），任意 arm Mac 上一条命令完成底模更新、订阅装配、本地产出
-- **分层网络自检**：`sb-sync doctor` 逐层定位 DNS / 直连 / 代理链路问题
+- **sb-sync 双形态**：Rust 单二进制。客户端 `encode` 把本机 YAML 加密成一条订阅 URL；服务端 `server` 解密后装配节点并调用官方 sing-box merge 产出配置
+- **凭据零外泄**：订阅与节点只经服务端公钥加密传输，密钥材料不出本机
 - **纯本地沙箱验证**：基于 Lima VM 仿真双入站与路由表，毫秒级黑盒诊断分流链路
 - **Loon 多端生态**：维护移动端与 macOS 配置，集成去广告与自动化签到插件
 
-## 快速上手（设备侧，SFM 用户）
+## 快速上手（客户端）
 
 无需本仓库源码，一条命令安装（依赖 [mise](https://mise.jdx.dev)）：
 
@@ -18,27 +18,23 @@
 mise install github:shelken/proxy@latest
 ```
 
-初始化并添加节点来源：
+写配置 `~/.config/sing-box/config.yaml`：
 
-```bash
-sb-sync init
-sb-sync add sub "https://example.com/api/v1/client/subscribe?token=..."
-sb-sync add node "hysteria2://password@host:port/?obfs=salamander&obfs-password=...#SelfHost"
-sb-sync sync
+```yaml
+subs:
+  - https://example.com/api/v1/client/subscribe?token=...
+nodes:
+  - hysteria2://password@host:port/?obfs=salamander&obfs-password=...#SelfHost
 ```
 
-产物 `~/.config/sing-box/singbox.json` 导入 SFM（Local Profile），菜单栏开关 OFF→ON 重载。
-导入与日常更新详见[用户指南：Mac+SFM](./docs/user-guide/01-mac-sfm.md)。
-
-日常操作：
+生成订阅 URL（自动写剪切板，公钥从服务端实时获取）：
 
 ```bash
-sb-sync sync    # 拉订阅 + 自动更新底模 + 原子产出（SFM 在线时会提示重载）
-sb-sync check   # 零网络验证本地产物
-sb-sync doctor  # 网络分层自检：配置 / DNS 解析链 / 直连·代理·CDN 计时
+sb-sync encode https://sub.example.com
 ```
 
-完整命令与配置说明见 `sb-sync --help`。
+把 URL 粘进 SFM 的 Remote Profile，之后由 SFM 按间隔自动拉取。
+详见[用户指南：Mac+SFM](./docs/user-guide/01-mac-sfm.md)。
 
 ## 快速上手（开发机）
 
@@ -49,12 +45,12 @@ mise install
 bun install
 ```
 
-Rust 版 sb-sync 源码位于 `scripts/sb-sync-rs/`：
+Rust 版 sb-sync 源码位于 `scripts/sb-sync-rs/`。编译校验由远程 CI 承担
+（`.github/workflows/ci-sb-sync.yml`：fmt + clippy 严格规则 + 测试 + 镜像构建）：
 
 ```bash
 cd scripts/sb-sync-rs
-cargo test        # 核心库测试
-cargo build --release
+cargo run -- keygen
 ```
 
 测试：
@@ -96,8 +92,9 @@ just test-sandbox  # Lima VM 沙箱网络行为测试
 
 ## 目录索引
 
-- `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)（sb-sync CLI 同步等）
-- `scripts/sb-sync-rs/`：sb-sync Rust 源码（设备侧同步 CLI）
+- `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)
+- `docs/sb-sync.md`：sb-sync 客户端与服务端架构、加密协议、配置说明
+- `scripts/sb-sync-rs/`：sb-sync Rust 源码（客户端编码 + 服务端装配）
 - `config/sing-box/`：sing-box 标准底模与沙箱测试套件
 - `config/rules/`：分流规则源清单与自定义列表（编译器 `scripts/rules-compile.ts`）
 - `config/loon/`：Loon 配置文件与插件
