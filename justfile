@@ -48,19 +48,20 @@ vm-delete:
     limactl delete --force {{vm_name}}
 
 # --- 沙箱测试 ---
-# 同步点：把生产底模、规则集与测试用例复制到 VM，并生成本地规则等价配置
-sync-sandbox:
-    {{lima_shell}} rm -rf /work/sing-box
-    {{lima_shell}} mkdir -p /work/sing-box/tests /work/sing-box/rules /work/sing-box/ui
-    {{lima_shell}} touch /work/sing-box/ui/index.html
-    {{lima_shell}} cp -r {{repo_in_guest}}/config/rules/generated/singbox/. /work/sing-box/rules/
-    {{lima_shell}} cp {{repo_in_guest}}/config/sing-box/template.json /work/sing-box/template.json
-    {{lima_shell}} cp -r {{repo_in_guest}}/config/sing-box/tests/. /work/sing-box/tests/
-    {{lima_shell}} /opt/proxy-test/bin/bun -e 'import { buildConfig } from "/host-home/Code/active/proxy/scripts/endpoint.ts"; const cfg = await buildConfig({ sources: "hysteria2://pass@1.1.1.1:443#selfhost" }); cfg.route.rule_set = cfg.route.rule_set.map(rs => rs.type === "remote" ? { type: "local", tag: rs.tag, format: "binary", path: `/work/sing-box/rules/${rs.tag}.srs` } : rs); await Bun.write("/work/sing-box/config.json", JSON.stringify(cfg, null, 2));'
+# 闭环引导：取 HEAD 的 CI 产物 → 拷入 VM → VM 内起服务端 → 取回它实际响应的配置
+# 后处理为可驱动内核的形式。配置来源是服务端产物，不再是本地等价实现（ADR-0003）。
+sandbox-loop:
+    @bun run scripts/sandbox-loop.ts
 
-# 在沙箱内运行全部网络行为测试
-test-sandbox: sync-sandbox
+# 在沙箱内运行全部网络行为测试（先引导，再跑断言）
+test-sandbox: sandbox-loop
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests
+
+# 只跑闭环相关测试（引导已完成时用，省一次产物下载与会话启动）
+test-loop:
+    {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests/loop.test.ts
+
+
 # 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
 sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 

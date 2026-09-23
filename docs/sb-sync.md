@@ -101,9 +101,9 @@ sequenceDiagram
     Hd->>As: collect_nodes（订阅 + 节点 URI）
     As-->>Hd: 节点全集
     Hd->>As: load_template（template_url 或内嵌）
-    Hd->>As: generate_node_direct_rule → rules[0] 置顶
+    Hd->>As: generate_node_direct_rule → 独立层 00-direct
     Hd->>As: finalize（策略组展开 + outbounds）
-    Hd->>CLI: merge result.json -c 01-overlay -c 02-base
+    Hd->>CLI: merge result.json -c 00-direct -c 01-overlay -c 02-base
     CLI-->>Hd: result.json
     Hd-->>SFM: 200 application/json
 ```
@@ -134,7 +134,9 @@ sequenceDiagram
 
 ### 反回环直连规则
 
-节点服务器的 IP 若被二次代理会形成回环。规则在节点全集确定后生成，并插入 `route.rules[0]` 保证最先命中
+节点服务器的 IP 若被二次代理会形成回环。规则在节点全集确定后生成，作为独立输入层 `00-direct` 参与合并，字典序保证它在最终产物里最先命中
+
+> 规则**不放进底模**：底模排在 overlay 之后，放进去会被 overlay 的路由规则挤到后面而失去保护。
 
 ```text
 IP server      → ip_cidr（v4 /32、v6 /128）
@@ -150,24 +152,28 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 
 ## 6. 合并机制
 
-服务端不自研合并算法，直接调用官方 CLI。两份输入文件的**文件名前缀是承重设计**，不是随手命名
+服务端不自研合并算法，直接调用官方 CLI。输入层的**文件名前缀是承重设计**，不是随手命名：字典序即优先级
 
 ```text
+00-direct.json    反回环直连规则（必须在所有规则之前，含 overlay 的规则）
 01-overlay.json   客户端提交的 overlay
-02-base.json      服务端装配好的底模（含节点、策略组、反回环规则）
+02-base.json      服务端装配好的底模（含节点、策略组）
 ```
 
-实测（sing-box 1.14.1）：生效顺序由**文件路径字典序**决定，与 `-c` 的 argv 顺序无关，靠后者覆盖同类标量
+实测（sing-box 1.14.1）：生效顺序由**文件路径字典序**决定，与 `-c` 的 argv 顺序、文件 mtime 都无关
 
-| 类型 | 行为 | 结果 |
+| 类型 | 行为 | 在本层序下的结果 |
 | :--- | :--- | :--- |
-| 标量（`log.level`、`dns.strategy`、`route.final`） | 后排序者胜 | `02-base` 胜，底模结构值权威，overlay 改不坏骨架 |
-| 数组（`route.rules`） | 拼接，非覆盖 | `01-overlay` 的元素排最前，overlay 路由规则优先命中 |
+| 标量（`log.level`、`dns.strategy`、`route.final`） | **字典序先者胜** | `01-overlay` 压过 `02-base`，设备可覆盖底模标量 |
+| 数组（`route.rules`） | 按字典序拼接，不覆盖 | `00-direct` 的规则排最前，反回环优先命中 |
+| 同名 tag（`dns.servers` 等） | **最后者胜**，且不报错 | 与上面两条方向相反：`02-base` 反而胜出，**按 tag 覆盖不受支持**（见 §9 已知遗留） |
+
+> 标量方向易被误记成「后者胜」。判据：标量取**首份**出现的值，故要让 overlay 生效它必须排在**前**；同名 tag 取**末份**，两者要求相反，一个字典序无法同时满足。
 
 复现
 
 ```bash
-# 见 scripts/sb-sync-rs/src/server.rs::run_singbox_merge 的写入与调用顺序
+# 层名与顺序的唯一定义处：server.rs 的 LAYER_DIRECT / LAYER_OVERLAY / LAYER_BASE
 mise exec -- sing-box merge --help
 ```
 
@@ -278,9 +284,7 @@ Dockerfile                     三阶段构建
 
 ## 9. 已知遗留
 
-- `assemble.rs` 的 `merge_local_config` 与 `AssembleInput.local` 在生产路径已无调用者（客户端 local 覆盖改由 `overlay` 承担），仅测试引用
-- `libc` 依赖在 `main.rs` 重写后已无使用点
-- `scripts/endpoint.ts` 与 `scripts/trace-route.ts` 是沙箱测试用的 TS 装配实现，与 Rust 版并行维护，两者的策略组语义必须同步
+- 设备 `overlay` 只能做**标量覆盖**（`log.level` 这类）与**追加入栈**，不能按 tag 覆盖底模已有的 `dns.servers` 条目。原 `local.json` 链路的按 tag 替换语义未迁移（当前无使用需求，见 `docs/adr/0002`）。
 
 ## 10. 关键文件
 

@@ -48,7 +48,7 @@ flowchart TD
 - **规则产物自动重建**：改 `index.txt` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
 - **清单与底模强一致**：CI 校验每个 tag 的 policy 与底模 `route.rules` 的去向一致，漂移即失败（底模是手写单一配置源，编译器只报错不改写）
 - **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
-- **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `01-overlay` / `02-base` 命名，字典序决定标量覆盖与数组拼接
+- **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct` / `01-overlay` / `02-base` 命名，路径字典序决定优先级（标量取先者、数组按序拼接）
 - **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态
 - 细节见 [sb-sync 架构](./sb-sync.md)
 
@@ -77,13 +77,17 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant Dev as 开发与配置调整
-    participant ASM as 装配引擎 (endpoint.ts)
+    participant CI as CI (release-sb-sync)
+    participant ASM as 装配引擎 (服务端 sb-sync)
     participant VM as Lima VM 沙箱 (proxy-test)
     participant Probe as 探针 (just trace)
 
-    Dev->>ASM: 输入订阅与自建节点
-    ASM->>VM: 生成配置并推入沙箱 (规则集本地挂载)
-    VM->>VM: 启动 sing-box 内核 (100ms 纯本地启动)
+    Dev->>CI: 推分支，取 HEAD 的 Linux 产物
+    CI-->>Dev: sb-sync-aarch64-unknown-linux-musl
+    Dev->>VM: 拷入二进制与规则产物
+    Dev->>ASM: VM 内起服务端 (客户端 encode 生成订阅 URL)
+    ASM-->>Dev: /sub 返回真实装配产物 (解密 -> 装配 -> 官方 CLI 合并)
+    Dev->>VM: 后处理为可运行配置并启动内核
     Dev->>Probe: 发起目标探测 (如 api.openai.com)
     Probe->>VM: 向 127.0.0.1:2080 注入请求
     VM-->>Probe: 捕获内核日志 (嗅探 -> 规则 -> 策略组 -> 物理出口)

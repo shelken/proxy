@@ -1,14 +1,17 @@
 /**
- * 全链路路由追踪器 (纯本地规则集等价运行)
+ * 全链路路由追踪器
+ *
+ * 配置来源是**服务端真实产物**：起临时服务端 → 经 encode + /sub 取回它实际响应的
+ * 配置 → 驱动内核追踪。不再是本地等价实现（ADR-0003）。
  *
  * 特性：
- * 1. 纯本地等价行为：直接复用 config/rules/generated/singbox/*.srs 本地编译产物，零远程下载。
- * 2. 真实节点注入：挂载从 .env 解析装配的实体节点与策略组。
- * 3. 毫秒级就绪：内核在 500ms 内启动完成，立即注入流量并抓取完整决策链路。
+ * 1. 零远程下载：规则集本地编译产物路径由引导重写，内核秒级就绪。
+ * 2. 真实节点注入：从 .env 读取订阅与私有节点，经完整加密链路交给服务端装配。
+ * 3. 完整决策链：嗅探 → 规则 → 策略组 → 物理出口，全程不污染宿主网络。
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { buildConfig, generateNodeDirectRule } from "./endpoint.ts";
+import { bootstrap } from "./sandbox-loop.ts";
 
 const domain: string = process.argv[2] || "google.com";
 const VM_NAME = "proxy-test";
@@ -85,46 +88,29 @@ function parseEnv(content: string): Record<string, string> {
 async function main(): Promise<void> {
   console.log(`\n🔍 [TRACE] 开始全链路探测: ${domain}`);
 
-  // 1. 从 .env 装配单份完整配置
-  console.log(`[TRACE] 装配端点统一单文件配置...`);
+  // 1. 从 .env 读真实源，经完整加密链路交给服务端装配
   const envContent = existsSync(".env") ? readFileSync(".env", "utf-8") : "";
   const env = parseEnv(envContent);
-  const parts: string[] = [];
-  if (env.NODE_URI) parts.push(...env.NODE_URI.split("|").map((s: string) => s.trim()).filter(Boolean));
-  if (env.SUB_URL) parts.push(env.SUB_URL.trim());
+  const nodes = (env.NODE_URI ?? "")
+    .split("|")
+    .map((s: string) => s.trim())
+    .filter(Boolean);
+  const subs = env.SUB_URL ? [env.SUB_URL.trim()] : [];
 
-  if (parts.length === 0) {
+  if (nodes.length === 0 && subs.length === 0) {
     throw new Error("未在 .env 中找到 SUB_URL 或 NODE_URI，无法装配真实节点配置");
   }
-
-  const config = (await buildConfig({ sources: parts.join("|") })) as unknown as SingBoxConfig;
-
-  // 沙箱等价 sb-sync 产物：反回环规则置顶（trace 无 local.json 合并链路，直接插 rules 顶部）
-  const nodeDirectRule = await generateNodeDirectRule(
-    (config.outbounds ?? []) as { server?: string }[],
-    config as never,
+  console.log(
+    `[TRACE] 起临时服务端装配（订阅 ${subs.length} 个，私有节点 ${nodes.length} 个）...`,
   );
-  if (nodeDirectRule) {
-    config.route.rules.unshift(nodeDirectRule);
+  bootstrap({ nodes, subs });
+
+  // 2. 取回引导产出的配置（引导已完成 rule_set → 本地路径重写与 check）
+  const configSync = sh("cat /work/sing-box/config.json");
+  if (configSync.code !== 0) {
+    throw new Error(`读取沙箱配置失败: ${configSync.err}`);
   }
-
-  config.log = { level: "debug" };
-  delete config.route.default_http_client;
-  delete config.default_http_client;
-  delete config.http_clients;
-
-  // 2. 本地规则集等价模型：将 remote 规则集重写为本地 /work/sing-box/rules/*.srs (零网络下载)
-  config.route.rule_set = config.route.rule_set.map((rs: SingBoxRuleSet) => {
-    if (rs.type === "remote") {
-      return {
-        type: "local",
-        tag: rs.tag,
-        format: "binary",
-        path: `/work/sing-box/rules/${rs.tag}.srs`,
-      };
-    }
-    return rs;
-  });
+  const config = JSON.parse(configSync.out) as SingBoxConfig;
 
   // 沙箱 DNS 隔离:Lima NAT 网关(192.168.5.2)的上游链会透传宿主 SFM fakeip(198.18/15)
   // 并对部分私域返回 NXDOMAIN,type:local 在 VM 内不可信。改为明确公共 UDP 上游,
@@ -133,18 +119,9 @@ async function main(): Promise<void> {
   config.dns.servers = (config.dns.servers ?? []).map((s: Record<string, unknown>) =>
     s.type === "local" ? { type: "udp", tag: s.tag, server: "223.5.5.5" } : s,
   );
-  // 沙箱不需要面板:external_ui 触发启动时从 GitHub 下载,断网/慢网会阻塞 sing-box started
-  delete config.experimental?.clash_api?.external_ui;
 
-  // 3. 同步到沙箱 VM
-  console.log(`[TRACE] 同步本地规则与单文件配置到沙箱 VM...`);
-  sh(`
-    rm -rf /work/sing-box
-    mkdir -p /work/sing-box/rules
-    cp -r /host-home/Code/active/proxy/config/rules/generated/singbox/. /work/sing-box/rules/
-  `);
-  // 将单一配置推入 VM
-  const configSync = Bun.spawnSync(
+  // 3. 推回 VM 并校验
+  const push = Bun.spawnSync(
     [
       "limactl",
       "shell",
@@ -155,22 +132,18 @@ async function main(): Promise<void> {
       "-c",
       "cat > /work/sing-box/config.json",
     ],
-    {
-      stdin: Buffer.from(JSON.stringify(config, null, 2)),
-    },
+    { stdin: Buffer.from(JSON.stringify(config, null, 2)) },
   );
-  if (configSync.exitCode !== 0) {
-    throw new Error(`同步 config.json 失败: ${configSync.stderr.toString()}`);
+  if (push.exitCode !== 0) {
+    throw new Error(`同步 config.json 失败: ${push.stderr.toString()}`);
   }
-
-  // 4. 校验配置
   const check = sh("/opt/proxy-test/bin/sing-box check -c /work/sing-box/config.json");
   if (check.code !== 0) {
     console.error(`❌ [TRACE] 配置校验失败:\n${check.err || check.out}`);
     process.exit(1);
   }
-  console.log(`[TRACE] 配置校验通过 (单文件自包含，所有 27 份规则集均为纯本地秒级加载)`);
-
+  const ruleSetCount = config.route.rule_set.length;
+  console.log(`[TRACE] 配置校验通过 (单文件自包含，${ruleSetCount} 份规则集均为纯本地秒级加载)`);
   // 5. 启动内核进程（先清理旧残留，再后台捕获输出）
   sh("sudo -n pkill -9 -x sing-box || true; sleep 0.3");
   console.log(`[TRACE] 启动沙箱 sing-box 内核...`);
