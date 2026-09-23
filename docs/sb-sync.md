@@ -224,6 +224,7 @@ config_path
 | :--- | :--- | :--- |
 | `SERVER_PRIVATE_KEY` | 是 | 32 字节 Hex，缺失则启动即失败 |
 | `PORT` | 否 | 缺省 8080，可被 `--port` 覆盖 |
+| `SING_BOX` | 否 | 内核可执行文件路径。缺省回落到 PATH 上的 `sing-box`。沙箱内内核不在 PATH 上，靠它定位（见 `justfile` 的 `sing_box_cmd`）；空值视作未设置 |
 
 ### 7.4 底模来源
 
@@ -255,9 +256,10 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    TAG["git tag v*"] --> BIN["GitHub Actions: cargo test → build<br/>上传 arm64 macOS 二进制"]
+    TAG["git tag v*"] --> BIN["GitHub Actions: 三平台各自原生<br/>cargo test → build<br/>上传 darwin + 两种 Linux musl 二进制"]
     TAG --> IMG["GitHub Actions: docker build<br/>推送 GHCR sb-sync-server"]
-    BIN --> MISE["mise 安装到客户端 Mac"]
+    BIN --> MISE["mise 安装到客户端 Mac<br/>（仅取 darwin 产物）"]
+    BIN --> BOX["沙箱 VM 与服务端容器<br/>（取 Linux 产物）"]
     IMG --> HO["home-ops: HelmRelease<br/>ExternalSecret 注入私钥"]
     HO --> GW["envoy-external<br/>域名转发到容器 8080"]
 ```
@@ -267,6 +269,9 @@ flowchart TD
 ```text
 Dockerfile                     三阶段构建
 .github/workflows/             tag 触发的二进制与镜像双发布
+发布资产                       sb-sync-aarch64-apple-darwin          客户端
+                              sb-sync-aarch64-unknown-linux-musl    沙箱 VM / arm64 节点
+                              sb-sync-x86_64-unknown-linux-musl     amd64 节点
 ```
 
 大坑：`include_str!` 的基准是源文件所在目录，`src/../../../config/...` 三级上跳后落在容器**根**，所以 `COPY` 目标必须是 `/config/sing-box/template.json`，放 `/build/config/` 会编译失败

@@ -138,8 +138,19 @@ fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-/// 调用官方 sing-box CLI 合并 01-overlay.json + 02-base.json，返回结果 JSON 字符串。
+/// 调用内核 merge 01-overlay.json + 02-base.json，返回结果 JSON 字符串。
 fn run_singbox_merge(
+    dir: &TempMergeDir,
+    overlay: Option<&Value>,
+    base: &Value,
+) -> Result<String, String> {
+    run_singbox_merge_with(&template::resolve_singbox_binary(), dir, overlay, base)
+}
+
+/// merge 实现本体，内核路径由参数注入：测试需要验证「路径不存在时报错指向该路径」
+/// 这条契约，而内联读环境变量无法确定性覆盖（env 是进程全局，并行测试下互相污染）。
+fn run_singbox_merge_with(
+    bin: &std::ffi::OsStr,
     dir: &TempMergeDir,
     overlay: Option<&Value>,
     base: &Value,
@@ -166,17 +177,17 @@ fn run_singbox_merge(
     args.push(base_path.display().to_string());
 
     let result_path = dir.path.join("result.json");
-    let output = std::process::Command::new("sing-box")
+    let output = std::process::Command::new(bin)
         .arg("merge")
         .arg(result_path.display().to_string())
         .args(&args)
         .output()
-        .map_err(|e| format!("启动 sing-box 失败（容器内必须自带 sing-box 1.14.1）: {e}"))?;
+        .map_err(|e| format!("启动内核失败（{}）: {e}", bin.to_string_lossy()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let brief: String = stderr.lines().take(5).collect::<Vec<_>>().join("; ");
-        return Err(format!("sing-box merge 失败: {brief}"));
+        return Err(format!("内核 merge 失败: {brief}"));
     }
     std::fs::read_to_string(&result_path).map_err(|e| format!("读取合并结果失败: {e}"))
 }
@@ -279,6 +290,15 @@ pub fn run(port: u16) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// 与运行时同一套解析：`SING_BOX` 优先，否则 PATH。探测必须走它，
+    /// 否则沙箱（内核不在 PATH）里 e2e 会被误跳过，覆盖率静默降级。
+    fn singbox_available() -> bool {
+        std::process::Command::new(template::resolve_singbox_binary())
+            .arg("version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
     #[test]
     fn parse_payload_roundtrip() {
         let payload = json!({
@@ -339,13 +359,12 @@ mod tests {
 
     #[test]
     fn end_to_end_encrypt_assemble_merge() {
-        // 需要 sing-box 可执行文件；缺失则跳过（CI 沙箱内已保证）
-        if std::process::Command::new("sing-box")
-            .arg("version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skip: sing-box not found");
+        // 需要内核可执行文件；缺失则跳过（CI 沙箱内已保证）
+        if !singbox_available() {
+            eprintln!(
+                "skip: 内核不可用（{:?}）",
+                template::resolve_singbox_binary()
+            );
             return;
         }
         let (sk_hex, pk_hex) = crypto::generate_keypair_hex();
@@ -373,6 +392,48 @@ mod tests {
             "意外的底模来源: {}",
             source.as_str()
         );
+    }
+
+    /// 内核路径不存在时，报错必须含该路径本身。
+    /// 报错只说「启动失败」会让沙箱里调试的人先去怀疑 PATH，
+    /// 而真正的问题在 SING_BOX 指向了一个不存在的文件。
+    #[test]
+    fn missing_kernel_error_names_the_path() {
+        let dir = TempMergeDir::create().unwrap();
+        let base = json!({"outbounds": []});
+        let bad = std::ffi::OsString::from("/nonexistent/definitely-not-a-kernel");
+        let err = run_singbox_merge_with(&bad, &dir, None, &base).unwrap_err();
+        assert!(
+            err.contains("/nonexistent/definitely-not-a-kernel"),
+            "报错须含注入的内核路径，实际: {err}"
+        );
+    }
+
+    /// 内核 merge 失败时，报错须带上其 stderr 摘要（截前 5 行）。
+    /// 否则用户只看到「失败」而不知道是 overlay 语法错还是底模冲突。
+    #[test]
+    #[cfg(unix)]
+    fn kernel_failure_surfaces_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempMergeDir::create().unwrap();
+        let script_dir =
+            std::env::temp_dir().join(format!("sb-sync-badbox-{}", std::process::id()));
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let bad = script_dir.join("bad-kernel");
+        std::fs::write(
+            &bad,
+            "#!/bin/sh\necho 'ERROR: overlay 非法字段 xxx' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let base = json!({"outbounds": []});
+        let err = run_singbox_merge_with(bad.as_os_str(), &dir, None, &base).unwrap_err();
+        assert!(
+            err.contains("overlay 非法字段"),
+            "应带上 stderr 摘要，实际: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&script_dir);
     }
 
     #[test]

@@ -1,5 +1,14 @@
-# sb-sync 单二进制发布：打 tag 后编译 arm64 macOS 产物并上传 GitHub Release。
-# 产物消费者：mise [tools."github:shelken/proxy"] 与无 nix 设备的手动安装。
+# sb-sync 单二进制发布：打 tag 后编译三平台产物并上传 GitHub Release。
+#
+# 产物消费者：
+#   - macOS：mise [tools."github:shelken/proxy"]（客户端 encode/keygen）
+#   - Linux arm64：沙箱 VM 与服务端容器（aarch64 节点）
+#   - Linux amd64：服务端容器（amd64 节点，集群 worker 是 Intel）
+#
+# 每平台在对应原生 runner 上构建，不用 QEMU 模拟：macOS 目标在 macos-15，
+# arm64 Linux 在 ubuntu-24.04-arm，amd64 Linux 在 ubuntu-latest。
+# 原生构建的附带好处是每个产物都能在其构建机上直接跑 version 冒烟，
+# 模拟构建做不到这一点（异架构二进制无法执行）。
 name: release-sb-sync
 
 on:
@@ -7,20 +16,55 @@ on:
     tags:
       # 语义版本 tag（mise github 后端按 v<semver> 查询 release）
       - "v*"
+  # 手动触发用于验证构建链路本身（不发版、不上传）：Dockerfile 与
+  # include_str! 路径这类问题不验证就要等发版才暴露，代价过高
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build:
-    runs-on: macos-15
+  # 三平台二进制产出。tag 与手动触发都编译，只有 tag 会上传。
+  binaries:
+    name: binary (${{ matrix.artifact }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            artifact: sb-sync-aarch64-apple-darwin
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            artifact: sb-sync-aarch64-unknown-linux-musl
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            artifact: sb-sync-x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
 
+      # ring（经 rustls）的 build.rs 走 cc-rs 编 C 代码，musl 目标需要 musl-gcc。
+      # 两个 runner 都是原生架构（arm64 runner 编 aarch64 目标，amd64 runner 编
+      # x86_64 目标），所以系统自带的 musl-tools 就是对的，不需要交叉工具链：
+      # 只换 libc，不跨架构。ring 0.17.14 缺这个会在 cc-rs 探测阶段直接失败。
+      - name: Install musl toolchain
+        if: contains(matrix.target, 'linux')
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Verify musl toolchain
+        if: contains(matrix.target, 'linux')
+        run: musl-gcc --version
+
+      # 缓存键必须含 target：三平台并行跑，共享键会让不同架构的
+      # 构建产物互相覆盖（cargo 会因架构不符而重编或直接报错）
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -28,37 +72,96 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             scripts/sb-sync-rs/target
-          key: sb-sync-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          key: sb-sync-${{ matrix.target }}-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          restore-keys: sb-sync-${{ matrix.target }}-
 
+      # 单一事实来源 = git tag；构建前把 tag 写入 Cargo.toml，
+      # 避免二进制版本与发布版本漂移。手动触发时 ref 是分支名，不做同步。
       - name: Sync version with tag
+        if: startsWith(github.ref, 'refs/tags/')
         working-directory: scripts/sb-sync-rs
         run: |
-          # 单一事实来源 = git tag；构建前把 tag 写入 Cargo.toml，避免二进制版本与发布版本漂移
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
           rm Cargo.toml.bak
 
       - name: Test
         working-directory: scripts/sb-sync-rs
-        run: cargo test --release
+        run: cargo test --release --locked --target ${{ matrix.target }}
 
-      - name: Build sb-sync (arm64 macOS)
+      - name: Build
         working-directory: scripts/sb-sync-rs
-        run: cargo build --release && cp target/release/sb-sync ../../sb-sync-aarch64-apple-darwin
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          cp "target/${{ matrix.target }}/release/sb-sync" "../../${{ matrix.artifact }}"
 
+      # 每个产物在其构建机上原生执行：架构错了或动态链接缺失都会在这里暴露
       - name: Smoke test binary
         run: |
-          file sb-sync-aarch64-apple-darwin
-          ./sb-sync-aarch64-apple-darwin version | grep -q "sb-sync ${GITHUB_REF_NAME#v}" || { echo "version 不匹配"; exit 1; }
+          file "${{ matrix.artifact }}"
+          ./${{ matrix.artifact }} version
+          ./${{ matrix.artifact }} --help >/dev/null 2>&1 || true
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - name: Assert version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          ./${{ matrix.artifact }} version | grep -q "sb-sync ${GITHUB_REF_NAME#v}" || {
+            echo "二进制版本与 tag 不一致"; exit 1; }
+
+      # Linux musl 产物必须是静态链接：沙箱 VM 与容器都不保证有 glibc 兼容层，
+      # 动态链接的二进制会在那里以 "not found"（缺解释器）而不是明确报错失败。
+      #
+      # 判据是无解释器段，而不是匹配 file 的措辞：rustc 对 x86_64-unknown-linux-musl
+      # 默认产出 PIE，file 报 `static-pie linked`；aarch64 同类目标报 `statically linked`。
+      # 两者都静态，按字面匹配任一种都会误判另一种（实测踩到）。
+      - name: Assert static linkage (linux)
+        if: contains(matrix.target, 'linux')
+        run: |
+          BIN="${{ matrix.artifact }}"
+          FILE_OUT=$(file "$BIN")
+          echo "$FILE_OUT"
+          if echo "$FILE_OUT" | grep -qE 'dynamically linked|shared object'; then
+            echo "Linux 产物不应动态链接"; exit 1
+          fi
+          if readelf -lW "$BIN" | grep -q ' INTERP '; then
+            echo "Linux 产物存在解释器段（PT_INTERP），非静态链接"; exit 1
+          fi
+          echo "$FILE_OUT" | grep -qE 'statically linked|static-pie linked'
+
+      - uses: actions/upload-artifact@v4
         with:
-          files: sb-sync-aarch64-apple-darwin
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          retention-days: 7
+
+  # 单独一个 job 汇总上传：三个矩阵 job 并发调 action-gh-release 会竞争创建
+  # 同一个 tag 的 release（同时 POST 时后到者收到 422 already_exists）。
+  # 先各自传 artifact 再一次性发布，既避免竞争也让发布说明只生成一次。
+  release:
+    name: publish release
+    needs: binaries
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
           generate_release_notes: true
 
   docker:
     runs-on: ubuntu-latest
+    # 只在 tag 上跑：手动触发若也执行，会推进 :latest 与分支名 tag
+    # （workflow_dispatch 时 github.ref_name 是分支名，如 main），
+    # 那等于用未发版代码覆盖已发布镜像。镜像的构建校验由 ci-sb-sync.yml 承担。
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
       packages: write

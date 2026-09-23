@@ -11,6 +11,25 @@ use std::time::Duration;
 const MAX_TEMPLATE_BODY: usize = 1024 * 1024;
 const TEMPLATE_TIMEOUT_SECS: u64 = 10;
 
+/// 定位内核可执行文件：优先 `SING_BOX`，否则 PATH 上的 `sing-box`。
+///
+/// 抽成独立函数而非内联在调用点：沙箱里内核装在 /opt/proxy-test/bin 不在 PATH 上，
+/// 与 justfile 的 `SING_BOX` 约定一致。
+pub fn resolve_singbox_binary() -> std::ffi::OsString {
+    resolve_singbox_from(std::env::var_os("SING_BOX"))
+}
+
+/// 定位规则本体，与进程环境解耦以便确定性测试。
+///
+/// 空值视作未设置：`SING_BOX=` 若被当成路径会得到「启动内核失败（空路径）」，
+/// 比回落到 PATH 更难排查。这与 justfile `env_var_or_default` 的语义一致。
+fn resolve_singbox_from(env_value: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    match env_value {
+        Some(v) if !v.is_empty() => v,
+        _ => std::ffi::OsString::from("sing-box"),
+    }
+}
+
 /// HTTP GET（ureq，走系统 DNS 栈）。非 2xx 或网络错误返回 Err 文本。
 pub fn http_get(url: &str) -> Result<String, String> {
     let res = ureq::get(url)
@@ -184,5 +203,56 @@ mod tests {
         assert!(validate_template_url("https://example.com/t.json").is_ok());
         assert!(validate_template_url("  https://raw.githubusercontent.com/a/b.json  ").is_ok());
         assert!(validate_template_url("https://93.184.216.34/t.json").is_ok());
+    }
+
+    /// 定位规则：SING_BOX 有值即采用，未设置或空值回落到 PATH 上的 sing-box。
+    /// 空值必须回落 —— `SING_BOX=` 被当成路径会产生「启动内核失败（空路径）」，
+    /// 比回落到 PATH 更难排查。
+    #[test]
+    fn singbox_binary_prefers_env_then_falls_back() {
+        assert_eq!(
+            resolve_singbox_from(Some("/opt/proxy-test/bin/sing-box".into())),
+            std::ffi::OsString::from("/opt/proxy-test/bin/sing-box")
+        );
+        assert_eq!(
+            resolve_singbox_from(None),
+            std::ffi::OsString::from("sing-box")
+        );
+        assert_eq!(
+            resolve_singbox_from(Some(std::ffi::OsString::new())),
+            std::ffi::OsString::from("sing-box"),
+            "空值须回落，而非当作空路径"
+        );
+    }
+
+    /// SING_BOX 指向的路径必须真的被用作可执行文件。
+    /// 用一个打印参数的假二进制验证：若实现只读环境变量而仍调用 PATH 上的 sing-box，
+    /// 这条断言会因拿到真实 sing-box 的输出而失败。
+    #[test]
+    #[cfg(unix)]
+    fn singbox_env_path_is_actually_executed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("sb-sync-fakebox-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("fake-sing-box");
+        std::fs::write(&fake, "#!/bin/sh\necho FAKE_KERNEL_MARKER \"$@\"\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let out = std::process::Command::new(resolve_singbox_from(Some(fake.clone().into())))
+            .arg("version")
+            .output()
+            .expect("假内核应可执行");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("FAKE_KERNEL_MARKER"),
+            "应执行 SING_BOX 指定的程序，实际输出: {stdout}"
+        );
+        assert!(
+            stdout.contains("version"),
+            "参数应透传给该程序，实际输出: {stdout}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
