@@ -656,7 +656,6 @@ dependencies = [
  "base64",
  "hex",
  "hkdf",
- "libc",
  "percent-encoding",
  "rand",
  "regex",

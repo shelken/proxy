@@ -1,0 +1,72 @@
+# sb-sync Rust 门禁：格式化、严格 lint、全量测试。所有编译校验都在这里做。
+# 严格规则同时写在 src/lib.rs 与 src/main.rs 的 cfg 属性里，本工作流只需 -D warnings。
+name: ci-sb-sync
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "scripts/sb-sync-rs/**"
+      - "config/sing-box/template.json"
+      - ".github/workflows/ci-sb-sync.yml"
+  pull_request:
+    paths:
+      - "scripts/sb-sync-rs/**"
+      - "config/sing-box/template.json"
+      - ".github/workflows/ci-sb-sync.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scripts/sb-sync-rs
+    steps:
+      - uses: actions/checkout@v5
+
+      # 与 Cargo.lock 里 icu_* 的要求（rustc ≥1.88）对齐，并带来 rustfmt/clippy
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scripts/sb-sync-rs/target
+          key: ci-sb-sync-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          restore-keys: ci-sb-sync-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      # 严格 lint 规则在 crate 属性中声明；此处统一把警告升级为错误
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # e2e 测试要真跑 sing-box merge，装官方 CLI 以覆盖合并语义
+      - name: Install sing-box CLI
+        run: |
+          curl -fsSL -o /tmp/sing-box.tar.gz \
+            https://github.com/SagerNet/sing-box/releases/download/v1.14.1/sing-box-1.14.1-linux-amd64.tar.gz
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/sing-box-1.14.1-linux-amd64/sing-box /usr/local/bin/sing-box
+          sing-box version
+
+      - name: cargo test
+        run: cargo test --locked --all-targets
+
+      - name: cargo build (release)
+        run: |
+          cargo clean
+          cargo build --release --locked

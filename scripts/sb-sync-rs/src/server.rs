@@ -23,31 +23,51 @@ struct Payload {
     subs: Vec<String>,
     nodes: Vec<String>,
     overlay: Option<Value>,
+    template_url: Option<String>,
 }
 
 /// 解析解密后的 JSON 载荷。结构由客户端 `config.rs::validate` 保证，仍做防御性校验。
 fn parse_payload(plaintext: &[u8]) -> Result<Payload, String> {
-    let v: Value = serde_json::from_slice(plaintext).map_err(|e| format!("载荷 JSON 解析失败: {e}"))?;
+    let v: Value =
+        serde_json::from_slice(plaintext).map_err(|e| format!("载荷 JSON 解析失败: {e}"))?;
     if !v.is_object() {
         return Err("载荷顶层必须是 JSON Object".into());
     }
     let subs: Vec<String> = v["subs"]
         .as_array()
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     let nodes: Vec<String> = v["nodes"]
         .as_array()
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     let overlay = match &v["overlay"] {
         Value::Null => None,
         ov if ov.is_object() => Some(ov.clone()),
         other => return Err(format!("overlay 顶层必须是 JSON Object，当前: {other}")),
     };
+    let template_url = match &v["template_url"] {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        other => return Err(format!("template_url 必须是字符串，当前: {other}")),
+    };
     if subs.is_empty() && nodes.is_empty() {
         return Err("载荷 subs 与 nodes 均为空".into());
     }
-    Ok(Payload { subs, nodes, overlay })
+    Ok(Payload {
+        subs,
+        nodes,
+        overlay,
+        template_url,
+    })
 }
 
 /// 请求独立临时目录（进程唯一 + 请求序号），RAII 清理。
@@ -71,30 +91,31 @@ impl Drop for TempMergeDir {
 }
 
 /// 复用现有装配管线：sources → 节点全集 → 反回环规则 → finalize。
-/// 返回填充好的完整底模 JSON。
-fn assemble_base(payload: &Payload) -> Result<Value, String> {
+/// 返回填充好的完整底模 JSON 与实际底模来源。
+fn assemble_base(payload: &Payload) -> Result<(Value, template::TemplateSource), String> {
     let mut sources: Vec<String> = Vec::with_capacity(payload.subs.len() + payload.nodes.len());
     sources.extend(payload.subs.iter().cloned());
     sources.extend(payload.nodes.iter().cloned());
 
     let input = AssembleInput {
         sources: sources.join("|"),
-        local: None,
         fetch_subscription: Some(Box::new(fetch_subscription_bounded)),
     };
     let nodes = assemble::collect_nodes(&input.sources, &input)?;
 
-    let mut tpl = template::embedded_template();
+    let (mut tpl, source) = template::load_template(payload.template_url.as_deref())?;
     // 反回环直连规则置顶（服务端 DNS 视角尽力解析；失败则只保留 domain 规则）
     if let Some(rule) = assemble::generate_node_direct_rule(&nodes, &tpl) {
         if !tpl["route"]["rules"].is_array() {
             tpl["route"]["rules"] = json!([]);
         }
-        let rules = tpl["route"]["rules"].as_array_mut().unwrap();
+        let rules = tpl["route"]["rules"]
+            .as_array_mut()
+            .ok_or_else(|| "底模 route.rules 必须是数组".to_string())?;
         rules.insert(0, rule);
     }
     assemble::finalize(&mut tpl, nodes)?;
-    Ok(tpl)
+    Ok((tpl, source))
 }
 
 /// 订阅抓取：带 5MB 上限，防止机场响应过大拖垮服务。
@@ -109,22 +130,35 @@ fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
         .read_to_string(&mut body)
         .map_err(|e| format!("订阅读取失败: {e}"))?;
     if body.len() > MAX_SUB_BODY {
-        return Err(format!("订阅响应超过 {}MB 上限", MAX_SUB_BODY / 1024 / 1024));
+        return Err(format!(
+            "订阅响应超过 {}MB 上限",
+            MAX_SUB_BODY / 1024 / 1024
+        ));
     }
     Ok(body)
 }
 
 /// 调用官方 sing-box CLI 合并 01-overlay.json + 02-base.json，返回结果 JSON 字符串。
-fn run_singbox_merge(dir: &TempMergeDir, overlay: Option<&Value>, base: &Value) -> Result<String, String> {
+fn run_singbox_merge(
+    dir: &TempMergeDir,
+    overlay: Option<&Value>,
+    base: &Value,
+) -> Result<String, String> {
     let base_path = dir.path.join("02-base.json");
-    std::fs::write(&base_path, serde_json::to_vec_pretty(base).map_err(|e| format!("底模序列化失败: {e}"))?)
-        .map_err(|e| format!("写底模失败: {e}"))?;
+    std::fs::write(
+        &base_path,
+        serde_json::to_vec_pretty(base).map_err(|e| format!("底模序列化失败: {e}"))?,
+    )
+    .map_err(|e| format!("写底模失败: {e}"))?;
 
     let mut args: Vec<String> = Vec::new();
     if let Some(ov) = overlay {
         let overlay_path = dir.path.join("01-overlay.json");
-        std::fs::write(&overlay_path, serde_json::to_vec_pretty(ov).map_err(|e| format!("overlay 序列化失败: {e}"))?)
-            .map_err(|e| format!("写 overlay 失败: {e}"))?;
+        std::fs::write(
+            &overlay_path,
+            serde_json::to_vec_pretty(ov).map_err(|e| format!("overlay 序列化失败: {e}"))?,
+        )
+        .map_err(|e| format!("写 overlay 失败: {e}"))?;
         args.push("-c".into());
         args.push(overlay_path.display().to_string());
     }
@@ -148,14 +182,18 @@ fn run_singbox_merge(dir: &TempMergeDir, overlay: Option<&Value>, base: &Value) 
 }
 
 /// 单次请求完整处理：解密 → 装配 → 合并 → JSON 字符串。
-fn handle_sub(secret_key: &crypto::CryptoStaticSecret, query_d: &str) -> Result<String, String> {
+fn handle_sub(
+    secret_key: &crypto::CryptoStaticSecret,
+    query_d: &str,
+) -> Result<(String, template::TemplateSource), String> {
     if query_d.len() > MAX_QUERY_LEN {
         return Err(format!("请求参数超过 {}KB 上限", MAX_QUERY_LEN / 1024));
     }
     let plaintext = crypto::decrypt_payload(secret_key, query_d)?;
     let payload = parse_payload(&plaintext)?;
-    let base = assemble_base(&payload)?;
-    run_singbox_merge(&TempMergeDir::create()?, payload.overlay.as_ref(), &base)
+    let (base, source) = assemble_base(&payload)?;
+    let merged = run_singbox_merge(&TempMergeDir::create()?, payload.overlay.as_ref(), &base)?;
+    Ok((merged, source))
 }
 
 /// 服务端主循环。
@@ -163,8 +201,11 @@ pub fn run(port: u16) -> Result<(), String> {
     let sk_hex = std::env::var("SERVER_PRIVATE_KEY")
         .map_err(|_| "环境变量 SERVER_PRIVATE_KEY 未设置（32 字节 Hex）".to_string())?;
     let sk = crypto::parse_private_key_hex(&sk_hex)?;
+    // 公钥由私钥推导，供客户端 encode 自动获取，无需人工配置
+    let pk_hex = crypto::derive_public_key_hex(&sk_hex)?;
 
-    let server = Server::http(format!("0.0.0.0:{port}")).map_err(|e| format!("监听 {port} 失败: {e}"))?;
+    let server =
+        Server::http(format!("0.0.0.0:{port}")).map_err(|e| format!("监听 {port} 失败: {e}"))?;
     eprintln!("[sb-sync server] listening on 0.0.0.0:{port}");
 
     for request in server.incoming_requests() {
@@ -176,32 +217,56 @@ pub fn run(port: u16) -> Result<(), String> {
             None => (url.as_str(), None),
         };
 
-        let (status, body): (u16, String) = match (method, path) {
-            ("GET", "/healthz") => (200, "ok".into()),
+        let (status, body, tpl_src): (u16, String, Option<&'static str>) = match (method, path) {
+            ("GET", "/healthz") => (200, "ok".into(), None),
+            // 公钥公开：客户端 encode 靠它加密，无任何机密性要求
+            ("GET", "/pubkey") => (200, pk_hex.clone(), None),
             ("GET", "/sub") => match query.and_then(|q| q.strip_prefix("d=")) {
                 Some(d) if !d.is_empty() => match handle_sub(&sk, d) {
-                    Ok(json) => (200, json),
+                    Ok((json, src)) => (200, json, Some(src.as_str())),
                     Err(e) => {
                         // 解密失败（含 403 语义）与装配失败统一 400；不回显密文
-                        let code = if e.contains("解密失败") || e.contains("Base64URL") || e.contains("载荷长度") {
+                        let code = if e.contains("解密失败")
+                            || e.contains("Base64URL")
+                            || e.contains("载荷长度")
+                        {
                             403
                         } else {
                             400
                         };
-                        (code, e)
+                        (code, e, None)
                     }
                 },
-                _ => (400, "缺少 d 参数".into()),
+                _ => (400, "缺少 d 参数".into(), None),
             },
-            _ => (404, "not found".into()),
+            _ => (404, "not found".into(), None),
         };
-        eprintln!("[sb-sync server] {} {} -> {} ({}ms)", method, path, status, started.elapsed().as_millis());
+        match tpl_src {
+            Some(src) => eprintln!(
+                "[sb-sync server] {} {} -> {} ({}ms, 底模: {})",
+                method,
+                path,
+                status,
+                started.elapsed().as_millis(),
+                src
+            ),
+            None => eprintln!(
+                "[sb-sync server] {} {} -> {} ({}ms)",
+                method,
+                path,
+                status,
+                started.elapsed().as_millis()
+            ),
+        }
 
         let response = Response::from_string(body)
             .with_status_code(status)
             .with_header(
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..])
-                    .unwrap(),
+                tiny_http::Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"application/json; charset=utf-8"[..],
+                )
+                .map_err(|_| "构造 Content-Type 响应头失败".to_string())?,
             );
         if let Err(e) = request.respond(response) {
             eprintln!("[sb-sync server] 响应失败: {e}");
@@ -242,9 +307,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_payload_reads_template_url() {
+        let payload = json!({
+            "subs": ["https://a.example/s"],
+            "nodes": [],
+            "overlay": null,
+            "template_url": "https://example.com/t.json"
+        });
+        let parsed = parse_payload(&serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert_eq!(
+            parsed.template_url.as_deref(),
+            Some("https://example.com/t.json")
+        );
+
+        // 缺字段与显式 null 都视作未配置
+        for absent in [
+            json!({"subs": ["https://a.example/s"], "nodes": []}),
+            json!({"subs": ["https://a.example/s"], "nodes": [], "template_url": null}),
+        ] {
+            let parsed = parse_payload(&serde_json::to_vec(&absent).unwrap()).unwrap();
+            assert!(parsed.template_url.is_none());
+        }
+    }
+
+    #[test]
+    fn parse_payload_rejects_non_string_template_url() {
+        let payload = json!({"subs": ["https://a.example/s"], "nodes": [], "template_url": 42});
+        let err = parse_payload(&serde_json::to_vec(&payload).unwrap()).unwrap_err();
+        assert!(err.contains("template_url"), "实际: {err}");
+    }
+
+    #[test]
     fn end_to_end_encrypt_assemble_merge() {
         // 需要 sing-box 可执行文件；缺失则跳过（CI 沙箱内已保证）
-        if std::process::Command::new("sing-box").arg("version").output().is_err() {
+        if std::process::Command::new("sing-box")
+            .arg("version")
+            .output()
+            .is_err()
+        {
             eprintln!("skip: sing-box not found");
             return;
         }
@@ -257,14 +357,22 @@ mod tests {
             "overlay": {"log": {"level": "warn"}}
         });
         let plaintext = serde_json::to_vec(&payload).unwrap();
-        let ciphertext = crypto::encrypt_payload(&crypto::parse_public_key_hex(&pk_hex).unwrap(), &plaintext).unwrap();
+        let ciphertext =
+            crypto::encrypt_payload(&crypto::parse_public_key_hex(&pk_hex).unwrap(), &plaintext)
+                .unwrap();
 
-        let result = handle_sub(&sk, &ciphertext).expect("端到端解密装配合并成功");
+        let (result, source) = handle_sub(&sk, &ciphertext).expect("端到端解密装配合并成功");
         let merged: Value = serde_json::from_str(&result).unwrap();
         // overlay 覆盖底模 log.level
         assert_eq!(merged["log"]["level"], "warn");
         // 底模 outbounds 与节点被填充
         assert!(merged["outbounds"].as_array().unwrap().len() > 2);
+        // 三级回退必须有确定来源（有网=remote，无网=cache/embedded）
+        assert!(
+            ["remote", "cache", "embedded"].contains(&source.as_str()),
+            "意外的底模来源: {}",
+            source.as_str()
+        );
     }
 
     #[test]

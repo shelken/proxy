@@ -9,8 +9,8 @@ use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
-use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 pub use x25519_dalek::StaticSecret as CryptoStaticSecret;
+use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
 const HKDF_SALT: &[u8] = b"sb-sync-v1";
 const HKDF_INFO: &[u8] = b"aes-256-gcm";
@@ -49,6 +49,13 @@ pub fn parse_public_key_hex(hex_str: &str) -> Result<PublicKey, String> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(PublicKey::from(arr))
+}
+
+/// 私钥 Hex → 公钥 Hex。服务端启动时用它从 `SERVER_PRIVATE_KEY` 推出 `GET /pubkey` 的返回值，
+/// 客户端因此无需手工配置公钥。
+pub fn derive_public_key_hex(private_key_hex: &str) -> Result<String, String> {
+    let sk = parse_private_key_hex(private_key_hex)?;
+    Ok(hex::encode(PublicKey::from(&sk).as_bytes()))
 }
 
 /// 客户端加密：生成临时密钥对 -> 计算共享密钥 -> HKDF 派生 AES 密钥 -> AES-256-GCM 加密 -> base64url
@@ -141,6 +148,26 @@ mod tests {
 
         let decrypted = decrypt_payload(&sk, &encrypted).expect("解密成功");
         assert_eq!(decrypted, original);
+    }
+
+    /// 回归：服务端 `GET /pubkey` 的返回值由私钥推出，必须与 keygen 输出的公钥逐字节一致，
+    /// 否则客户端拿到的公钥加出的密文服务端解不开。
+    #[test]
+    fn derived_public_key_matches_generated() {
+        let (sk_hex, pk_hex) = generate_keypair_hex();
+        assert_eq!(derive_public_key_hex(&sk_hex).unwrap(), pk_hex);
+
+        // 推导出的公钥必须能真的加密，并被对应私钥解开
+        let derived = parse_public_key_hex(&derive_public_key_hex(&sk_hex).unwrap()).unwrap();
+        let sk = parse_private_key_hex(&sk_hex).unwrap();
+        let sealed = encrypt_payload(&derived, b"payload").unwrap();
+        assert_eq!(decrypt_payload(&sk, &sealed).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn derive_public_key_rejects_bad_hex() {
+        assert!(derive_public_key_hex("not-hex").is_err());
+        assert!(derive_public_key_hex("aabb").is_err());
     }
 
     #[test]

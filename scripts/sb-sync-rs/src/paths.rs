@@ -3,17 +3,15 @@
 use std::path::PathBuf;
 
 /// 默认客户端 YAML 配置：~/.config/sing-box/config.yaml
-pub fn client_config_path() -> PathBuf {
-    sb_sync_dir().join("config.yaml")
+pub fn client_config_path() -> Result<PathBuf, String> {
+    Ok(sb_sync_dir()?.join("config.yaml"))
 }
 
-pub fn sb_sync_dir() -> PathBuf {
-    dirs_home().join(".config").join("sing-box")
-}
-
-/// HOME 解析：缺失即 fail-fast。
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
+/// HOME 缺失即报错：路径无处可推，继续执行只会读出错误的文件。
+fn sb_sync_dir() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
-        .expect("HOME 环境变量未设置")
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| "HOME 环境变量未设置".to_string())?;
+    Ok(home.join(".config").join("sing-box"))
 }

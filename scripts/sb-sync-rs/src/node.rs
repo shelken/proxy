@@ -8,11 +8,15 @@ fn parse_url(raw: &str) -> Result<url::Url, String> {
 }
 
 fn percent_decode(s: &str) -> String {
-    percent_encoding::percent_decode_str(s).decode_utf8_lossy().into_owned()
+    percent_encoding::percent_decode_str(s)
+        .decode_utf8_lossy()
+        .into_owned()
 }
 
 fn query_get(url: &url::Url, key: &str) -> Option<String> {
-    url.query_pairs().find(|(k, _)| k == key).map(|(_, v)| v.into_owned())
+    url.query_pairs()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.into_owned())
 }
 
 fn tag_from_hash(url: &url::Url, default: &str) -> String {
@@ -59,7 +63,11 @@ pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
 /// anytls:// → sing-box anytls 出站（字段语义按官方 anytls.md）。
 pub fn parse_anytls(raw: &str) -> Result<Value, String> {
     let u = parse_url(raw)?;
-    let default_tag = format!("AnyTLS {}:{}", u.host_str().unwrap_or(""), u.port().unwrap_or(443));
+    let default_tag = format!(
+        "AnyTLS {}:{}",
+        u.host_str().unwrap_or(""),
+        u.port().unwrap_or(443)
+    );
     let tag = tag_from_hash(&u, &default_tag);
     let password = percent_decode(if !u.username().is_empty() {
         u.username()
@@ -79,7 +87,11 @@ pub fn parse_anytls(raw: &str) -> Result<Value, String> {
         tls.insert("insecure".into(), json!(insecure == "1"));
     }
     if let Some(alpn) = query_get(&u, "alpn") {
-        let list: Vec<&str> = alpn.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let list: Vec<&str> = alpn
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         tls.insert("alpn".into(), json!(list));
     }
     if let Some(fp) = query_get(&u, "fp") {
@@ -114,7 +126,10 @@ pub fn parse_shadowsocks(raw: &str) -> Result<Value, String> {
         Some(i) => (percent_decode(&raw[i + 1..]), &raw[..i]),
         None => ("Shadowsocks".to_string(), raw),
     };
-    let mut main_part = main_all.strip_prefix("ss://").unwrap_or(main_all).to_string();
+    let mut main_part = main_all
+        .strip_prefix("ss://")
+        .unwrap_or(main_all)
+        .to_string();
     if let Some(q) = main_part.find('?') {
         main_part.truncate(q);
     }
@@ -146,19 +161,25 @@ pub fn parse_shadowsocks(raw: &str) -> Result<Value, String> {
     };
 
     let (cred, host_part) = cred_and_host;
-    let sep = cred.find(':').ok_or("ss URI userinfo 缺少 method:password 分隔")?;
+    let sep = cred
+        .find(':')
+        .ok_or("ss URI userinfo 缺少 method:password 分隔")?;
     let method = &cred[..sep];
     let password = &cred[sep + 1..];
 
     let (server, server_port): (&str, u16) = if host_part.starts_with('[') {
-        let close = host_part.find(']').ok_or(format!("无法解析 ss 服务器地址：{host_part}"))?;
+        let close = host_part
+            .find(']')
+            .ok_or(format!("无法解析 ss 服务器地址：{host_part}"))?;
         let port = host_part[close + 1..]
             .strip_prefix(':')
             .and_then(|p| p.parse().ok())
             .ok_or(format!("无法解析 ss 服务器地址：{host_part}"))?;
         (&host_part[1..close], port)
     } else {
-        let sep = host_part.rfind(':').ok_or(format!("无法解析 ss 服务器地址：{host_part}"))?;
+        let sep = host_part
+            .rfind(':')
+            .ok_or(format!("无法解析 ss 服务器地址：{host_part}"))?;
         let port = host_part[sep + 1..]
             .parse()
             .map_err(|_| format!("无法解析 ss 服务器地址：{host_part}"))?;
@@ -191,5 +212,7 @@ pub fn parse_node_uri(uri: &str) -> Result<Value, String> {
         return parse_shadowsocks(trimmed);
     }
     let scheme = trimmed.split("://").next().unwrap_or(trimmed);
-    Err(format!("不支持的节点协议：{scheme}（只支持 ss/hysteria2/hy2/anytls）"))
+    Err(format!(
+        "不支持的节点协议：{scheme}（只支持 ss/hysteria2/hy2/anytls）"
+    ))
 }

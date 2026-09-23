@@ -2,13 +2,15 @@
 # sing-box 版本固定 1.14.1：merge 行为随版本变化，升级需重跑合并回归测试。
 FROM ghcr.io/sagernet/sing-box:v1.14.1 AS singbox
 
-FROM rust:1.85-alpine AS builder
-RUN apk add --no-cache musl-dev
+# rust 1.97：Cargo.lock 中 icu_* 要求 rustc ≥1.88，1.85 直接编译失败。
+# alpine + build-base：ureq→rustls→ring 需要 C 工具链。
+FROM rust:1.97-alpine AS builder
+RUN apk add --no-cache build-base
 WORKDIR /build
 COPY scripts/sb-sync-rs/Cargo.toml scripts/sb-sync-rs/Cargo.lock ./
 COPY scripts/sb-sync-rs/src/ ./src/
-# include_str!("../../../config/sing-box/template.json") 相对 src/ 的上两级 = /build
-COPY config/sing-box/template.json /build/config/sing-box/template.json
+# include_str! 从 crate 根退出三级：/build/src/../../../config = /config（非 /build/config）
+COPY config/sing-box/template.json /config/sing-box/template.json
 RUN cargo build --release
 
 FROM alpine:3.21
