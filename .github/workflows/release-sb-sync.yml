@@ -50,10 +50,38 @@ jobs:
         run: |
           file sb-sync-aarch64-apple-darwin
           ./sb-sync-aarch64-apple-darwin version | grep -q "sb-sync ${GITHUB_REF_NAME#v}" || { echo "version 不匹配"; exit 1; }
-          HOME="$(mktemp -d)" ./sb-sync-aarch64-apple-darwin init
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: sb-sync-aarch64-apple-darwin
           generate_release_notes: true
+
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/sb-sync-server:latest
+            ghcr.io/${{ github.repository }}/sb-sync-server:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

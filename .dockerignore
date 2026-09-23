@@ -1,0 +1,15 @@
+# 构建上下文瘦身：cargo target 1.5GB，镜像只需 src + 两份 Cargo 元数据
+scripts/sb-sync-rs/target/
+.git/
+.github/
+config/rules/
+config/clash/
+config/loon/
+config/surge/
+config/sing-box/tests/
+docs/
+postmortems/
+scripts/*.ts
+scripts/*.test.ts
+scripts/sb-sync-rs/tests/
+**/*.md

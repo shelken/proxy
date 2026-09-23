@@ -1,8 +1,11 @@
-# sb-sync CLI 同步指南
+# sb-sync 客户端指南
 
-面向使用任意 arm Mac 的用户。目标：装好 sb-sync，一条命令完成 sing-box 配置的更新与产出。
+面向使用任意 arm Mac 的用户。目标：装好 sb-sync，把本机配置加密成一条订阅 URL 交给 SFM。
 
 前置条件只有两个：macOS（Apple Silicon）与 [mise](https://mise.jdx.dev)。不需要本仓库源码。
+
+服务端形态（`sb-sync server`）由部署者维护，见 [sb-sync 架构](../sb-sync.md)。
+本机只需要使用 `encode`（与部署时用一次的 `keygen`）。
 
 ## 安装
 
@@ -13,119 +16,79 @@ mise install github:shelken/proxy@latest
 安装后验证：
 
 ```bash
-sb-sync --help
+sb-sync version
 ```
 
 无 mise 的设备，从 [Releases](https://github.com/shelken/proxy/releases) 下载
 `sb-sync-aarch64-apple-darwin`，加执行权限后放入 PATH 即可。
 
-## 初始化
+## 写配置
 
-```bash
-sb-sync init
-```
+配置文件默认 `~/.config/sing-box/config.yaml`，可用 `-c` 指定其它路径：
 
-创建 `~/.config/sing-box/` 目录，并生成两个文件：
-
-| 文件 | 作用 |
-| :--- | :--- |
-| `store.json` | 节点来源清单（订阅与私有节点） |
-| `local.json` | 设备私有覆盖（DNS、置顶路由规则），参考 `config/sing-box/local.json.example` |
-
-## 添加节点来源
-
-两类来源任意组合：
-
-```bash
-# 机场订阅（URL）
-sb-sync add sub "https://example.com/api/v1/client/subscribe?token=..."
-
-# 自建节点（URI，支持 hysteria2/hy2、anytls、ss）
-sb-sync add node "hysteria2://password@host:port/?obfs=salamander&obfs-password=...#SelfHost"
-```
-
-查看当前清单（凭据自动打码）：
-
-```bash
-sb-sync list
-```
-
-移除（序号对应 `sb-sync list` 输出）：
-
-```bash
-sb-sync remove sub 1
-sb-sync remove node 1
-```
-
-## 同步产出
-
-```bash
-sb-sync sync
-```
-
-单次 sync 完成四件事：
-
-1. **更新底模**：拉取仓库 main 分支最新 `template.json`（失败自动回退本地缓存，再回退二进制内嵌版）
-2. **拉取订阅**：抓取全部机场订阅并解析节点
-3. **装配**：私有节点排最前，机场节点按订阅原序追加，填充 22 大策略组，合并 `local.json` 覆盖
-4. **原子写入** `~/.config/sing-box/singbox.json`（上一份保留为 `singbox.json.bak`，任何失败不破坏现有产物）
-
-## 验证
-
-```bash
-sb-sync check    # 零网络：产物结构、节点数、策略组、local 注入状态
-sb-sync doctor   # 分层自检：配置 / DNS 解析链 / 直连·代理·CDN 计时
-sb-sync profile  # 查看 SFM profiles 与产物的同源性（详见 01-mac-sfm.md）
-```
-
-`doctor` 输出示例：
-
-```text
-=== sb-sync doctor — 网络分层自检 ===
-
-[配置] sing-box check: ✓ 通过
-[配置] 系统解析器 198.51.100.2  ✓ 不在排除段
-
-✓ DNS 解析链 (系统解析器→内核)  —  系统栈解析成功  (4ms)
-✓ 直连站点 (baidu.com)      —  HTTP 200  (195ms)
-✓ 代理站点 (google.com)     —  HTTP 204  (880ms)
-✓ 图片 CDN (pbs.twimg.com)  —  HTTP 200  (899ms)
-```
-
-定位原则：DNS 行失败 = 解析链问题；直连慢 = 本地网络；代理/CDN 慢 = 代理链路。
-
-## 设备私有覆盖（可选）
-
-编辑 `~/.config/sing-box/local.json`（参考仓库 `config/sing-box/local.json.example`）：
-
-```json
-{
-  "dns": {
-    "servers": [{ "tag": "dns-internal", "type": "udp", "server": "192.168.6.1" }],
-    "rules": [{ "domain_suffix": ["home.example.com"], "action": "route", "server": "dns-internal" }]
-  },
-  "route": {
-    "rules": [{ "domain_suffix": ["home.example.com"], "outbound": "direct" }]
+```yaml
+subs:
+  - https://example.com/api/v1/client/subscribe?token=...
+nodes:
+  - hysteria2://password@host:port/?obfs=salamander&obfs-password=...#SelfHost
+overlay: |
+  {
+    "log": { "level": "warn" },
+    "dns": { "strategy": "prefer_ipv6" }
   }
-}
 ```
 
-规则：`dns.servers` 同 tag 覆盖、不同名前置；`dns.rules` 与 `route.rules` 置顶（优先命中）；
-`outbounds` 追加。也可从文件安装：`sb-sync add local ./my-local.json`。
+| 字段 | 必填 | 说明 |
+| :--- | :--- | :--- |
+| `subs` | 二选一 | 机场订阅 URL 列表 |
+| `nodes` | 二选一 | 私有节点 URI，支持 `ss` / `hysteria2` / `hy2` / `anytls` |
+| `overlay` | 否 | 原生 sing-box JSON，覆盖在底模之上 |
+| `template_url` | 否 | 远程底模地址（仅 https），替代服务端内嵌底模 |
 
-## 底模管理
+写法要点：
+
+- 未知字段会直接报错，拼错字段不会被静默忽略
+- `subs` 与 `nodes` 至少一个非空
+- `overlay` 顶层必须是 JSON Object
+- `overlay` 与 `template_url` 下载的底模都不得含 `certificate_path` / `key_path` /
+  `private_key_path` / `config_path`，需要证书时改为内联内容
+
+## 生成订阅 URL
 
 ```bash
-sb-sync template update   # 手动拉最新底模
-sb-sync template reset    # 丢弃缓存，回退二进制内嵌版
+sb-sync encode -s https://sub.example.com
 ```
 
-默认每次 sync 自动检查底模更新，通常无需手动执行。
+服务端地址是 `-s/--server` 选项，不写进配置：同一份 YAML 可以指向不同服务端。
+`-s` 与 `-c` 顺序无关，两个都是具名选项，不认位置参数。
+
+命令会做三件事：
+
+1. 本地校验 YAML（含 `template_url` 合法性），配置写错在本地立刻报错
+2. 从 `https://sub.example.com/pubkey` 取服务端公钥
+3. 用该公钥加密配置，把 URL 写入剪切板并打印
+
+然后把 URL 粘进 SFM 的 Remote Profile，详见 [01-mac-sfm.md](./01-mac-sfm.md)。
+
+配置改动后重新执行 `encode` 即可。URL 不含时间戳，不会过期
+
+## 安全边界
+
+- 加密用 X25519 + HKDF-SHA256 + AES-256-GCM，每次 `encode` 用新的临时密钥对
+- 本机只持有服务端公钥（非机密），服务端私钥只在服务端
+- 订阅与节点信息在传输前已加密，服务端只解密自己的私钥能解的密文
+- `overlay` 会进入服务端的 `sing-box merge`，故路径引用字段被拒（防服务器任意文件读取）
 
 ## 常见问题
 
-- **sync 报「没有任何节点来源」**：先执行 `sb-sync add sub` 或 `sb-sync add node`
-- **sync 报订阅解析失败**：输出带行号，检查该行 URI 协议是否为 ss/hysteria2/hy2/anytls
-- **产物校验警告「跳过」**：设备无内核 CLI 且 SFM 不在线时的正常提示，产物仍会写入（`.bak` 保底）
-- **升级 sb-sync**：`mise install github:shelken/proxy@latest`；新 release 有 24h 冷却期，
-  追平用 `mise install github:shelken/proxy@<版本号> --minimum-release-age 0d`
+| 报错 | 原因 |
+| :--- | :--- |
+| `YAML 解析失败: unknown field` | 配置里有未知字段或拼错 |
+| `subs 与 nodes 至少需要一个非空列表` | 两类来源都空 |
+| `服务端地址必须以 http(s):// 开头` | 参数忘了带协议 |
+| `template_url 仅支持 https` | 底模地址必须是 https |
+| `template_url 不得指向内网地址` | 内网与云元数据地址被拒 |
+| `HTTP 请求失败 .../pubkey` | 服务端不可达或地址写错 |
+
+**升级 sb-sync**：`mise install github:shelken/proxy@latest`；新 release 有 24h 冷却期，
+追平用 `mise install github:shelken/proxy@<版本号> --minimum-release-age 0d`

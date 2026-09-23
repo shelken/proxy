@@ -35,5 +35,7 @@ sqlite3 settings.db "SELECT name, length(data) FROM preferences"
 ## 预防
 
 - 查任何 SQLite 表前先 `.schema <table>`，SELECT 用显式列名且列名来自 `.schema` 输出，不凭记忆
-- 上述检查已固化为 `sb-sync profile` 子命令（见 scripts/sb-sync-rs/src/profile.rs）：读 SFM settings.db 前先 PRAGMA 校验 profiles 表列名集合，缺列即报错；BLOB 一律不做业务推断（selected_profile_id 编码未破译，激活判定明示「未验证」并指向 SFM 菜单）
+- ~~上述检查已固化为 `sb-sync profile` 子命令（见 scripts/sb-sync-rs/src/profile.rs）：读 SFM settings.db 前先 PRAGMA 校验 profiles 表列名集合，缺列即报错；BLOB 一律不做业务推断（selected_profile_id 编码未破译，激活判定明示「未验证」并指向 SFM 菜单）~~
+  该子命令随交付模型改走 SFM Remote Profile 一并删除（服务端不再触碰 Group Container，也不再有读 `settings.db` 的代码路径）
+- 教训本身仍有效：查 SQLite 先 `.schema`、BLOB 不读长度、用户状态类结论必须有第二证据
 - 对「用户当前状态」类结论：单一数据源不定论，必须与第二证据（UI 截图/日志/用户口述）对上才输出
