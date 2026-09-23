@@ -9,7 +9,10 @@ FROM ghcr.io/sagernet/sing-box:v1.14.1 AS singbox
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
+# artifact 上传/下载不保留文件权限（GitHub Actions 的已知行为），COPY 会原样带上
+# 缺失的可执行位，容器启动即 127 «executable file not found in $PATH»。显式补上。
 COPY sb-sync /usr/local/bin/sb-sync
+RUN chmod +x /usr/local/bin/sb-sync
 ENV PORT=8080
 EXPOSE 8080
 ENTRYPOINT ["sb-sync"]

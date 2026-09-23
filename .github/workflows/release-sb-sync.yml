@@ -205,6 +205,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 先在本机加载一份做冒烟：runner 是本平台原生架构，镜像能真跑起来。
+      # 只 push by digest 的话只能验「构建成功」，验不了「启动后 /healthz 与 /pubkey 可用」，
+      # 而镜像里装的是另一份二进制——架构错或入口坏都只会在拉取时才暴露。
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: sb-sync-server:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test image
+        run: |
+          SK=$(openssl rand -hex 32)
+          docker run -d --name sb-sync-smoke -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sb-sync-server:smoke
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18080/healthz && break
+            sleep 1
+          done
+          test "$(curl -fsS http://127.0.0.1:18080/healthz)" = "ok"
+          PK=$(curl -fsS http://127.0.0.1:18080/pubkey)
+          echo "pubkey=$PK"
+          test "${#PK}" -eq 64
+          echo "$PK" | grep -qE '^[0-9a-f]{64}$'
+          # 镜像内二进制的架构必须与本平台一致
+          docker exec sb-sync-smoke /usr/local/bin/sb-sync version
+          docker logs sb-sync-smoke
+          docker rm -f sb-sync-smoke
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
