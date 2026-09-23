@@ -60,11 +60,11 @@ pub fn derive_public_key_hex(private_key_hex: &str) -> Result<String, String> {
 
 /// 客户端加密：生成临时密钥对 -> 计算共享密钥 -> HKDF 派生 AES 密钥 -> AES-256-GCM 加密 -> base64url
 pub fn encrypt_payload(server_pk: &PublicKey, plaintext: &[u8]) -> Result<String, String> {
-    let ephemeral_sk = EphemeralSecret::random_from_rng(OsRng);
-    let ephemeral_pk = PublicKey::from(&ephemeral_sk);
+    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_public = PublicKey::from(&ephemeral_secret);
 
     // 1. Diffie-Hellman 计算共享密钥
-    let shared_secret = ephemeral_sk.diffie_hellman(server_pk);
+    let shared_secret = ephemeral_secret.diffie_hellman(server_pk);
 
     // 2. HKDF-SHA256 派生 32 字节 AES 密钥
     let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret.as_bytes());
@@ -85,7 +85,7 @@ pub fn encrypt_payload(server_pk: &PublicKey, plaintext: &[u8]) -> Result<String
 
     // 5. 拼装: [32B 临时公钥] + [12B Nonce] + [密文 + Tag]
     let mut payload = Vec::with_capacity(PK_LEN + NONCE_LEN + ciphertext.len());
-    payload.extend_from_slice(ephemeral_pk.as_bytes());
+    payload.extend_from_slice(ephemeral_public.as_bytes());
     payload.extend_from_slice(&nonce_bytes);
     payload.extend_from_slice(&ciphertext);
 

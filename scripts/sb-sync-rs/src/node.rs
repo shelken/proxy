@@ -26,15 +26,22 @@ fn tag_from_hash(url: &url::Url, default: &str) -> String {
     }
 }
 
+/// hysteria2 与 anytls 都是 userinfo 承载密码：有用户名取用户名，否则取密码栏。
+/// 两种形态（user@ / :pass@）都要支持，故不能只读一个字段。
+fn decode_userinfo_password(u: &url::Url) -> String {
+    let raw = if u.username().is_empty() {
+        u.password().unwrap_or("")
+    } else {
+        u.username()
+    };
+    percent_decode(raw)
+}
+
 /// hysteria2:// 或 hy2:// → sing-box hysteria2 出站。
 pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
     let u = parse_url(raw)?;
     let tag = tag_from_hash(&u, "selfhost");
-    let auth = percent_decode(if !u.username().is_empty() {
-        u.username()
-    } else {
-        u.password().unwrap_or("")
-    });
+    let auth = decode_userinfo_password(&u);
     let port: u16 = u.port().unwrap_or(443);
     let sni = query_get(&u, "sni").unwrap_or_else(|| u.host_str().unwrap_or("").to_string());
     let insecure = query_get(&u, "insecure").as_deref() == Some("1");
@@ -69,11 +76,7 @@ pub fn parse_anytls(raw: &str) -> Result<Value, String> {
         u.port().unwrap_or(443)
     );
     let tag = tag_from_hash(&u, &default_tag);
-    let password = percent_decode(if !u.username().is_empty() {
-        u.username()
-    } else {
-        u.password().unwrap_or("")
-    });
+    let password = decode_userinfo_password(&u);
     if password.is_empty() {
         return Err(format!("anytls URI 缺少密码：{raw}"));
     }

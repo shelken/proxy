@@ -266,7 +266,7 @@ pub fn run(port: u16) -> Result<(), String> {
                     &b"Content-Type"[..],
                     &b"application/json; charset=utf-8"[..],
                 )
-                .map_err(|_| "构造 Content-Type 响应头失败".to_string())?,
+                .map_err(|()| "构造 Content-Type 响应头失败".to_string())?,
             );
         if let Err(e) = request.respond(response) {
             eprintln!("[sb-sync server] 响应失败: {e}");

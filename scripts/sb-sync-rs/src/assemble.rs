@@ -55,8 +55,7 @@ fn assign_tags(nodes: &mut [Value], reserved: &[String]) {
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("node-{}", index + 1));
+            .map_or_else(|| format!("node-{}", index + 1), str::to_string);
         let mut tag = base.clone();
         if taken.contains(&tag) {
             tag = format!("{base}-node");
@@ -86,29 +85,25 @@ pub fn generate_node_direct_rule(nodes: &[Value], _template: &Value) -> Option<V
         if server.is_empty() {
             continue;
         }
-        match server.parse::<std::net::IpAddr>() {
-            Ok(ip) => {
-                let cidr = if ip.is_ipv6() {
-                    format!("{server}/128")
-                } else {
-                    format!("{server}/32")
-                };
+        if let Ok(ip) = server.parse::<std::net::IpAddr>() {
+            let cidr = if ip.is_ipv6() {
+                format!("{server}/128")
+            } else {
+                format!("{server}/32")
+            };
+            if !cidrs.contains(&cidr) {
+                cidrs.push(cidr);
+            }
+        } else {
+            if domains.iter().any(|d| d == server) {
+                continue;
+            }
+            domains.push(server.to_string());
+            // 服务端视角解析：系统 getaddrinfo（无 TUN/fakeip 场景）→ DoH 兜底
+            if let Some(ip) = system_resolve_a(server).or_else(|| doh_resolve_a(server)) {
+                let cidr = format!("{ip}/32");
                 if !cidrs.contains(&cidr) {
                     cidrs.push(cidr);
-                }
-            }
-            Err(_) => {
-                if domains.iter().any(|d| d == server) {
-                    continue;
-                }
-                domains.push(server.to_string());
-                // 服务端视角解析：系统 getaddrinfo（无 TUN/fakeip 场景）→ DoH 兜底
-                let ip = system_resolve_a(server).or_else(|| doh_resolve_a(server));
-                if let Some(ip) = ip {
-                    let cidr = format!("{ip}/32");
-                    if !cidrs.contains(&cidr) {
-                        cidrs.push(cidr);
-                    }
                 }
             }
         }
@@ -227,12 +222,15 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
         .collect::<Vec<Value>>()
 }
 
+/// 订阅抓取函数类型。抽成别名以免在结构体字段里内联复杂类型。
+pub type SubscriptionFetcher = Box<dyn Fn(&str) -> Result<String, String>>;
+
 #[derive(Default)]
 pub struct AssembleInput {
     /// `|` 分隔的源列表：订阅 URL 与私有节点 URI 任意混合。
     pub sources: String,
     /// 订阅抓取注入点（测试用）。
-    pub fetch_subscription: Option<Box<dyn Fn(&str) -> Result<String, String>>>,
+    pub fetch_subscription: Option<SubscriptionFetcher>,
 }
 
 /// 解析全部源 → 节点全集（私有节点保序前插，机场订阅原序追加）。
