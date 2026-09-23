@@ -1,24 +1,40 @@
 # proxy
 
-个人自维护的跨平台代理配置、分流规则与设备侧配置同步工具
+个人自维护的代理配置仓库：一份权威分流规则源，一套标准化 sing-box 底模，加上 Loon 插件与设备侧订阅交付工具。
 
 ## 功能
 
-- **统一底模**：全平台标准化 sing-box 底模，包含双入站、内网穿透与 22 大分流策略组
-- **sb-sync 双形态**：Rust 单二进制。客户端 `encode` 把本机 YAML 加密成一条订阅 URL；服务端 `server` 解密后装配节点并调用官方 sing-box merge 产出配置
-- **凭据零外泄**：订阅与节点只经服务端公钥加密传输，密钥材料不出本机
-- **纯本地沙箱验证**：基于 Lima VM 仿真双入站与路由表，毫秒级黑盒诊断分流链路
-- **Loon 多端生态**：维护移动端与 macOS 配置，集成去广告与自动化签到插件
+- **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.txt` 统一声明，一处修改，各客户端产物同步
+- **标准化 sing-box 底模**：双入站、FakeIP DNS、23 大分流策略组，含内网穿透
+- **多客户端产物**：规则编译为 `.srs` / clash yaml 等格式，供各端远程引用
+- **Loon 插件**：移动端与 macOS 端插件（去广告、自动化签到等），独立开关与幂等保证
+- **设备侧订阅交付（sb-sync）**：本机订阅与节点加密成一条 URL，服务端装配后由 SFM 按间隔自动拉取，凭据零外泄
+- **沙箱验证**：Lima VM 内仿真双入站与路由表，黑盒诊断分流链路
 
-## 快速上手（客户端）
+## 快速上手
 
-无需本仓库源码，一条命令安装（依赖 [mise](https://mise.jdx.dev)）：
+本仓库产出的配置可直接被客户端引用。以 sing-box 为例：
+
+**1. 确认规则是否满足需求**
+
+分流规则在 `config/rules/`。检查 `index.txt` 里的 `tag|policy|source` 清单，
+需要增删域名时改 `custom/*.list`，或直接在 `index.txt` 追加一行。
+
+**2. 拿到底模**
+
+`config/sing-box/template.json` 是完整配置骨架，含双入站与 23 个策略组。
+它通过 `rule_set` 远程引用 `sing-box-rules` 分支上编译好的 `.srs`，按天自动更新；
+自用场景直接套用即可，换自己的规则产物时才需改这些地址。
+
+**3. 在设备上交付（Mac + SFM）**
+
+装 sb-sync（依赖 [mise](https://mise.jdx.dev)，无需本仓库源码）：
 
 ```bash
 mise install github:shelken/proxy@latest
 ```
 
-写配置 `~/.config/sing-box/config.yaml`：
+写 `~/.config/sing-box/config.yaml`：
 
 ```yaml
 subs:
@@ -34,31 +50,27 @@ sb-sync encode -s https://sub.example.com
 ```
 
 把 URL 粘进 SFM 的 Remote Profile，之后由 SFM 按间隔自动拉取。
-详见[用户指南：Mac+SFM](./docs/user-guide/01-mac-sfm.md)。
+逐步操作见[用户指南](./docs/user-guide/README.md)。
 
-## 快速上手（开发机）
+## 核心配置
 
-项目依赖通过 `mise` 与 `bun` 管理：
+`config/rules/index.txt` 是唯一需要手工维护的规则清单，三列以竖线分隔：
 
-```bash
-mise install
-bun install
+```text
+tag|policy|source
+MyReject|reject|config/rules/custom/MyReject.list
+Apple-AI|appleai|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple_AI/Apple_AI.list
 ```
 
-Rust 版 sb-sync 源码位于 `scripts/sb-sync-rs/`。编译校验由远程 CI 承担
-（`.github/workflows/ci-sb-sync.yml`：fmt + clippy 严格规则 + 测试 + 镜像构建）：
+| 列 | 说明 |
+| :--- | :--- |
+| `tag` | 规则集标识，也是底模里的 `rule_set` tag |
+| `policy` | 目标出站策略组；`reject` 会编译成 `action: reject` |
+| `source` | 仓库相对路径读本地文件，`http` 开头则按 URL 拉取 |
 
-```bash
-cd scripts/sb-sync-rs
-cargo run -- keygen
-```
-
-测试：
-
-```bash
-just test          # 宿主机全部测试
-just test-sandbox  # Lima VM 沙箱网络行为测试
-```
+自定义列表（`custom/*.list`）支持 `DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` /
+`DOMAIN-REGEX` / `IP-CIDR` / `IP-CIDR6` / `SRC-IP-CIDR` / `SRC-PORT` / `DST-PORT` /
+`PROCESS-NAME` / `GEOIP` 等标准分流语法。详见 [config/rules/README.md](./config/rules/README.md)。
 
 ## 核心策略组规范
 
@@ -92,21 +104,26 @@ just test-sandbox  # Lima VM 沙箱网络行为测试
 
 ## 目录索引
 
-- `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)
-- `docs/sb-sync.md`：sb-sync 客户端与服务端架构、加密协议、配置说明
-- `scripts/sb-sync-rs/`：sb-sync Rust 源码（客户端编码 + 服务端装配）
-- `config/sing-box/`：sing-box 标准底模与沙箱测试套件
-- `config/rules/`：分流规则源清单与自定义列表（编译器 `scripts/rules-compile.ts`）
+- `config/rules/`：分流规则源（`index.txt` + `custom/`）与编译器 `scripts/rules-compile.ts`，详见其 [README](./config/rules/README.md)
+- `config/sing-box/`：sing-box 标准底模、本地覆盖示例与沙箱套件
 - `config/loon/`：Loon 配置文件与插件
-- `docs/ARCH.md`：系统顶层架构文档
-
+- `scripts/sb-sync-rs/`：sb-sync Rust 源码（客户端编码 + 服务端装配）
+- `docs/ARCH.md`：系统顶层架构
+- `docs/sb-sync.md`：sb-sync 客户端与服务端架构、加密协议、配置说明
+- `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)
+- `postmortems/`：疑难问题的排查记录
 ## 贡献
 
-提交变更前确保测试通过：
+个人仓库，变更以自用为准。提交前确保测试通过：
 
 ```bash
-just test
-just test-sandbox
+mise install
+bun install
+
+just test                   # 宿主机全部测试（Loon 插件 + 底模装配脚本）
+just run-test cmcc          # 按关键字过滤
+just check-singbox          # 校验生产底模引用的规则集与结构
+just trace google.com       # 沙箱内追踪指定域名的分流与真实出口
 ```
 
 改动 `config/rules/` 下的清单或底模后，用这两条确认并重建规则产物：
@@ -116,6 +133,17 @@ just rules-check    # 校验清单 policy 与底模路由是否一致
 just rules-build    # 全量编译各端产物（CI 也会在推送后自动做这件事）
 ```
 
+沙箱 VM 生命周期与网络行为测试会创建 TUN、改写路由表，**不在宿主机运行**：
+
+```bash
+just vm-create      # 一次性创建 Lima VM
+just vm-start
+just test-sandbox   # 在 VM 内运行全部网络行为测试
+just vm-stop
+```
+
+Rust 部分（`scripts/sb-sync-rs/`）的编译校验由远程 CI 承担
+（`.github/workflows/ci-sb-sync.yml`：fmt + clippy 严格规则 + 测试 + 镜像构建）。
 ## 许可证
 
 MIT

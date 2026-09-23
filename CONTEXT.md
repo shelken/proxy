@@ -12,7 +12,7 @@
 双形态静态单二进制。客户端形态 `encode`：读本机 YAML，用服务端公钥加密后产出订阅 URL；服务端形态 `server`：解密载荷、装配节点、调用官方 sing-box CLI 合并后响应配置 JSON。
 
 **底模（template）**
-sing-box 配置的公共骨架：双入站、内网穿透、22 大分流策略组、route_exclude_address。服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模（仅 https，严格校验）。
+sing-box 配置的公共骨架：双入站、内网穿透、23 大分流策略组、route_exclude_address。服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模（仅 https，严格校验）。
 
 **订阅 URL（subscription URL）**
 客户端 `encode` 的产物。携带 ECIES 密文（`/sub?d=`），粘进 SFM Remote Profile 一次后长期有效，由 SFM 按间隔自动拉取。
