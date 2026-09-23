@@ -79,6 +79,25 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scripts/sb-sync-rs/target
+          key: ci-sb-sync-docker-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          restore-keys: ci-sb-sync-docker-
+
+      # 镜像已改为 COPY 预编译二进制，构建上下文里必须先有它
+      - name: Build binary
+        working-directory: scripts/sb-sync-rs
+        run: |
+          cargo build --release --locked
+          cp target/release/sb-sync ../../sb-sync
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Build image (no push)

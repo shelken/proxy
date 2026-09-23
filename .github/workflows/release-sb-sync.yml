@@ -156,35 +156,125 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
+  # 每平台原生构建镜像并推送 digest，再由 merge job 组装 manifest list。
+  #
+  # 二进制直接取自 binaries job 的 artifact，与发布出去的完全同源——镜像内二进制的
+  # 架构因此天然与该平台一致，不存在交叉 COPY 装错架构的风险。
+  #
+  # 不用 QEMU：集群是混合架构（控制平面 arm64、worker amd64），且 Pod 无节点亲和
+  # 约束，两种架构都必须能真跑。模拟构建的产物无法在构建机上执行，验不了。
   docker:
-    runs-on: ubuntu-latest
-    # 只在 tag 上跑：手动触发若也执行，会推进 :latest 与分支名 tag
-    # （workflow_dispatch 时 github.ref_name 是分支名，如 main），
-    # 那等于用未发版代码覆盖已发布镜像。镜像的构建校验由 ci-sb-sync.yml 承担。
-    if: startsWith(github.ref, 'refs/tags/')
+    name: image (${{ matrix.platform }})
+    needs: binaries
+    # tag 上跑是正式发布；workflow_dispatch 也跑，但只推到快照 tag —— 多架构
+    # manifest 合并这条路只有在真推一次之后才能确认（imagetools create 的
+    # digest 拼接、GHCR 权限都验不到），而它原本只在发版时才第一次执行。
+    # 推分支名 tag 会污染镜像 tag 空间，故用 snapshot-<sha> 这种一次性名字。
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            artifact: sb-sync-aarch64-unknown-linux-musl
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            artifact: sb-sync-x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # 镜像构建上下文要求 ./sb-sync，用本平台那份二进制填上
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: image-context
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      - name: Stage binary into context
+        run: mv image-context/${{ matrix.artifact }} sb-sync
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/sb-sync-server:latest
-            ghcr.io/${{ github.repository }}/sb-sync-server:${{ github.ref_name }}
+          platforms: ${{ matrix.platform }}
+          # 按 digest 推送：多平台各自出一个 manifest，最终合并成 list
+          outputs: type=image,name=ghcr.io/${{ github.repository }}/sb-sync-server,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          DIGEST="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+
+  # 把各平台 digest 合并成 manifest list。单平台 push 只产生架构专属 manifest，
+  # 没有这一步 `docker pull` 在另一架构上会失败。
+  docker-merge:
+    name: merge image manifest
+    needs: docker
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 正式发版才推进 latest；手动触发只落一次性快照，不覆盖已发布镜像
+      - name: Resolve tags
+        id: tags
+        run: |
+          REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "primary=${REPO}:snapshot-${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
+            echo "extra=" >> $GITHUB_OUTPUT
+          else
+            echo "primary=${REPO}:latest" >> $GITHUB_OUTPUT
+            echo "extra=-t ${REPO}:${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
+          docker buildx imagetools create \
+            -t "${{ steps.tags.outputs.primary }}" ${{ steps.tags.outputs.extra }} \
+            $(printf "${REPO}@sha256:%s " *)
+
+      # 列出结果确认两个架构都在 list 里——漏了架构不会有别的信号
+      - name: Inspect manifest
+        run: |
+          docker buildx imagetools inspect "${{ steps.tags.outputs.primary }}"
