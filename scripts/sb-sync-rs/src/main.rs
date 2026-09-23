@@ -41,13 +41,13 @@ fn main() {
             println!("SERVER_PUBLIC_KEY={pk}");
             Ok(())
         }
-        Some("version") | Some("--version") | Some("-V") => {
+        Some("version" | "--version" | "-V") => {
             println!("sb-sync {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         _ => {
             eprintln!("{}", usage());
-            std::process::exit(if cmd.is_none() { 0 } else { 1 });
+            std::process::exit(i32::from(cmd.is_some()));
         }
     };
     if let Err(e) = result {

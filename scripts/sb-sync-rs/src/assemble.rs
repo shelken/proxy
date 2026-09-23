@@ -261,6 +261,11 @@ pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>,
 
 /// 节点全集 + 底模 → 填充完 outbounds 的完整配置（纯内存，零网络）。
 pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
+    // 远程底模可能缺这一层；缺失时直接报错，避免产出的配置静默丢掉全部策略组
+    if !template["outbounds"].is_array() {
+        return Err("底模缺少 outbounds 数组".into());
+    }
+
     let reserved = reserved_tags(template);
     let mut nodes = nodes;
     assign_tags(&mut nodes, &reserved);
@@ -387,6 +392,19 @@ mod tests {
             json!(["node.invalid"]),
             "域名 server 进 domain"
         );
+    }
+
+    /// finalize 的前置校验：底模缺 outbounds 时直接报错，不静默产出空策略组配置。
+    #[test]
+    fn finalize_rejects_template_without_outbounds() {
+        let mut tpl = json!({"route": {"rules": []}});
+        let input = AssembleInput {
+            sources: "hy2://pass@192.0.2.1:8388#a".into(),
+            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        };
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        let err = finalize(&mut tpl, nodes).expect_err("应拒绝缺 outbounds 的底模");
+        assert!(err.contains("outbounds"), "实际: {err}");
     }
 
     /// 同一 server 出现多次时不得产生重复 cidr（重复项会被 sing-box 拒）。
