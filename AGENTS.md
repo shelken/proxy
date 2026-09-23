@@ -7,6 +7,9 @@
 - `config/loon/`: Loon 配置与插件（移动端 + macOS 桌面端），含 `plugins/` 插件目录与各端 `.conf` 配置
 - `config/clash/`、`config/surge/`: 备用客户端配置
 - `scripts/`: 构建等脚本
+- `docs/adr/`: 架构决策记录（编号递增，一个决策一篇）
+- `docs/`: 架构与使用文档（`ARCH.md` 全局架构、`sb-sync.md` 实现细节、`user-guide/` 用户指南）
+- `postmortems/`: 事故与踩坑记录（编号递增，索引见 `postmortems/README.md`）
 - `.github/workflows/`: CI 工作流
 
 ## 基本原则
