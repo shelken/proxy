@@ -1,15 +1,9 @@
-# 构建上下文瘦身：cargo target 1.5GB，镜像只需 src + 两份 Cargo 元数据
-scripts/sb-sync-rs/target/
+# 构建上下文瘦身：镜像只 COPY 预编译的 sb-sync 二进制与官方 sing-box，
+# 不需要仓库其余内容（Rust 编译已由 CI 的独立步骤完成）。
 .git/
 .github/
-config/rules/
-config/clash/
-config/loon/
-config/surge/
-config/sing-box/tests/
+config/
 docs/
 postmortems/
-scripts/*.ts
-scripts/*.test.ts
-scripts/sb-sync-rs/tests/
+scripts/
 **/*.md

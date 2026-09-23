@@ -79,6 +79,34 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # 必须编 musl 目标：运行镜像是 alpine，gnu 产物缺 glibc 解释器会以
+          # "executable file not found" 静默退出，端口根本不会监听
+          targets: x86_64-unknown-linux-musl
+
+      # ring（经 rustls）走 cc-rs 编 C 代码，musl 目标需要 musl-gcc
+      - name: Install musl toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scripts/sb-sync-rs/target
+          key: ci-sb-sync-docker-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          restore-keys: ci-sb-sync-docker-
+
+      # 镜像已改为 COPY 预编译二进制，构建上下文里必须先有它。
+      # 这里与 release 工作流同源同目标，避免「CI 绿但发版炸」。
+      - name: Build binary
+        working-directory: scripts/sb-sync-rs
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/sb-sync ../../sb-sync
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Build image (no push)
@@ -96,12 +124,14 @@ jobs:
         run: |
           SK=$(openssl rand -hex 32)
           docker run -d --name sb-sync-ci -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sb-sync-server:ci
-          for i in $(seq 1 20); do
-            curl -fsS http://127.0.0.1:18080/healthz && break
+          # 与 release 工作流同因：容器接受连接却不响应时，无超时的 curl 会挂到
+          # job 上限而非在 20 秒内失败，冒烟步骤就失去快速失败的意义。
+          for _ in $(seq 1 20); do
+            curl -fsS --max-time 2 http://127.0.0.1:18080/healthz && break
             sleep 1
           done
-          test "$(curl -fsS http://127.0.0.1:18080/healthz)" = "ok"
-          PK=$(curl -fsS http://127.0.0.1:18080/pubkey)
+          test "$(curl -fsS --max-time 5 http://127.0.0.1:18080/healthz)" = "ok"
+          PK=$(curl -fsS --max-time 5 http://127.0.0.1:18080/pubkey)
           echo "pubkey=$PK"
           # 与私钥推导出的公钥必须一致（长度 64 且为十六进制）
           test "${#PK}" -eq 64

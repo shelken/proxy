@@ -1,22 +1,18 @@
 # sb-sync-server 镜像：sb-sync（服务端形态）+ 官方 sing-box CLI。
-# sing-box 版本固定 1.14.1：merge 行为随版本变化，升级需重跑合并回归测试。
+#
+# 单平台构建：每平台在原生 runner 上单独构建并推送 digest，最后由合并 job
+# 组装 manifest list。二进制由 CI 预编译后 COPY 进来，镜像构建不再重复编译。
+#
+# 构建上下文要求 sb-sync 二进制位于 ./sb-sync（由 workflow 就地产出后放入）。
 FROM ghcr.io/sagernet/sing-box:v1.14.1 AS singbox
-
-# rust 1.97：Cargo.lock 中 icu_* 要求 rustc ≥1.88，1.85 直接编译失败。
-# alpine + build-base：ureq→rustls→ring 需要 C 工具链。
-FROM rust:1.97-alpine AS builder
-RUN apk add --no-cache build-base
-WORKDIR /build
-COPY scripts/sb-sync-rs/Cargo.toml scripts/sb-sync-rs/Cargo.lock ./
-COPY scripts/sb-sync-rs/src/ ./src/
-# include_str! 从 crate 根退出三级：/build/src/../../../config = /config（非 /build/config）
-COPY config/sing-box/template.json /config/sing-box/template.json
-RUN cargo build --release
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
-COPY --from=builder /build/target/release/sb-sync /usr/local/bin/sb-sync
+# artifact 上传/下载不保留文件权限（GitHub Actions 的已知行为），COPY 会原样带上
+# 缺失的可执行位，容器启动即 127 «executable file not found in $PATH»。显式补上。
+COPY sb-sync /usr/local/bin/sb-sync
+RUN chmod +x /usr/local/bin/sb-sync
 ENV PORT=8080
 EXPOSE 8080
 ENTRYPOINT ["sb-sync"]

@@ -100,15 +100,19 @@ sequenceDiagram
 每次改动 (scripts/sb-sync-rs/** 或 template.json) → ci-sb-sync.yml
   → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
   → 装 sing-box 1.14.1 → cargo test → cargo build --release
-  → docker build（不推送）+ 起容器验 /healthz 与 /pubkey
+  → cargo build --release → docker build（不推送）+ 起容器验 /healthz 与 /pubkey
 
 git tag v* → release-sb-sync.yml
   三平台各自在原生 runner 上 cargo test --release → cargo build --release
     aarch64-apple-darwin      (macos-15)          客户端
     aarch64-unknown-linux-musl (ubuntu-24.04-arm) 沙箱 VM 与 arm64 节点
     x86_64-unknown-linux-musl  (ubuntu-latest)    amd64 节点
-  → 每个产物在构建机上原生跑 version 冒烟；Linux 产物断言静态链接
+  → 每个产物在构建机上原生跑 version 冒烟；Linux 产物断言静态链接（无解释器段）
   → 三份二进制上传 GitHub Release
-  → 构建并推送 sb-sync-server 镜像到 GHCR（amd64）
+  → 每平台取本架构二进制就地 load 起容器冒烟，再按 digest 推送镜像
+  → imagetools create 合并为 manifest list（arm64 + amd64）
   → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取 darwin 产物
 ```
+
+`workflow_dispatch` 会跑完同一条镜像链路，但只推到 `snapshot-<sha>` 一次性 tag：
+多架构 manifest 合并只在发版时第一次执行的话，digest 拼接与 GHCR 权限都验不到。
