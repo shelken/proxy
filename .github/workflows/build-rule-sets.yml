@@ -17,6 +17,11 @@ on:
       - "scripts/rules-compile.ts"
       - "scripts/rules-compile.test.ts"
       - ".github/workflows/build-rule-sets.yml"
+  schedule:
+    # 每天 20:23 UTC（北京 04:23）。上游清单（blackmatrix7 等）的内容会变，
+    # 只靠仓库文件变更触发的话，上游新增的域名永远进不来。
+    # 错开整点：GitHub 在 0 分附近排队最重。
+    - cron: "23 20 * * *"
 
 # 多次 push 各自触发一次运行，每次都 force push 同一条发布分支。后跑完的覆盖整棵树，
 # 所以先触发的那次若后完成，分支上留的是旧产物。排队而不是取消：取消若恰落在
@@ -77,9 +82,9 @@ jobs:
           if-no-files-found: error
 
       - name: 发布到 sing-box-rules 分支
-        # 只在默认分支的 push 上发布：PR 未合并就覆盖生产分支，
-        # 等于让未审核的规则立刻生效。
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        # 只在默认分支上发布：PR 未合并就覆盖生产分支，等于让未审核的规则立刻生效。
+        # schedule 只在默认分支运行，无需额外判断 event_name，只看 ref。
+        if: github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash

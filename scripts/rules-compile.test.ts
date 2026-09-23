@@ -192,6 +192,30 @@ describe("convert --client singbox", () => {
     expect(rules[0]).toEqual({ domain: ["a.test"], invert: true });
   });
 
+  test("嵌套逻辑表达式（AND 内含 OR）完整展开，不静默丢弃", () => {
+    // 取自 custom/Adult.list 的实际写法。早年解析失败时整条被丢进 unsupported，
+    // 产物里悄无声息少了三条规则。
+    const lines = [
+      "AND,((OR,((DOMAIN-SUFFIX,online),(DOMAIN-SUFFIX,site))),(DOMAIN-KEYWORD,assets-))",
+      "AND,((DOMAIN-SUFFIX,space),(OR,((DOMAIN-KEYWORD,radiantflow),(DOMAIN-KEYWORD,clear-water))))",
+    ];
+    const emission = emitSingbox(normalizeRuleLines(lines.join("\n")));
+    expect(emission.skipped).toEqual([]);
+
+    const rules = JSON.parse(emission.text).rules as SingBoxRule[];
+    expect(rules).toHaveLength(2);
+    expect(rules[0].mode).toBe("and");
+    const first = rules[0].rules as SingBoxRule[];
+    // 第一个子项本身是嵌套的 OR，必须完整保留而不是被拍平或丢弃
+    expect(first[0].mode).toBe("or");
+    expect((first[0].rules as SingBoxRule[]).length).toBe(2);
+    expect(first[1]).toEqual({ domain_keyword: ["assets-"] });
+
+    const second = rules[1].rules as SingBoxRule[];
+    expect(second[0]).toEqual({ domain_suffix: ["space"] });
+    expect(second[1].mode).toBe("or");
+  });
+
   test("DNS 伴生只保留按查询名匹配的字段", () => {
     // DNS 规则在拿到响应前只能按查询名判定，IP 类条目在 DNS 规则里没有可判定语义。
     const emission = emitSingboxDns(

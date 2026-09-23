@@ -66,9 +66,17 @@ just rules-check       # 只校验清单与底模是否漂移
 
 ### 自动发布
 
-`.github/workflows/build-rule-sets.yml` 在下列文件变更时触发：
-`index.txt`、`custom/**`、`template.json`、编译器与测试自身。
+`.github/workflows/build-rule-sets.yml` 在两类时机触发：
+
+- **推送**：`index.txt`、`custom/**`、`template.json`、编译器与测试自身变更时
+- **定时**：每天一次，用于吃进上游清单的内容更新
+
+定时那一档是必需的：blackmatrix7 等上游列表会持续增删域名，只靠仓库文件变更触发的话，
+上游新增的规则永远进不来。
+
 流程是跑单元测试 → 校验清单与底模一致 → 全量构建 → force push 到 `sing-box-rules` 分支。
+发布步骤只在默认分支上执行（`github.ref == 'refs/heads/main'`），PR 只跑测试与构建、
+产物以 artifact 留存，不会覆盖生产分支。
 
 底模以 `update_interval: 1d` 远程引用该分支的 `.srs`，所以**不再需要手工往分支提交产物**。
 分支每次都是整棵树快照（无父提交），容器与设备次日自动拿到新规则。

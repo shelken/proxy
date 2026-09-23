@@ -425,9 +425,11 @@ interface LogicalParse {
 export function parseLogicalRule(line: string): LogicalParse {
   const comma = line.indexOf(",");
   const op = line.slice(0, comma).toUpperCase();
-  // 不能剥外层括号：`NOT,(DOMAIN,a.test)` 剥掉后顶层逗号会把单个子表达式切成两段。
-  // 只有 AND/OR 的多个子表达式需要按顶层逗号切分，切分本身已能跳过括号内的逗号。
-  const rest = line.slice(comma + 1).trim();
+  // 括号有两种形态，都要能吃下：
+  //   AND,(a),(b)      → 顶层逗号直接切
+  //   AND,((a),(OR,...)) → 多包了一层，先剥掉才能按顶层逗号切
+  // NOT 的子表达式同理，但它只有一个，剥不剥都能交给 parseRuleExpression。
+  const rest = stripOuterParens(line.slice(comma + 1).trim());
   const unsupported: string[] = [];
 
   if (op === "AND" || op === "OR") {
@@ -449,7 +451,7 @@ export function parseLogicalRule(line: string): LogicalParse {
   }
 
   if (op === "NOT") {
-    const child = parseRuleExpression(stripOuterParens(rest));
+    const child = parseRuleExpression(rest);
     unsupported.push(...child.unsupported);
     if (!child.rule) {
       unsupported.push(line);
