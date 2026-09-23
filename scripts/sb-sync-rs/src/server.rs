@@ -322,11 +322,10 @@ mod tests {
 
         assert!(
             !explicit,
-            "SING_BOX 已显式设为 {:?} 但不可用（{detail}）：\
+            "SING_BOX 已显式设为 {bin:?} 但不可用（{detail}）：\
              这是环境配置错误，不能按「内核缺失」跳过",
-            bin
         );
-        Some(format!("{:?} 不可用（{detail}）", bin))
+        Some(format!("{bin:?} 不可用（{detail}）"))
     }
 
     #[test]
