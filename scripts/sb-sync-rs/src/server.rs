@@ -138,8 +138,19 @@ fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-/// 调用官方 sing-box CLI 合并 01-overlay.json + 02-base.json，返回结果 JSON 字符串。
+/// 调用内核 merge 01-overlay.json + 02-base.json，返回结果 JSON 字符串。
 fn run_singbox_merge(
+    dir: &TempMergeDir,
+    overlay: Option<&Value>,
+    base: &Value,
+) -> Result<String, String> {
+    run_singbox_merge_with(&template::resolve_singbox_binary(), dir, overlay, base)
+}
+
+/// merge 实现本体，内核路径由参数注入：测试需要验证「路径不存在时报错指向该路径」
+/// 这条契约，而内联读环境变量无法确定性覆盖（env 是进程全局，并行测试下互相污染）。
+fn run_singbox_merge_with(
+    bin: &std::ffi::OsStr,
     dir: &TempMergeDir,
     overlay: Option<&Value>,
     base: &Value,
@@ -166,17 +177,17 @@ fn run_singbox_merge(
     args.push(base_path.display().to_string());
 
     let result_path = dir.path.join("result.json");
-    let output = std::process::Command::new("sing-box")
+    let output = std::process::Command::new(bin)
         .arg("merge")
         .arg(result_path.display().to_string())
         .args(&args)
         .output()
-        .map_err(|e| format!("启动 sing-box 失败（容器内必须自带 sing-box 1.14.1）: {e}"))?;
+        .map_err(|e| format!("启动内核失败（{}）: {e}", bin.to_string_lossy()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let brief: String = stderr.lines().take(5).collect::<Vec<_>>().join("; ");
-        return Err(format!("sing-box merge 失败: {brief}"));
+        return Err(format!("内核 merge 失败: {brief}"));
     }
     std::fs::read_to_string(&result_path).map_err(|e| format!("读取合并结果失败: {e}"))
 }
@@ -279,6 +290,31 @@ pub fn run(port: u16) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// e2e 测试的内核门禁：返回 `Some(原因)` 表示应跳过，`None` 表示可用。
+    ///
+    /// 显式设置了 `SING_BOX` 却不可用时**不跳过**：沙箱里内核装在
+    /// `/opt/proxy-test/bin` 不在 PATH，全靠这个变量定位，静默跳过会让 e2e
+    /// 覆盖率降级且无人察觉——那正是这些测试存在的意义。只有「未显式设置
+    /// 且 PATH 上也没有」才允许跳过（开发机上没装内核的常见情形）。
+    fn kernel_unavailable_reason() -> Option<String> {
+        let bin = template::resolve_singbox_binary();
+        let explicit = std::env::var_os("SING_BOX").is_some_and(|v| !v.is_empty());
+        let probe = std::process::Command::new(&bin).arg("version").output();
+
+        let detail = match probe {
+            Ok(o) if o.status.success() => return None,
+            Ok(o) => format!("退出码 {:?}", o.status.code()),
+            Err(e) => format!("无法执行: {e}"),
+        };
+
+        assert!(
+            !explicit,
+            "SING_BOX 已显式设为 {bin:?} 但不可用（{detail}）：\
+             这是环境配置错误，不能按「内核缺失」跳过",
+        );
+        Some(format!("{bin:?} 不可用（{detail}）"))
+    }
+
     #[test]
     fn parse_payload_roundtrip() {
         let payload = json!({
@@ -339,15 +375,13 @@ mod tests {
 
     #[test]
     fn end_to_end_encrypt_assemble_merge() {
-        // 需要 sing-box 可执行文件；缺失则跳过（CI 沙箱内已保证）
-        if std::process::Command::new("sing-box")
-            .arg("version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skip: sing-box not found");
-            return;
-        }
+        let Some(reason) = kernel_unavailable_reason() else {
+            return run_end_to_end();
+        };
+        eprintln!("skip: {reason}");
+    }
+
+    fn run_end_to_end() {
         let (sk_hex, pk_hex) = crypto::generate_keypair_hex();
         let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
 
@@ -373,6 +407,48 @@ mod tests {
             "意外的底模来源: {}",
             source.as_str()
         );
+    }
+
+    /// 内核路径不存在时，报错必须含该路径本身。
+    /// 报错只说「启动失败」会让沙箱里调试的人先去怀疑 PATH，
+    /// 而真正的问题在 SING_BOX 指向了一个不存在的文件。
+    #[test]
+    fn missing_kernel_error_names_the_path() {
+        let dir = TempMergeDir::create().unwrap();
+        let base = json!({"outbounds": []});
+        let bad = std::ffi::OsString::from("/nonexistent/definitely-not-a-kernel");
+        let err = run_singbox_merge_with(&bad, &dir, None, &base).unwrap_err();
+        assert!(
+            err.contains("/nonexistent/definitely-not-a-kernel"),
+            "报错须含注入的内核路径，实际: {err}"
+        );
+    }
+
+    /// 内核 merge 失败时，报错须带上其 stderr 摘要（截前 5 行）。
+    /// 否则用户只看到「失败」而不知道是 overlay 语法错还是底模冲突。
+    #[test]
+    #[cfg(unix)]
+    fn kernel_failure_surfaces_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempMergeDir::create().unwrap();
+        let script_dir =
+            std::env::temp_dir().join(format!("sb-sync-badbox-{}", std::process::id()));
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let bad = script_dir.join("bad-kernel");
+        std::fs::write(
+            &bad,
+            "#!/bin/sh\necho 'ERROR: overlay 非法字段 xxx' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let base = json!({"outbounds": []});
+        let err = run_singbox_merge_with(bad.as_os_str(), &dir, None, &base).unwrap_err();
+        assert!(
+            err.contains("overlay 非法字段"),
+            "应带上 stderr 摘要，实际: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&script_dir);
     }
 
     #[test]
@@ -445,14 +521,13 @@ mod tests {
     /// 这两条是「提交了 overlay 却没生效」与「没提交 overlay 就失败」两类事故的分界。
     #[test]
     fn overlay_overrides_base_after_merge() {
-        if std::process::Command::new("sing-box")
-            .arg("version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skip: sing-box not found");
-            return;
-        }
+        let Some(reason) = kernel_unavailable_reason() else {
+            return run_overlay_overrides();
+        };
+        eprintln!("skip: {reason}");
+    }
+
+    fn run_overlay_overrides() {
         let (sk_hex, pk_hex) = crypto::generate_keypair_hex();
         let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
         let pk = crypto::parse_public_key_hex(&pk_hex).unwrap();

@@ -99,8 +99,12 @@ sequenceDiagram
   → docker build（不推送）+ 起容器验 /healthz 与 /pubkey
 
 git tag v* → release-sb-sync.yml
-  → macOS 上 cargo test --release → cargo build --release
-  → 上传 sb-sync-aarch64-apple-darwin 到 GitHub Release
-  → 构建并推送 sb-sync-server 镜像到 GHCR
-  → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取
+  三平台各自在原生 runner 上 cargo test --release → cargo build --release
+    aarch64-apple-darwin      (macos-15)          客户端
+    aarch64-unknown-linux-musl (ubuntu-24.04-arm) 沙箱 VM 与 arm64 节点
+    x86_64-unknown-linux-musl  (ubuntu-latest)    amd64 节点
+  → 每个产物在构建机上原生跑 version 冒烟；Linux 产物断言静态链接
+  → 三份二进制上传 GitHub Release
+  → 构建并推送 sb-sync-server 镜像到 GHCR（amd64）
+  → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取 darwin 产物
 ```
