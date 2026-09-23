@@ -153,10 +153,7 @@ const LAYER_BASE: &str = "02-base";
 /// `layers` 是 `(文件名前缀, 内容)` 列表，**其名字的字典序决定合并顺序**：
 /// 数组按文件名字典序拼接、标量取字典序最前的那份（实测，与 `-c` 的 argv 顺序
 /// 无关）。调用方必须按期望优先级给出层名。
-fn run_singbox_merge(
-    dir: &TempMergeDir,
-    layers: &[(&str, &Value)],
-) -> Result<String, String> {
+fn run_singbox_merge(dir: &TempMergeDir, layers: &[(&str, &Value)]) -> Result<String, String> {
     run_singbox_merge_with(&template::resolve_singbox_binary(), dir, layers)
 }
 
