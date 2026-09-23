@@ -438,4 +438,258 @@ mod tests {
             "同 IP 只留一个"
         );
     }
+
+    /// 模拟机场订阅响应体：base64(URI 列表)，两行 ss URI（SIP002）。
+    /// 与旧 endpoint.test.ts 的 AIRPORT_BODY 同构，保证两端期望值可比对。
+    fn airport_body() -> String {
+        use base64::Engine;
+        let userinfo = base64::engine::general_purpose::STANDARD.encode("aes-128-gcm:fx");
+        let plain =
+            format!("ss://{userinfo}@192.0.2.10:8388#HK-01\nss://{userinfo}@192.0.2.11:8388#JP-01");
+        base64::engine::general_purpose::STANDARD.encode(plain)
+    }
+
+    fn input_with_fetcher(sources: &str, body: &str) -> AssembleInput {
+        let owned = body.to_string();
+        AssembleInput {
+            sources: sources.into(),
+            fetch_subscription: Some(Box::new(move |_| Ok(owned.clone()))),
+        }
+    }
+
+    /// 订阅正文 base64 解码后逐行解析，保持原行序。
+    /// 顺序错了会让节点入池顺序变，进而影响策略组候选池。
+    #[test]
+    fn subscription_body_decodes_lines_in_order() {
+        let nodes = parse_subscription_body(&airport_body()).expect("订阅解析失败");
+        let tags: Vec<String> = nodes
+            .iter()
+            .filter_map(|n| n["tag"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(tags, vec!["HK-01", "JP-01"]);
+    }
+
+    /// 坏行报错必须带行号：订阅动辄上百行，没有行号无从定位。
+    /// 首行坏、末行坏都要报出正确行号（差一错误会让人找到相邻的正确行）。
+    #[test]
+    fn subscription_body_reports_line_number_on_bad_line() {
+        use base64::Engine;
+        let bad_first = base64::engine::general_purpose::STANDARD
+            .encode("vmess://broken\nss://YWVzLTEyOC1nY206Zng=@192.0.2.11:8388#JP-01");
+        let err = parse_subscription_body(&bad_first).expect_err("首行坏应报错");
+        assert!(err.contains("订阅第 1 行"), "实际: {err}");
+
+        let userinfo = base64::engine::general_purpose::STANDARD.encode("aes-128-gcm:fx");
+        let bad_last = base64::engine::general_purpose::STANDARD
+            .encode(format!("ss://{userinfo}@192.0.2.10:8388#HK-01\ntrojan://x"));
+        let err2 = parse_subscription_body(&bad_last).expect_err("末行坏应报错");
+        assert!(err2.contains("订阅第 2 行"), "实际: {err2}");
+    }
+
+    /// 空订阅正文直接报错，不产出空节点列表（否则下游会产出空策略组）。
+    #[test]
+    fn subscription_body_rejects_empty() {
+        let err = parse_subscription_body("   ").expect_err("空订阅应报错");
+        assert!(err.contains("订阅内容"), "实际: {err}");
+    }
+
+    /// 标签唯一化：节点名撞上保留标签（底模 outbounds 的 tag）时必须让位，
+    /// 否则同 tag 重复出站会被 sing-box 拒绝。
+    /// selfhost 是底模 urltest 组保留 tag，同名的 hy2 节点让位为 selfhost-node。
+    #[test]
+    fn node_tag_yields_to_reserved_template_tags() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#selfhost|anytls://pass@192.0.2.2:8443#AnyNode",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let tags: Vec<&str> = tpl["outbounds"]
+            .as_array()
+            .expect("outbounds 为数组")
+            .iter()
+            .filter(|o| o["type"] != "selector" && o["type"] != "urltest")
+            .filter(|o| o["type"] != "direct")
+            .filter_map(|o| o["tag"].as_str())
+            .collect();
+        assert_eq!(
+            tags,
+            vec!["selfhost-node", "AnyNode"],
+            "撞保留标签的节点须改名，未撞的保持原名"
+        );
+    }
+
+    /// 节点重名时的让位链：第二个同名节点加 -node 后缀，第三个再叠加序号，
+    /// 且节点互相之间也必须唯一（保留标签之外的第二层冲突）。
+    #[test]
+    fn duplicate_node_tags_get_unique_suffixes() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#dup|hy2://pass@192.0.2.2:8388#dup|hy2://pass@192.0.2.3:8388#dup",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let mut tags: Vec<&str> = tpl["outbounds"]
+            .as_array()
+            .expect("outbounds 为数组")
+            .iter()
+            .filter(|o| o["type"] == "hysteria2")
+            .filter_map(|o| o["tag"].as_str())
+            .collect();
+        tags.sort_unstable();
+        assert_eq!(tags, vec!["dup", "dup-node", "dup-node-2"]);
+    }
+
+    /// 节点顺序：私有 URI 保序前插，机场节点按订阅原序追加。
+    /// 源列表里机场写在最前也一样，私有节点优先是刻意约定。
+    #[test]
+    fn private_nodes_precede_airport_nodes_in_order() {
+        let input = input_with_fetcher(
+            "https://airport.example/sub|hy2://pass@192.0.2.1:8388#selfhost|anytls://pass@192.0.2.2:8443#AnyNode",
+            &airport_body(),
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        let tags: Vec<&str> = nodes.iter().filter_map(|n| n["tag"].as_str()).collect();
+        assert_eq!(
+            tags,
+            vec!["selfhost", "AnyNode", "HK-01", "JP-01"],
+            "私有节点按源列表顺序在前，机场节点按订阅行序在后"
+        );
+    }
+
+    /// 策略组候选池展开的完整契约：
+    /// - 全部 selector 按底模顺序保留（跳过无节点的组）
+    /// - proxy 组池 = selfhost 组引用 + 让位节点 + 机场节点，默认 selfhost
+    /// - 组内引用先于节点，去重且不包含自身
+    #[test]
+    fn policy_groups_expand_candidates_in_template_order() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#selfhost|https://airport.example/sub",
+            &airport_body(),
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
+        let selectors: Vec<&Value> = outbounds
+            .iter()
+            .filter(|o| o["type"] == "selector")
+            .collect();
+
+        // 底模的 selector 顺序：proxy 在首位，其余依次
+        let selector_tags: Vec<&str> = selectors.iter().filter_map(|s| s["tag"].as_str()).collect();
+        assert_eq!(
+            selector_tags,
+            vec![
+                "proxy",
+                "openai",
+                "gemini",
+                "dev",
+                "adultnsfw",
+                "appleai",
+                "ptcg",
+                "japansite",
+                "opencode",
+                "zai",
+                "microsoft",
+                "apple",
+                "paypal",
+                "grok",
+                "1024",
+                "tailscale",
+            ],
+            "selector 组集合与底模顺序"
+        );
+
+        let proxy = selectors
+            .iter()
+            .find(|s| s["tag"] == "proxy")
+            .expect("proxy 组缺失");
+        // selfhost 是 urltest 组引用（先于节点），"selfhost" 节点已让位为 selfhost-node，
+        // 由 .* 模式展开在尾部
+        assert_eq!(
+            proxy["outbounds"],
+            json!(["selfhost", "selfhost-node", "HK-01", "JP-01"]),
+            "proxy 池：组引用在前，节点按入池顺序在后"
+        );
+        assert_eq!(proxy["default"], json!("selfhost"));
+    }
+
+    /// urltest 组同样是填充对象，且 selfhost 组须按模式命中让位后的节点。
+    #[test]
+    fn urltest_groups_are_populated() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@192.0.2.2:8388#hk-02",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
+        let selfhost = outbounds
+            .iter()
+            .find(|o| o["type"] == "urltest" && o["tag"] == "selfhost")
+            .expect("selfhost urltest 组缺失");
+        assert_eq!(
+            selfhost["outbounds"],
+            json!(["selfhost-node"]),
+            "selfhost 组模式 (?i)(vps|hy2|selfhost) 应命中让位后的 selfhost-node"
+        );
+    }
+
+    /// 保留标签表 = 底模 outbounds 的全部 tag，与底模契约一致。
+    /// 这张表决定节点改名，漂移会让节点与策略组引用对不上。
+    #[test]
+    fn reserved_tags_match_template_outbound_tags() {
+        let tpl = crate::template::embedded_template().expect("内嵌底模");
+        let expected: Vec<String> = tpl["outbounds"]
+            .as_array()
+            .expect("outbounds 为数组")
+            .iter()
+            .filter_map(|o| o["tag"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(reserved_tags(&tpl), expected);
+        assert!(
+            expected.contains(&"selfhost".to_string()),
+            "selfhost 应在保留表内（节点名撞上须让位）"
+        );
+    }
+
+    /// 解析不出节点时当场失败，不产出空配置。
+    #[test]
+    fn empty_sources_fail_fast() {
+        let input = input_with_fetcher("", "");
+        let err = collect_nodes(&input.sources, &input).expect_err("空源应报错");
+        assert!(err.contains("未解析出任何节点"), "实际: {err}");
+    }
+
+    /// 公共底模不得含私有 DNS 与内网直连规则：
+    /// 这些是设备本地专有内容，混进公共产物会泄露内网拓扑。
+    #[test]
+    fn public_template_has_no_private_dns_or_zone_rules() {
+        let tpl = crate::template::embedded_template().expect("内嵌底模");
+        let dns_tags: Vec<&str> = tpl["dns"]["servers"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|s| s["tag"].as_str()).collect())
+            .unwrap_or_default();
+        assert!(
+            !dns_tags.contains(&"dns-internal"),
+            "公共底模不应含 dns-internal，实际: {dns_tags:?}"
+        );
+
+        let rule_set_tags: Vec<&str> = tpl["route"]["rule_set"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|s| s["tag"].as_str()).collect())
+            .unwrap_or_default();
+        assert!(
+            !rule_set_tags.contains(&"zone-internal"),
+            "公共底模不应含 zone-internal"
+        );
+    }
 }
