@@ -29,7 +29,7 @@ docker job:    actions/download-artifact → mv → COPY sb-sync /usr/local/bin/
 
 `actions/upload-artifact` 存的是 zip，zip 不携带 Unix 权限位；下载后文件权限由 umask 决定，得到 `0644`。Dockerfile 的 `COPY` **原样保留**源文件权限（这正是它与 `ADD` 加 tar 自动解包的区别），于是镜像里的二进制不可执行。
 
-`COPY --from=singbox` 那一层没问题，因为它是从另一个镜像层拷的，`0644` → 不，`0755` 是被保留的——错的是跨 artifact 传递的那一份。**这个区别是根因的关键**：同一条 Dockerfile 里两种 `COPY` 语义不同，前者可信，后者不可信。
+`COPY --from=singbox` 那一层没问题：它从镜像层拷贝，权限位随层一起保留（`sing-box` 是 `0755`）。错的是跨 artifact 传递的那一份。**同一条 Dockerfile 里两种 `COPY` 语义不同**——这是根因的关键，前者可信，后者不可信。
 
 ## 修复
 
