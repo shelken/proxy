@@ -91,6 +91,15 @@ jobs:
           rm Cargo.toml.bak
           cargo update --workspace
 
+      # e2e 测试要真跑一次内核合并（server::tests::node_direct_rule_*），
+      # 内核不在 PATH 时它们以「启动内核失败（sing-box）: os error 2」失败——
+      # 而本 job 原先不装内核，于是这三平台构建在测试步就全挂，连带 needs 它的
+      # docker job 被跳过、发不出镜像。ci-sb-sync 装了内核所以 PR 上看不出来。
+      # 版本由 .mise.toml 固定，与本地和 ci-sb-sync 同源，此处不另写版本号。
+      - uses: jdx/mise-action@v4
+        with:
+          cache: false
+
       - name: Test
         working-directory: scripts/sb-sync-rs
         run: cargo test --release --locked --target ${{ matrix.target }}
