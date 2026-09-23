@@ -124,12 +124,14 @@ jobs:
         run: |
           SK=$(openssl rand -hex 32)
           docker run -d --name sb-sync-ci -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sb-sync-server:ci
-          for i in $(seq 1 20); do
-            curl -fsS http://127.0.0.1:18080/healthz && break
+          # 与 release 工作流同因：容器接受连接却不响应时，无超时的 curl 会挂到
+          # job 上限而非在 20 秒内失败，冒烟步骤就失去快速失败的意义。
+          for _ in $(seq 1 20); do
+            curl -fsS --max-time 2 http://127.0.0.1:18080/healthz && break
             sleep 1
           done
-          test "$(curl -fsS http://127.0.0.1:18080/healthz)" = "ok"
-          PK=$(curl -fsS http://127.0.0.1:18080/pubkey)
+          test "$(curl -fsS --max-time 5 http://127.0.0.1:18080/healthz)" = "ok"
+          PK=$(curl -fsS --max-time 5 http://127.0.0.1:18080/pubkey)
           echo "pubkey=$PK"
           # 与私钥推导出的公钥必须一致（长度 64 且为十六进制）
           test "${#PK}" -eq 64
