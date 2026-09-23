@@ -77,6 +77,11 @@ jobs:
 
       # 单一事实来源 = git tag；构建前把 tag 写入 Cargo.toml，
       # 避免二进制版本与发布版本漂移。手动触发时 ref 是分支名，不做同步。
+      #
+      # 改完 Cargo.toml 必须同步 Cargo.lock：下面两步都带 --locked，
+      # 锁文件与清单不一致时 cargo 会以「lock file needs to be updated but
+      # --locked was passed」直接失败。本步骤只在 tag 路径执行，手动触发测不到，
+      # 漏掉要等真发版才暴露——所以这行不能省。
       - name: Sync version with tag
         if: startsWith(github.ref, 'refs/tags/')
         working-directory: scripts/sb-sync-rs
@@ -84,6 +89,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
           rm Cargo.toml.bak
+          cargo update --workspace
 
       - name: Test
         working-directory: scripts/sb-sync-rs

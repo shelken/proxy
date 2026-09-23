@@ -290,13 +290,30 @@ pub fn run(port: u16) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// 与运行时同一套解析：`SING_BOX` 优先，否则 PATH。探测必须走它，
-    /// 否则沙箱（内核不在 PATH）里 e2e 会被误跳过，覆盖率静默降级。
-    fn singbox_available() -> bool {
-        std::process::Command::new(template::resolve_singbox_binary())
-            .arg("version")
-            .output()
-            .is_ok_and(|o| o.status.success())
+    /// e2e 测试的内核门禁：返回 `Some(原因)` 表示应跳过，`None` 表示可用。
+    ///
+    /// 显式设置了 `SING_BOX` 却不可用时**不跳过**：沙箱里内核装在
+    /// `/opt/proxy-test/bin` 不在 PATH，全靠这个变量定位，静默跳过会让 e2e
+    /// 覆盖率降级且无人察觉——那正是这些测试存在的意义。只有「未显式设置
+    /// 且 PATH 上也没有」才允许跳过（开发机上没装内核的常见情形）。
+    fn kernel_unavailable_reason() -> Option<String> {
+        let bin = template::resolve_singbox_binary();
+        let explicit = std::env::var_os("SING_BOX").is_some_and(|v| !v.is_empty());
+        let probe = std::process::Command::new(&bin).arg("version").output();
+
+        let detail = match probe {
+            Ok(o) if o.status.success() => return None,
+            Ok(o) => format!("退出码 {:?}", o.status.code()),
+            Err(e) => format!("无法执行: {e}"),
+        };
+
+        assert!(
+            !explicit,
+            "SING_BOX 已显式设为 {:?} 但不可用（{detail}）：\
+             这是环境配置错误，不能按「内核缺失」跳过",
+            bin
+        );
+        Some(format!("{:?} 不可用（{detail}）", bin))
     }
 
     #[test]
@@ -359,14 +376,13 @@ mod tests {
 
     #[test]
     fn end_to_end_encrypt_assemble_merge() {
-        // 需要内核可执行文件；缺失则跳过（CI 沙箱内已保证）
-        if !singbox_available() {
-            eprintln!(
-                "skip: 内核不可用（{:?}）",
-                template::resolve_singbox_binary()
-            );
-            return;
-        }
+        let Some(reason) = kernel_unavailable_reason() else {
+            return run_end_to_end();
+        };
+        eprintln!("skip: {reason}");
+    }
+
+    fn run_end_to_end() {
         let (sk_hex, pk_hex) = crypto::generate_keypair_hex();
         let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
 
@@ -506,14 +522,13 @@ mod tests {
     /// 这两条是「提交了 overlay 却没生效」与「没提交 overlay 就失败」两类事故的分界。
     #[test]
     fn overlay_overrides_base_after_merge() {
-        if std::process::Command::new("sing-box")
-            .arg("version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skip: sing-box not found");
-            return;
-        }
+        let Some(reason) = kernel_unavailable_reason() else {
+            return run_overlay_overrides();
+        };
+        eprintln!("skip: {reason}");
+    }
+
+    fn run_overlay_overrides() {
         let (sk_hex, pk_hex) = crypto::generate_keypair_hex();
         let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
         let pk = crypto::parse_public_key_hex(&pk_hex).unwrap();
