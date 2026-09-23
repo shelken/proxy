@@ -146,19 +146,10 @@ pub fn merge_local_config(template: &mut Value, local: &Value) {
     }
 }
 
-/// 节点全集 → 反回环直连规则（不落盘，归属由调用方决定：sb-sync 写 local.json）。
+/// 节点全集 → 反回环直连规则（纯内存，由调用方决定归属）。
 /// IP server → ip_cidr(/32|/128)；域名 server → domain + 尽力解析 IPv4 → ip_cidr。
-/// getaddrinfo 被 TUN 劫持返回 fakeip（198.18.0.0/15 等，从底模 dns.servers 读）时，
-/// 改走 DoH（https://223.5.5.5/resolve，443 不受 53 劫持影响）拿真实 A 记录。
-pub fn generate_node_direct_rule(nodes: &[Value], template: &Value) -> Option<Value> {
-    let fakeip_ranges: Vec<(std::net::IpAddr, u8)> = template["dns"]["servers"]
-        .as_array()
-        .unwrap_or(&Vec::new())
-        .iter()
-        .filter(|s| s["type"] == "fakeip")
-        .filter_map(|s| s["inet4_range"].as_str().or_else(|| s["inet6_range"].as_str()))
-        .filter_map(|r| parse_cidr(r))
-        .collect();
+/// 服务端视角解析：系统 getaddrinfo → DoH 兜底；两级都失败则只留 domain 规则。
+pub fn generate_node_direct_rule(nodes: &[Value], _template: &Value) -> Option<Value> {
 
     let mut domains: Vec<String> = Vec::new();
     let mut cidrs: Vec<String> = Vec::new();
@@ -181,15 +172,8 @@ pub fn generate_node_direct_rule(nodes: &[Value], template: &Value) -> Option<Va
                     continue;
                 }
                 domains.push(server.to_string());
-                // getaddrinfo → fakeip? → DoH 兜底；两级都失败则只留 domain 规则
-                let ip = crate::trace::system_resolve(server)
-                    .map(|(ip, _)| ip)
-                    .filter(|ip| {
-                        ip.parse::<std::net::IpAddr>()
-                            .map(|p| !fakeip_ranges.iter().any(|r| cidr_contains(*r, &p)))
-                            .unwrap_or(false)
-                    })
-                    .or_else(|| doh_resolve_a(server));
+                // 服务端视角解析：系统 getaddrinfo（无 TUN/fakeip 场景）→ DoH 兜底
+                let ip = system_resolve_a(server).or_else(|| doh_resolve_a(server));
                 if let Some(ip) = ip {
                     let cidr = format!("{ip}/32");
                     if !cidrs.contains(&cidr) {
@@ -213,6 +197,18 @@ pub fn generate_node_direct_rule(nodes: &[Value], template: &Value) -> Option<Va
     Some(Value::Object(rule))
 }
 
+/// std getaddrinfo 解析：返回首个 IPv4。服务端无 TUN 劫持，无需 fakeip 排除。
+fn system_resolve_a(domain: &str) -> Option<String> {
+    use std::net::ToSocketAddrs;
+    (domain, 0u16)
+        .to_socket_addrs()
+        .ok()?
+        .find_map(|a| match a.ip() {
+            std::net::IpAddr::V4(v4) => Some(v4.to_string()),
+            std::net::IpAddr::V6(_) => None,
+        })
+}
+
 /// AliDNS DoH JSON API：返回首个合法 IPv4 A 记录；任何失败静默 None。
 fn doh_resolve_a(domain: &str) -> Option<String> {
     use std::io::Read;
@@ -234,26 +230,6 @@ fn doh_resolve_a(domain: &str) -> Option<String> {
         .filter_map(|a| a["data"].as_str())
         .find(|d| d.parse::<std::net::Ipv4Addr>().is_ok())
         .map(str::to_string)
-}
-
-fn parse_cidr(s: &str) -> Option<(std::net::IpAddr, u8)> {
-    let (addr, len) = s.split_once('/')?;
-    let addr: std::net::IpAddr = addr.trim().parse().ok()?;
-    let len: u8 = len.trim().parse().ok()?;
-    let max = if addr.is_ipv4() { 32 } else { 128 };
-    if len > max {
-        return None;
-    }
-    Some((addr, len))
-}
-
-fn cidr_contains(cidr: (std::net::IpAddr, u8), ip: &std::net::IpAddr) -> bool {
-    use std::net::IpAddr::{V4, V6};
-    match (cidr.0, *ip) {
-        (V4(a), V4(b)) => cidr.1 == 0 || (u32::from(a) >> (32 - cidr.1)) == (u32::from(b) >> (32 - cidr.1)),
-        (V6(a), V6(b)) => cidr.1 == 0 || (u128::from(a) >> (128 - cidr.1)) == (u128::from(b) >> (128 - cidr.1)),
-        _ => false,
-    }
 }
 
 /// 正则字符串 → regex（TS 版 (?i) 前缀语义对齐）。非法正则返回 None（该项跳过，不 fail）。

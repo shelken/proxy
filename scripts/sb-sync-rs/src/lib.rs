@@ -1,17 +1,12 @@
-//! sb-sync — 设备侧 sing-box 配置同步 CLI（任意 arm Mac 单二进制）。
+//! sb-sync 库根 — 客户端加密编码 + 服务端原生合并。
 //!
-//! 职责：拉取通用底模 → 拉订阅/节点 → 本机装配 → 融合设备 local 覆盖 → 原子产出。
-//! 不依赖仓库工作区：底模内嵌 + 远程固定源，配置与凭据全部落在 ~/.config/sing-box/。
+//! 模块边界：crypto（X25519+AES-GCM）、config（YAML 校验与加密）、assemble（节点装配）、
+//! server（HTTP + 官方 sing-box merge）、template（内嵌底模）。
 
 pub mod assemble;
-pub mod detect;
-pub mod doctor;
+pub mod config;
+pub mod crypto;
 pub mod node;
 pub mod paths;
-pub mod profile;
-pub mod store;
+pub mod server;
 pub mod template;
-pub mod trace;
-
-#[cfg(test)]
-mod lib_tests;
