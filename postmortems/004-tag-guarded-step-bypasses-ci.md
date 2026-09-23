@@ -70,8 +70,11 @@ cargo update --workspace      # 只改 workspace 成员的版本条目，不动�
 
 ## 预防
 
-- **给工作流加 `if` 守卫时，同一次改动里必须回答「这段代码谁来跑」**。若答案只有「发版那一刻」，就必须额外提供一条能跑到它的通路（`workflow_dispatch` + 无害输出，如 `snapshot-<sha>`），否则它第一次执行就是生产事故。
-- **审查工作流改动时，`grep -n 'github.ref' .github/workflows/*.yml` 列出全部守卫**，逐个确认守卫内的步骤是否已被任何常规触发覆盖。守卫是 CI 覆盖的边界，不是普通条件分支。
-- **发版工作流的任何改动，在合并前用 `gh workflow run <wf> --ref <branch>` 手触发一次**。手触发的结论只对「未被守卫排除」的步骤有效——所以还要单独列出被排除的步骤，人工核对其逻辑。
-- **验证锁文件一致性用 `cargo tree --locked` 或 `cargo build --locked`，不要用 `cargo metadata --no-deps`**：后者不做依赖解析，锁文件不一致时照样通过（本次实测，它在「坏」与「修好」两种状态下都给 exit=0，是无效验证）。
+- **给工作流加 `if` 守卫时，同一次改动里必须回答「这段代码谁来跑」**，并按两类分开处理：
+  - **本质只在发版时成立**的步骤（断言「二进制版本 == tag 名」、创建 Release）——不可能也不该开逃生口，改动这类步骤时靠人工复核。
+  - **会写入后续步骤要消费的状态**的步骤（改写 `Cargo.toml` 版本、生成 digest）——这类是危险的：它出错会静默污染下游，且必须能被单独验证。要么给它一条 `workflow_dispatch` 通路（输出到无害处，如 `snapshot-<sha>`），要么给出等价的本地检查。
+  - 本次炸掉的是第二类：`Sync version with tag` 改写的版本被后续 `--locked` 消费。
+- **审查工作流改动时，`grep -n 'github.ref\|github.event_name' .github/workflows/*.yml` 列出全部守卫**，逐个判断属于哪一类。守卫是 CI 覆盖的边界，不是普通条件分支。
+- **第一类之外的守卫，在合并前必须有一次可观测的执行**：`gh workflow run <wf> --ref <branch>` 手触发，或本地等价复现（如本次改版本 + `cargo tree --locked` 的两步对照）。
+- **验证锁文件一致性用 `cargo tree --locked` 或 `cargo build --locked`，不要用 `cargo metadata --no-deps`**：后者不做依赖解析，锁文件不一致时照样通过（本次实测，它在「坏」与「修好」两种状态下都给 exit=0，是无效验证）。同样地，加 `--offline` 会让报错变成「无法下载依赖」而非锁文件不一致——验证时要控制变量，别把工具限制误当成待查的缺陷。
 
