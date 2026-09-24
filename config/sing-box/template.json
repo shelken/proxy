@@ -489,7 +489,8 @@
       "tag": "selfhost",
       "outbounds": [
         "(?i)(vps|hy2|selfhost)"
-      ]
+      ],
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -498,7 +499,8 @@
         "selfhost",
         ".*"
       ],
-      "default": "selfhost"
+      "default": "selfhost",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -508,7 +510,8 @@
         "proxy",
         "(?i)(港|日本|台湾|GPT|美)"
       ],
-      "default": "selfhost"
+      "default": "selfhost",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -519,7 +522,8 @@
         "proxy",
         "(?i)(日本|川日|东京|大阪|JP|Japan)"
       ],
-      "default": "openai"
+      "default": "openai",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -529,7 +533,8 @@
         "proxy",
         "(?i)(港|HK|Hong)"
       ],
-      "default": "selfhost"
+      "default": "selfhost",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -540,7 +545,8 @@
         "direct",
         "(?i)(vps|hys|港)"
       ],
-      "default": "selfhost"
+      "default": "selfhost",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -550,7 +556,8 @@
         "selfhost",
         "proxy"
       ],
-      "default": "direct"
+      "default": "direct",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -561,7 +568,8 @@
         "direct",
         "(?i)(日本|JP)"
       ],
-      "default": "selfhost"
+      "default": "selfhost",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -571,7 +579,8 @@
         "selfhost",
         "(?i)(日本|川日|东京|大阪|JP|Japan)"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -581,7 +590,8 @@
         "selfhost",
         ".*"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -591,7 +601,8 @@
         "selfhost",
         ".*"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     },
     {
       "type": "urltest",
@@ -601,7 +612,8 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "urltest",
@@ -611,7 +623,8 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "urltest",
@@ -621,7 +634,8 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "urltest",
@@ -631,7 +645,8 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "urltest",
@@ -641,7 +656,8 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "urltest",
@@ -651,7 +667,8 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -660,7 +677,8 @@
         "direct",
         "proxy"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -670,7 +688,8 @@
         "proxy",
         "selfhost"
       ],
-      "default": "direct"
+      "default": "direct",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -679,7 +698,8 @@
         "direct",
         "proxy"
       ],
-      "default": "direct"
+      "default": "direct",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -689,7 +709,8 @@
         "selfhost",
         ".*"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -699,7 +720,8 @@
         "selfhost",
         "(?i)1024"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
@@ -709,7 +731,8 @@
         "selfhost",
         ".*"
       ],
-      "default": "proxy"
+      "default": "proxy",
+      "interrupt_exist_connections": true
     }
   ],
   "experimental": {

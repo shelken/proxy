@@ -139,4 +139,14 @@ describe("template.json structural verification", () => {
       expect(tags).toContain(tag);
     }
   });
+
+  test("enables interrupt_exist_connections on all selector and urltest groups", () => {
+    const groups = (template.outbounds ?? []).filter(
+      (o: Record<string, unknown>) => o.type === "selector" || o.type === "urltest",
+    );
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups) {
+      expect(group.interrupt_exist_connections).toBe(true);
+    }
+  });
 });

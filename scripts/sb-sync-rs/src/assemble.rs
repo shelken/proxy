@@ -217,6 +217,9 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
             }
             let mut out = sel.clone();
             out["outbounds"] = json!(expanded);
+            if out.get("interrupt_exist_connections").is_none() {
+                out["interrupt_exist_connections"] = json!(true);
+            }
             Some(out)
         })
         .collect::<Vec<Value>>()
@@ -332,6 +335,12 @@ mod tests {
                 .iter()
                 .all(|g| !g["outbounds"].as_array().is_some_and(Vec::is_empty)),
             "任何策略组都不应为空: {groups:?}"
+        );
+        assert!(
+            groups
+                .iter()
+                .all(|g| g["interrupt_exist_connections"] == true),
+            "所有装配出的策略组都必须具备 interrupt_exist_connections: true: {groups:?}"
         );
         assert!(
             groups.iter().any(|g| g["tag"] == "jp"),
