@@ -66,8 +66,8 @@ def released_versions() -> list[tuple[int, int, int]]:
     return versions  # type: ignore[return-value]
 
 
-def insert_changelog_section(notes: str, old_version: tuple[int, int, int]) -> None:
-    """在 `# Changelog` 之后插入本次新段，标题暂用旧版本号。"""
+def insert_changelog_section(notes: str, target_version: tuple[int, int, int]) -> None:
+    """在 `# Changelog` 之后插入本次新段，标题使用目标版本号。"""
     old_text = CHANGELOG.read_text(encoding="utf-8") if CHANGELOG.exists() else ""
     if not old_text.strip():
         old_text = f"{CHANGELOG_TITLE}\n\n"
@@ -76,7 +76,7 @@ def insert_changelog_section(notes: str, old_version: tuple[int, int, int]) -> N
 
     rest = old_text[len(CHANGELOG_TITLE):].lstrip("\n")
     title = "## [{}.{}.{}] - {}".format(
-        *old_version, datetime.date.today().isoformat()
+        *target_version, datetime.date.today().isoformat()
     )
     body = notes.strip()
     new_text = f"{CHANGELOG_TITLE}\n\n{title}\n\n{body}\n\n{rest}"
@@ -113,7 +113,7 @@ def main() -> None:
 
     print(f"准备版本 {args.version}（当前清单 {'.'.join(map(str, current))}）")
 
-    insert_changelog_section(args.notes, current)
+    insert_changelog_section(args.notes, target)
     run(
         [
             "release-plz",
