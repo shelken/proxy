@@ -15,8 +15,8 @@ config/sing-box/cache.db
 # 本地专有私密配置（包含机器特有的自建节点、特殊内网 DNS 或私有规则）
 config/sing-box/local.json
 
-# Rust 构建产物
-scripts/sb-sync-rs/target/
+# Rust 构建产物（workspace 根 target）
+/target/
 
 # 沙箱闭环用的 CI 产物与生成的客户端配置（每次引导重建）
 .sandbox-artifacts/

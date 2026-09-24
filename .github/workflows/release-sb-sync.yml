@@ -158,7 +158,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            scripts/sb-sync-rs/target
+            target
           key: sb-sync-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: sb-sync-${{ matrix.target }}-
 

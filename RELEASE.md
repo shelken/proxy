@@ -1,6 +1,6 @@
 # 发布操作
 
-`sb-sync` 的版本真源是 `scripts/sb-sync-rs/Cargo.toml`。合并一个 Release PR 后，CI 自动产出三平台二进制、双架构镜像和带资产的 GitHub Release。
+`sb-sync` 的版本真源是 `scripts/sb-sync-rs/Cargo.toml`；仓库根的 `Cargo.toml` 只是把该 crate 纳入 workspace 的清单，不含版本。合并一个 Release PR 后，CI 自动产出三平台二进制、双架构镜像和带资产的 GitHub Release。
 
 全流程只用仓库自带的 `GITHUB_TOKEN`，不需要任何个人访问令牌或 GitHub App。
 
@@ -12,6 +12,8 @@
 4. 合并后 `release-sb-sync` 检测到清单版本变化，创建 tag、构建产物、公开 Release
 
 不要手工推 tag，也不要手改 `Cargo.toml` 版本。
+
+> workspace 清单必须留在仓库根。release-plz 的 `git_only` 模式在清单所在目录打开 Git 仓库，且不向上层搜索 `.git`；把它放回 crate 子目录会让 release-plz 报 `could not find repository` 并中止版本推导。
 
 ## 指定版本，或只改了包外文件
 
