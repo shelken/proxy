@@ -20,7 +20,7 @@ pub fn system_resolve(domain: &str) -> Option<(String, u128)> {
     let addrs: Vec<_> = (domain, 0u16).to_socket_addrs().ok()?.collect();
     let ip = addrs.iter().find_map(|a| match a {
         std::net::SocketAddr::V4(v4) => Some(v4.ip().to_string()),
-        _ => None,
+        std::net::SocketAddr::V6(_) => None,
     })?;
     Some((ip, start.elapsed().as_millis()))
 }
@@ -63,9 +63,8 @@ fn capture_decisions(controller: &str, domain: &str) -> (Option<String>, Option<
     // 启动日志流监听线程
     let handle = std::thread::spawn(move || {
         let url = format!("http://{ctrl}/logs?level=debug");
-        let resp = match ureq::get(&url).timeout(Duration::from_secs(4)).call() {
-            Ok(r) => r,
-            Err(_) => return,
+        let Ok(resp) = ureq::get(&url).timeout(Duration::from_secs(4)).call() else {
+            return;
         };
         let reader = BufReader::new(resp.into_reader());
         for line in reader.lines() {
@@ -75,28 +74,29 @@ fn capture_decisions(controller: &str, domain: &str) -> (Option<String>, Option<
             if let Ok(l) = line {
                 if let Ok(v) = serde_json::from_str::<Value>(&l) {
                     if let Some(payload) = v["payload"].as_str() {
-                        let mut guard = dec_clone.lock().unwrap();
-                        if payload.contains("dns: match[") && guard.dns_match.is_none() {
-                            // 清洗前导日志时间戳：[12345 2ms] dns: match...
-                            let clean = if let Some(idx) = payload.find("dns: match[") {
-                                &payload[idx..]
-                            } else {
-                                payload
-                            };
-                            guard.dns_match = Some(clean.to_string());
-                        } else if payload.contains("router: match[")
-                            && !payload.contains("=> sniff")
-                            && guard.router_match.is_none()
-                        {
-                            let clean = if let Some(idx) = payload.find("router: match[") {
-                                &payload[idx..]
-                            } else {
-                                payload
-                            };
-                            guard.router_match = Some(clean.to_string());
-                        }
-                        if guard.dns_match.is_some() && guard.router_match.is_some() {
-                            break;
+                        if let Ok(mut guard) = dec_clone.lock() {
+                            if payload.contains("dns: match[") && guard.dns_match.is_none() {
+                                // 清洗前导日志时间戳：[12345 2ms] dns: match...
+                                let clean = if let Some(idx) = payload.find("dns: match[") {
+                                    &payload[idx..]
+                                } else {
+                                    payload
+                                };
+                                guard.dns_match = Some(clean.to_string());
+                            } else if payload.contains("router: match[")
+                                && !payload.contains("=> sniff")
+                                && guard.router_match.is_none()
+                            {
+                                let clean = if let Some(idx) = payload.find("router: match[") {
+                                    &payload[idx..]
+                                } else {
+                                    payload
+                                };
+                                guard.router_match = Some(clean.to_string());
+                            }
+                            if guard.dns_match.is_some() && guard.router_match.is_some() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -125,8 +125,7 @@ fn capture_decisions(controller: &str, domain: &str) -> (Option<String>, Option<
     // 等待决策捕获（最多等待 1.2 秒）
     let start = Instant::now();
     while start.elapsed() < Duration::from_millis(1200) {
-        {
-            let guard = decisions.lock().unwrap();
+        if let Ok(guard) = decisions.lock() {
             if guard.dns_match.is_some() && guard.router_match.is_some() {
                 break;
             }
@@ -137,8 +136,11 @@ fn capture_decisions(controller: &str, domain: &str) -> (Option<String>, Option<
     stop.store(true, Ordering::Relaxed);
     let _ = handle.join();
 
-    let guard = decisions.lock().unwrap();
-    (guard.dns_match.clone(), guard.router_match.clone())
+    let (dns, router) = decisions
+        .lock()
+        .map(|g| (g.dns_match.clone(), g.router_match.clone()))
+        .unwrap_or_default();
+    (dns, router)
 }
 
 /// Clash API 查询活跃连接中该域名的出站代理链路
@@ -187,32 +189,28 @@ pub fn clash_controller(cfg: &Value) -> Option<String> {
 pub fn http_first_byte(url: &str) -> (bool, u128) {
     let start = Instant::now();
     match ureq::get(url).timeout(Duration::from_secs(8)).call() {
-        Ok(_) => (true, start.elapsed().as_millis()),
-        Err(ureq::Error::Status(_, _)) => (true, start.elapsed().as_millis()),
+        Ok(_) | Err(ureq::Error::Status(_, _)) => (true, start.elapsed().as_millis()),
         Err(_) => (false, start.elapsed().as_millis()),
     }
 }
 
 /// 执行全部阶段并打印报告；返回失败阶段数。
-pub fn trace(domain: &str, controller: Option<String>) -> u8 {
+pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
     println!("=== sb-sync trace — {domain} 全链路探测 ===\n");
 
     let mut fails: u8 = 0;
 
     // 阶段 1: 系统 resolver
-    match system_resolve(domain) {
-        Some((ip, ms)) => {
-            let egress = egress_interface(&ip).unwrap_or_else(|| "?".into());
-            println!("✓ 系统 resolver   A {ip}  ({ms}ms)  出口 {egress}");
-        }
-        None => {
-            println!("✗ 系统 resolver   解析失败/超时");
-            fails += 1;
-        }
+    if let Some((ip, ms)) = system_resolve(domain) {
+        let egress = egress_interface(&ip).unwrap_or_else(|| "?".into());
+        println!("✓ 系统 resolver   A {ip}  ({ms}ms)  出口 {egress}");
+    } else {
+        println!("✗ 系统 resolver   解析失败/超时");
+        fails += 1;
     }
 
     // 阶段 2 & 3: 监听内核决策流（DNS 规则 + 路由规则）
-    match controller.as_deref() {
+    match controller {
         Some(ec) => {
             let (dns_decision, router_decision) = capture_decisions(ec, domain);
 

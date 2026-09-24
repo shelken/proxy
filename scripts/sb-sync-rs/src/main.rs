@@ -136,7 +136,7 @@ fn cmd_encode(rest: &[String]) -> Result<(), String> {
 fn legacy_config_path() -> std::path::PathBuf {
     std::path::PathBuf::from(
         std::env::var_os("HOME")
-            .map(|h| h.to_owned())
+            .map(|h| h.clone())
             .unwrap_or_default(),
     )
     .join(".config/sing-box/singbox.json")
@@ -154,7 +154,7 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
                 api = Some(it.next().ok_or("trace: --api 需要一个地址")?.clone());
             }
             other if domain.is_none() && !other.starts_with('-') => {
-                domain = Some(other.to_string())
+                domain = Some(other.to_string());
             }
             other => return Err(format!("trace: 未知参数 {other}（{usage_hint}）")),
         }
@@ -168,7 +168,7 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
             .and_then(|v| trace::clash_controller(&v))
             .or_else(|| Some("127.0.0.1:9090".to_string())),
     };
-    let fails = trace::trace(&domain, controller);
+    let fails = trace::trace(&domain, controller.as_deref());
     if fails > 0 {
         return Err(format!("{fails} 个阶段失败"));
     }
