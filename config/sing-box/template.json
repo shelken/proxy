@@ -55,6 +55,14 @@
         "server": "dns-local-system"
       },
       {
+        "domain_suffix": [
+          "local",
+          "lan",
+          "home.arpa"
+        ],
+        "server": "dns-local-system"
+      },
+      {
         "query_type": [
           "PTR"
         ],

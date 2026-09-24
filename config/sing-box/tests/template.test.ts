@@ -77,11 +77,17 @@ describe("template.json structural verification", () => {
     expect(tun.address[0]).not.toBe("198.18.0.1/30");
   });
 
-  test("routes Lan and PTR queries to local system DNS", () => {
+  test("routes Lan, local domain suffixes, and PTR queries to local system DNS", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan"));
     expect(lanRule).toBeDefined();
     expect(lanRule.server).toBe("dns-local-system");
+
+    const suffixRule = rules.find((r) => r.domain_suffix?.includes("local"));
+    expect(suffixRule).toBeDefined();
+    expect(suffixRule.domain_suffix).toContain("lan");
+    expect(suffixRule.domain_suffix).toContain("home.arpa");
+    expect(suffixRule.server).toBe("dns-local-system");
 
     const ptrRule = rules.find((r) => r.query_type?.includes("PTR"));
     expect(ptrRule).toBeDefined();

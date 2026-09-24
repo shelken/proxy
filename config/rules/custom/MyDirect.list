@@ -85,6 +85,7 @@ PROCESS-NAME,parsecd
 DOMAIN-SUFFIX,cn
 DOMAIN-SUFFIX,lan
 DOMAIN-SUFFIX,local
+DOMAIN-SUFFIX,home.arpa
 
 # vpn
 DOMAIN-SUFFIX,netbird.io
