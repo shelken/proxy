@@ -74,16 +74,12 @@ Apple-AI|appleai|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/
 
 ## 核心策略组
 
-底模 `config/sing-box/template.json` 定义 23 个策略组（selector / urltest）。全部组都开了 `interrupt_exist_connections`，切换节点即掐断该组存量连接，长连接立刻在新节点重拨。无匹配节点的组在装配阶段整体不产出，不会让内核因缺 tag 而启动失败。
+策略组定义在底模 `config/sing-box/template.json`，组名、默认出口与候选池以该文件为准（底模结构说明见 [docs/sb-sync.md](./docs/sb-sync.md)，面板端的切换操作见[用户指南](./docs/user-guide/01-mac-sfm.md)）。
 
-组名、默认出口与候选池以底模为准，直接查当前值：
+需要当前值时直接查：
 
 ```bash
-# 全部策略组及其默认出口（无 default 表示取组内首个命中节点）
 jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) → \(.default // "首个命中节点")"' config/sing-box/template.json
-
-# 单个组的候选池（outbounds 里是节点名正则，装配时展开为实际节点）
-jq '.outbounds[] | select(.tag=="openai")' config/sing-box/template.json
 ```
 
 ## 目录索引
@@ -96,6 +92,7 @@ jq '.outbounds[] | select(.tag=="openai")' config/sing-box/template.json
 - `docs/sb-sync.md`：sb-sync 客户端与服务端架构、加密协议、配置说明
 - `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)
 - `postmortems/`：疑难问题的排查记录
+
 ## 贡献
 
 个人仓库，变更以自用为准。提交前确保测试通过：
@@ -133,6 +130,7 @@ just vm-stop
 
 Rust 部分（`scripts/sb-sync-rs/`）的编译校验由远程 CI 承担
 （`.github/workflows/ci-sb-sync.yml`：fmt + clippy 严格规则 + 测试 + 镜像构建）。
+
 ## 许可证
 
 MIT
