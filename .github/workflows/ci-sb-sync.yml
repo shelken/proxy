@@ -48,7 +48,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             scripts/sb-sync-rs/target
-          key: ci-sb-sync-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          key: ci-sb-sync-${{ hashFiles('Cargo.lock') }}
           restore-keys: ci-sb-sync-
 
       - name: cargo fmt --check
@@ -98,7 +98,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             scripts/sb-sync-rs/target
-          key: ci-sb-sync-docker-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          key: ci-sb-sync-docker-${{ hashFiles('Cargo.lock') }}
           restore-keys: ci-sb-sync-docker-
 
       # 镜像已改为 COPY 预编译二进制，构建上下文里必须先有它。

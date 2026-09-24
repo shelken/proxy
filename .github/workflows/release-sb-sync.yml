@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
-          LOCKED=$(awk '/^name = "sb-sync"$/{getline; print}' scripts/sb-sync-rs/Cargo.lock | sed -E 's/^version *= *"(.*)"/\1/')
+          LOCKED=$(awk '/^name = "sb-sync"$/{getline; print}' Cargo.lock | sed -E 's/^version *= *"(.*)"/\1/')
           test -n "$MANIFEST" || { echo "无法从 Cargo.toml 读取版本"; exit 1; }
           test "$MANIFEST" = "$LOCKED" || {
             echo "Cargo.toml ($MANIFEST) 与 Cargo.lock ($LOCKED) 版本不一致"; exit 1; }
@@ -159,7 +159,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             scripts/sb-sync-rs/target
-          key: sb-sync-${{ matrix.target }}-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
+          key: sb-sync-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: sb-sync-${{ matrix.target }}-
 
       # e2e 测试要真跑一次内核合并（server::tests::node_direct_rule_*），

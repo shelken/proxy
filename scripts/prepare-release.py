@@ -25,7 +25,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CRATE_DIR = REPO_ROOT / "scripts" / "sb-sync-rs"
 MANIFEST = CRATE_DIR / "Cargo.toml"
 CHANGELOG = CRATE_DIR / "CHANGELOG.md"
-CONFIG = CRATE_DIR / "release-plz.toml"
+# set-version 必须指向根 workspace 清单与根配置：Cargo.lock 已上移到根，
+# 且 git_only 的配置文件约定与 manifest 同目录（见根 release-plz.toml 注释）
+WS_MANIFEST = REPO_ROOT / "Cargo.toml"
+CONFIG = REPO_ROOT / "release-plz.toml"
 
 # 稳定版三段整数，且不允许前导零（0.5.01 与 01.2.3 都拒绝）
 VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -119,14 +122,14 @@ def main() -> None:
             "release-plz",
             "set-version",
             "--manifest-path",
-            str(MANIFEST.relative_to(REPO_ROOT)),
+            str(WS_MANIFEST.relative_to(REPO_ROOT)),
             "--config",
             str(CONFIG.relative_to(REPO_ROOT)),
             args.version,
         ]
     )
     # --locked 会校验锁文件与清单一致：set-version 没同步就会在这里失败
-    run(["cargo", "tree", "--locked", "--manifest-path", str(MANIFEST.relative_to(REPO_ROOT))])
+    run(["cargo", "tree", "--locked", "--manifest-path", str(WS_MANIFEST.relative_to(REPO_ROOT))])
 
     print(f"完成：{MANIFEST.name}、Cargo.lock、{CHANGELOG.name} 已更新")
 

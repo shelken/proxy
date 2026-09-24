@@ -63,14 +63,17 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # manifest_path 必须指向仓库根的 workspace 清单：git_only 模式在清单所在
+      # 目录打开 Git 仓库（git2::Repository::open 不向上层搜索 .git），
+      # 指向子目录会在临时克隆里报 could not find repository
       - name: Run release-plz release-pr
         if: steps.guard.outputs.skip != 'true'
         uses: release-plz/action@v0.5
         with:
           command: release-pr
           version: 0.3.169
-          manifest_path: scripts/sb-sync-rs/Cargo.toml
-          config: scripts/sb-sync-rs/release-plz.toml
+          manifest_path: Cargo.toml
+          config: release-plz.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -113,8 +116,9 @@ jobs:
           title: "chore: release sb-sync ${{ inputs.version }}"
           commit-message: "chore: release sb-sync ${{ inputs.version }}"
           add-paths: |
+            Cargo.toml
+            Cargo.lock
             scripts/sb-sync-rs/Cargo.toml
-            scripts/sb-sync-rs/Cargo.lock
             scripts/sb-sync-rs/CHANGELOG.md
           body: |
             由 `release-plz` 工作流的 workflow_dispatch 准备。

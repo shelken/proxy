@@ -20,8 +20,3 @@ sha2 = "0.10"
 rand = "0.8"
 tiny_http = "0.12"
 hex = "0.4"
-
-[profile.release]
-opt-level = "z"
-lto = true
-strip = true

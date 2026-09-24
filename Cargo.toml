@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["scripts/sb-sync-rs"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

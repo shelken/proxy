@@ -6,5 +6,8 @@
 # 只跑 release-pr 这一条命令（见 release-plz.yml）。它与 release 命令是两套
 # 独立代码：git_release_enable / release_always 只有 release 命令读取，在这里
 # 写没有作用；tag 与 GitHub Release 由 release-sb-sync.yml 在同一次 run 内产出。
+#
+# 本文件必须位于仓库根：git_only 模式在 manifest_path 所在目录打开 Git 仓库，
+# workspace 清单与 .git 都在根目录，放子目录会让 release-plz 找不到仓库。
 [workspace]
 git_only = true
