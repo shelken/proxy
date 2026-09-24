@@ -268,8 +268,8 @@ flowchart TD
     TAG --> IMG["GitHub Actions: docker build<br/>用 CI 预编译的二进制<br/>推送 GHCR sb-sync-server"]
     BIN --> MISE["mise 安装到客户端 Mac<br/>（仅取 darwin 产物）"]
     BIN --> BOX["沙箱 VM 与服务端容器<br/>（取 Linux 产物）"]
-    IMG --> HO["home-ops: HelmRelease<br/>ExternalSecret 注入私钥"]
-    HO --> GW["envoy-external<br/>域名转发到容器 8080"]
+    IMG --> VPS["home-ops: VPS Docker Compose<br/>Azure Key Vault 注入私钥"]
+    VPS --> CD["VPS Caddy 反代<br/>域名转发到容器 8080"]
 ```
 
 发布操作规范见 `RELEASE.md`。镜像不再在容器内编译 Rust：二进制由 CI 在原生 runner 上编好后经 artifact 传入构建上下文，Dockerfile 只 `COPY` 它并补可执行位（artifact 不保留权限位，见 `postmortems/003`）。上游 sing-box 镜像只提供内核 CLI，其版本由 `--build-arg SING_BOX_VERSION` 传入，取值来自 `.mise.toml`。
