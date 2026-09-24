@@ -2,12 +2,14 @@
 
 `sb-sync` 的版本真源是 `scripts/sb-sync-rs/Cargo.toml`。合并一个 Release PR 后，CI 自动产出三平台二进制、双架构镜像和带资产的 GitHub Release。
 
+全流程只用仓库自带的 `GITHUB_TOKEN`，不需要任何个人访问令牌或 GitHub App。
+
 ## 常规发布
 
 1. 功能 PR 合并到 `main`
 2. `release-plz` 工作流自动开一个版本 PR（版本按 conventional commits 推导，更新 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md`）
 3. 核对版本号、CHANGELOG 说明与 CI 结果，Merge
-4. Merge 触发 `release-plz` 按清单版本打 tag，进而触发 `release-sb-sync` 构建
+4. 合并后 `release-sb-sync` 检测到清单版本变化，创建 tag、构建产物、公开 Release
 
 不要手工推 tag，也不要手改 `Cargo.toml` 版本。
 
@@ -25,7 +27,7 @@ gh workflow run release-plz.yml --ref main -f version=0.6.0 -f notes='底模路�
 
 ## 快照验证
 
-只想验证构建链路（不发版、不动 `latest`）：
+只想验证构建链路（不发版、不建 tag、不动 `latest`）：
 
 ```sh
 gh workflow run release-sb-sync.yml --ref <分支或 tag>
@@ -39,14 +41,9 @@ gh workflow run cleanup-snapshot-images.yml -f dry_run=true
 
 ## 失败处理
 
-- 优先 Re-run failed jobs。同一个 tag 不移动；需要改代码或改工作流时，发新的 patch 版本
-- 发布完成的判据是 `release` job 成功，且 GitHub Release 有三份裸二进制加 `SHA256SUMS`，GHCR 上 `vX.Y.Z` 与 `latest`（当它是最新版本时）指向同一双架构 digest。tag 存在、release-plz 成功都不代表发布完成
-- `RELEASE_PLZ_TOKEN` 是必需的仓库级 fine-grained PAT（Contents 与 Pull requests 读写），否则版本 PR 触发不了后续 CI，tag 也触发不了发布工作流
-
-## 依赖的前提
-
-- 仓库 Settings → Actions → General 需允许 GitHub Actions 创建 PR
-- GHCR 包 `proxy/sb-sync-server` 的 Manage Actions access 需把本仓库列为 Admin，否则清理工作流无权删除镜像
+- 优先 Re-run failed jobs。同一个版本不移动 tag；需要改代码或改工作流时，发新的 patch 版本
+- 版本是否算「已发布」只看 GitHub Release 是否存在，不看 tag。构建中途失败会留下已建但未发布的 tag，直接重跑即可继续——`prepare` 会复用它，不会因为 tag 已存在而跳过
+- 发布完成的判据是 `release` job 成功，且 GitHub Release 有三份裸二进制加 `SHA256SUMS`，GHCR 上 `vX.Y.Z` 与 `latest` 指向同一双架构 digest。tag 存在、工作流转绿都不代表发布完成
 
 ## 其他
 

@@ -1,11 +1,12 @@
-# 版本准备与发版 tag。
+# 版本准备：main 上的改动推导出下一个版本，开一个 Release PR。
 #
-# push 到 main：先按「合并了 Release PR」发 tag（release），再准备下一个版本的
-# Release PR（release-pr）。tag 用仓库级 PAT 推送，这样 release-sb-sync.yml 会被
-# 触发；默认 GITHUB_TOKEN 推的 tag/PR 不会触发其他工作流。
+# 这里只做版本准备，不打 tag、不发 Release。tag 由 release-sb-sync.yml 在检测到
+# 清单版本变化时创建（同一次 run 内完成），所以全程只需要仓库自带的 GITHUB_TOKEN
+# ——用 GITHUB_TOKEN 创建的历史 tag 无法触发 on.push.tags 的工作流，把 tag 移出
+# 触发链路就不需要引入 PAT。
 #
-# workflow_dispatch：手动准备 Release PR，用于首次迁移、指定版本，或只改了
-# crate 外文件（底模 / .mise.toml / Dockerfile）的发版。它只建 PR，不直接打 tag。
+# workflow_dispatch：手动指定版本。用于首次迁移，或只改了 crate 外文件
+# （底模 / .mise.toml / Dockerfile）的发版——那些改动不会进入自动推导。
 name: release-plz
 
 on:
@@ -22,13 +23,15 @@ on:
         required: true
         type: string
 
+# contents: 推版本分支与打 tag 之外的写操作；pull-requests: 开/更新 Release PR
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  versioning:
-    name: tag release PR merge, then prepare next
+  # 按 conventional commits 推导版本，开或更新 Release PR
+  version-pr:
+    name: open version PR
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency:
@@ -40,12 +43,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # release-plz 内部要读 cargo metadata 与更新 Cargo.lock
+      # release-plz 内部要读 cargo metadata
       - uses: dtolnay/rust-toolchain@stable
 
-      # 清单版本是版本真源，tag 由它决定。历史漂移（清单 0.3.0 而最高 tag
-      # v0.5.0）时 release-plz 会以 tag commit 内的清单为基线，提出低于已发布
-      # 版本的 PR——这里的守卫直接跳过，并要求先用下面的手动表单迁移。
+      # 清单版本是版本真源。历史漂移（清单 0.3.0 而最高 tag v0.5.0）时，
+      # release-plz 以 tag commit 内的清单为基线，会提出低于已发布版本的版本号——
+      # 那种 PR 合并后会静默丢掉版本号。这里直接跳过，并要求先用下面的表单迁移。
       - name: Check version is not behind released tags
         id: guard
         run: |
@@ -60,19 +63,6 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # release_always = false：只有关联的 Release PR（分支前缀 release-plz-）
-      # 合并时才创建 tag
-      - name: Run release-plz release
-        if: steps.guard.outputs.skip != 'true'
-        uses: release-plz/action@v0.5
-        with:
-          command: release
-          version: 0.3.169
-          manifest_path: scripts/sb-sync-rs/Cargo.toml
-          config: scripts/sb-sync-rs/release-plz.toml
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-
       - name: Run release-plz release-pr
         if: steps.guard.outputs.skip != 'true'
         uses: release-plz/action@v0.5
@@ -82,10 +72,11 @@ jobs:
           manifest_path: scripts/sb-sync-rs/Cargo.toml
           config: scripts/sb-sync-rs/release-plz.toml
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # 手动指定版本：只改三份文件并开 PR，不碰 tag 与 Release
   prepare-manual:
-    name: prepare release PR (manual version)
+    name: prepare version PR (manual)
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
@@ -113,7 +104,7 @@ jobs:
           set -euo pipefail
           python3 scripts/prepare-release.py --version "$TARGET_VERSION" --notes "$RELEASE_NOTES"
 
-      - name: Create release PR
+      - name: Create version PR
         id: pr
         uses: peter-evans/create-pull-request@v7
         with:
@@ -121,8 +112,6 @@ jobs:
           branch: release-plz-manual
           title: "chore: release sb-sync ${{ inputs.version }}"
           commit-message: "chore: release sb-sync ${{ inputs.version }}"
-          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          branch-token: ${{ secrets.RELEASE_PLZ_TOKEN }}
           add-paths: |
             scripts/sb-sync-rs/Cargo.toml
             scripts/sb-sync-rs/Cargo.lock
@@ -130,14 +119,14 @@ jobs:
           body: |
             由 `release-plz` 工作流的 workflow_dispatch 准备。
 
-            合并后 `versioning` 会为清单里的版本创建 tag，并触发 `release-sb-sync`
-            构建三平台二进制与双架构镜像。
+            合并后 main 上的清单版本变化会被 `release-sb-sync` 检测到，
+            由它创建 tag、构建三平台二进制与双架构镜像、公开 Release。
 
       # 同为机器人生成的旧版本 PR 会被手动准备的版本取代，留着只会误导
-      - name: Close stale release-plz PRs
+      - name: Close stale version PRs
         if: steps.pr.outputs.pull-request-number != ''
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_PR: ${{ steps.pr.outputs.pull-request-number }}
         run: |
           set -euo pipefail

@@ -3,11 +3,10 @@
 # 这个 crate 不发 crates.io（git_only）：版本只存在于 git tag，因此
 # cargo publish 被跳过，基线版本来自最新 release tag 内的清单。
 #
-# git_release_enable = false：GitHub Release 由 release-sb-sync.yml 负责，
-# 那里要同时上传三个平台的二进制与校验和，release-plz 建的 Release 没有资产。
-#
-# release_always = false：只有合并「分支名以 release-plz- 开头」的 Release PR
-# 才打 tag，普通 main 提交不会意外发版。
+# tag 与 GitHub Release 都不由 release-plz 创建：它们由 release-sb-sync.yml 在
+# 同一次 run 内完成（先校验版本、打 tag，构建与镜像验证通过后才公开带资产的
+# Release）。下面两个开关是防止误用的保险——release-plz 若自己建出没有资产的
+# Release，release-sb-sync 的「Release 已存在即跳过」判据会永久挡住真正的发布。
 [workspace]
 git_only = true
 git_release_enable = false

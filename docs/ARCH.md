@@ -105,8 +105,8 @@ sequenceDiagram
   → cargo build --release → docker build（--build-arg 内核版本，不推送）
     + 起容器验 /healthz 与 /pubkey
 
-合并 Release PR → release-plz.yml 按清单版本创建 tag（PAT 推送）
-  → release-sb-sync.yml 的 prepare 校验 tag == 清单版本且 Cargo.lock 一致
+合并 Release PR → main 的清单版本变化被 release-sb-sync.yml 检测到
+  → prepare 校验 tag ↔ 清单 ↔ 锁文件，创建 tag（GITHUB_TOKEN，同一次 run 内）
   三平台各自在原生 runner 上 cargo test --release → cargo build --release
     aarch64-apple-darwin      (macos-15)          客户端
     aarch64-unknown-linux-musl (ubuntu-24.04-arm) 沙箱 VM 与 arm64 节点
@@ -117,6 +117,8 @@ sequenceDiagram
   → 三份二进制 + SHA256SUMS 上传 GitHub Release（说明取 CHANGELOG 段）
   → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取 darwin 产物
 ```
+
+触发点是 `push: main` 而非 tag：用 `GITHUB_TOKEN` 创建 tag 不会触发 `on.push.tags` 的工作流（要绕开只能引入 PAT），所以 tag 被降级为同一次 run 内的产物。是否已发布只看 GitHub Release 是否存在——构建失败留下的 tag 会被复用，版本不会卡死。
 
 构建期不改写任何文件：版本由 Release PR 提交，CI 只校验。原实现的 `sed` 改 `Cargo.toml` 却不改 `Cargo.lock`，与后续 `--locked` 冲突，三个平台会同时失败（见 `postmortems/004`）。
 

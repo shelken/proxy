@@ -262,7 +262,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    TAG["合并 Release PR<br/>release-plz 按清单版本打 tag"] --> BIN["GitHub Actions: 三平台各自原生<br/>cargo test → build<br/>上传 darwin + 两种 Linux musl 二进制"]
+    TAG["合并 Release PR<br/>main 清单版本变化"] --> BIN["GitHub Actions: 三平台各自原生<br/>cargo test → build<br/>上传 darwin + 两种 Linux musl 二进制"]
     TAG --> IMG["GitHub Actions: docker build<br/>用 CI 预编译的二进制<br/>推送 GHCR sb-sync-server"]
     BIN --> MISE["mise 安装到客户端 Mac<br/>（仅取 darwin 产物）"]
     BIN --> BOX["沙箱 VM 与服务端容器<br/>（取 Linux 产物）"]

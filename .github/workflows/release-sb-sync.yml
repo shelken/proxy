@@ -1,4 +1,4 @@
-# sb-sync 单二进制发布：打 tag 后编译三平台产物并上传 GitHub Release。
+# sb-sync 单二进制发布：main 上的清单版本变化后，编译三平台产物并上传 GitHub Release。
 #
 # 产物消费者：
 #   - macOS：mise [tools."github:shelken/proxy"]（客户端 encode/keygen）
@@ -9,13 +9,16 @@
 # arm64 Linux 在 ubuntu-24.04-arm，amd64 Linux 在 ubuntu-latest。
 # 原生构建的附带好处是每个产物都能在其构建机上直接跑 version 冒烟，
 # 模拟构建做不到这一点（异架构二进制无法执行）。
+#
+# 触发点是 push 到 main，不是 tag：用仓库自带的 GITHUB_TOKEN 创建 tag / Release
+# 属于「被抑制的事件」，不会触发 on.push.tags 的工作流（要绕开只能引入 PAT）。
+# 这里把 tag 降级为同一次 run 内的产物——先校验版本、打 tag，再构建、发布，
+# 全程一个 token、一次 run，不依赖任何跨工作流触发。
 name: release-sb-sync
 
 on:
   push:
-    tags:
-      # 语义版本 tag（mise github 后端按 v<semver> 查询 release）
-      - "v*"
+    branches: [main]
   # 手动触发用于验证构建链路本身（不发版、不上传）：Dockerfile 与
   # include_str! 路径这类问题不验证就要等发版才暴露，代价过高
   workflow_dispatch:
@@ -26,27 +29,39 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# 并发 push 时串行执行：第二个 run 的 prepare 会看到 Release 已存在而自行跳过，
+# 不会重复发布。不取消进行中的 run，否则会留下「tag 已建、产物未发」的中间态。
+concurrency:
+  group: sb-sync-release
+  cancel-in-progress: false
+
 jobs:
-  # 只读版本校验：版本真源是 Cargo.toml，tag 必须与它完全一致。
+  # 版本校验 + 打 tag。只做判定与建 tag，不改写任何文件。
   #
-  # 这里不再改写任何文件——原实现用 sed 把 tag 写进 Cargo.toml，却不改
-  # Cargo.lock，而后续 cargo test/build 都带 --locked，两者不一致会让三个平台
-  # 的构建全部失败（见 postmortems/004）。现在版本由版本 PR 一并提交，
-  # 构建只校验不改写。
+  # 「GitHub Release 已存在」是唯一的已发布判据，不是 tag：构建中途失败会留下
+  # 已建但未发布的 tag，若拿 tag 当判据，这个版本就再也发不出来了。而 Release
+  # 由发布 job 在产物齐全后才创建（见下方 release job）。
+  #
+  # 原实现用 sed 把 tag 写进 Cargo.toml 却不改 Cargo.lock，与后续 --locked
+  # 冲突，三个平台的构建会一起失败（见 postmortems/004）。现在版本由版本 PR
+  # 一并提交，构建只校验不改写。
   prepare:
     name: verify version
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       tag: ${{ steps.check.outputs.tag }}
       publish: ${{ steps.check.outputs.publish }}
       snapshot_tag: ${{ steps.check.outputs.snapshot_tag }}
+      build_needed: ${{ steps.check.outputs.build_needed }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
@@ -56,23 +71,42 @@ jobs:
             echo "Cargo.toml ($MANIFEST) 与 Cargo.lock ($LOCKED) 版本不一致"; exit 1; }
           echo "version=$MANIFEST" >> "$GITHUB_OUTPUT"
           echo "snapshot_tag=snapshot-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
-            TAG="$GITHUB_REF_NAME"
-            echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
-              echo "tag $TAG 不是稳定版格式 vX.Y.Z，拒绝构建"; exit 1; }
-            test "${TAG#v}" = "$MANIFEST" || {
-              echo "tag $TAG 与清单版本 $MANIFEST 不一致"; exit 1; }
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
+
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            # 手动触发：只做快照，不发版、不建 tag
             echo "tag=" >> "$GITHUB_OUTPUT"
             echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "手动触发：按快照构建 ${GITHUB_SHA::12}"
+            exit 0
           fi
 
-  # 三平台二进制产出。tag 与手动触发都编译，只有 tag 会上传。
+          TAG="v$MANIFEST"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "build_needed=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG 的 Release 已存在，无需构建"
+            exit 0
+          fi
+
+          # tag 缺失就补上（构建失败会留下已建 tag，重跑时跳过这一步即可）
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG 已存在，复用"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
+            echo "已创建 tag $TAG -> ${GITHUB_SHA::12}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "build_needed=true" >> "$GITHUB_OUTPUT"
+
+  # 三平台二进制产出。正式发布与手动快照都编译。
   binaries:
     name: binary (${{ matrix.artifact }})
     needs: prepare
+    if: needs.prepare.outputs.build_needed == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -142,7 +176,7 @@ jobs:
           ./${{ matrix.artifact }} version
 
       # 完整等式而非子串匹配：版本号错一位（0.5.1 vs 0.5.10）用 grep 也能过。
-      # tag 与手动快照两条路径都执行——快照也要证明「这棵树的二进制版本 == 清单」。
+      # 快照路径也执行——快照同样要证明「这棵树的二进制版本 == 清单」。
       - name: Assert binary version
         run: |
           ACTUAL=$(./${{ matrix.artifact }} version)
@@ -244,11 +278,7 @@ jobs:
   docker:
     name: image (${{ matrix.platform }})
     needs: [prepare, binaries]
-    # tag 上跑是正式发布；workflow_dispatch 也跑，但只推到快照 tag —— 多架构
-    # manifest 合并这条路只有在真推一次之后才能确认（imagetools create 的
-    # digest 拼接、GHCR 权限都验不到），而它原本只在发版时才第一次执行。
-    # 推分支名 tag 会污染镜像 tag 空间，故用 snapshot-<sha> 这种一次性名字。
-    if: needs.prepare.outputs.tag != '' || github.event_name == 'workflow_dispatch'
+    if: needs.prepare.outputs.build_needed == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -367,7 +397,7 @@ jobs:
   docker-merge:
     name: merge image manifest
     needs: [prepare, docker]
-    if: needs.prepare.outputs.tag != '' || github.event_name == 'workflow_dispatch'
+    if: needs.prepare.outputs.build_needed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -377,11 +407,6 @@ jobs:
       group: sb-sync-registry-publication
       cancel-in-progress: false
     steps:
-      # 取全部 tag 才能算出本次版本是不是最高稳定版
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
       - uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
@@ -396,31 +421,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # latest 只在本次版本仍是最高稳定 tag 时推进：补发旧版本、或重跑旧 run，
-      # 都不该把 latest 退回去。手动触发只落一次性快照。
+      # 正式发布推进 latest；手动触发只落一次性快照，不动 latest。
+      # 走正式路径的前提是「该版本尚无 Release」，而版本只能递增（由
+      # prepare-release.py 保证），所以这里必为当前最高版本，无需再比较 tag。
       - name: Resolve tags
         id: tags
         env:
           PUBLISH: ${{ needs.prepare.outputs.publish }}
           SNAPSHOT: ${{ needs.prepare.outputs.snapshot_tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
-          if [ "$PUBLISH" != "true" ]; then
+          if [ "$PUBLISH" = "true" ]; then
+            echo "primary=${REPO}:latest" >> "$GITHUB_OUTPUT"
+            echo "extra=-t ${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
+          else
             echo "primary=${REPO}:${SNAPSHOT}" >> "$GITHUB_OUTPUT"
             echo "extra=" >> "$GITHUB_OUTPUT"
-          else
-            HIGHEST=$(git tag --list 'v*' \
-              | sed -E 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
-            if [ "$HIGHEST" = "$VERSION" ]; then
-              echo "primary=${REPO}:latest" >> "$GITHUB_OUTPUT"
-              echo "extra=-t ${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
-            else
-              echo "primary=${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
-              echo "extra=" >> "$GITHUB_OUTPUT"
-            fi
           fi
 
       - name: Create manifest list and push
