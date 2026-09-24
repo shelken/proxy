@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.5.3] - 2026-09-24
+
+Cargo workspace 上移仓库根：修复 release-plz git_only 在子目录清单下找不到 Git 仓库的问题，自动版本 PR 恢复可用；CI 缓存键与发版校验路径同步
+
 ## [0.5.2] - 2026-09-24
 
 恢复并增强 trace 子命令，通过内核 debug 日志流全链路探测 DNS/路由决策与链路
