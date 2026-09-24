@@ -38,6 +38,7 @@ DOMAIN,cloudaicompanion.googleapis.com
 DOMAIN,daily-cloudcode-pa.googleapis.com
 DOMAIN-SUFFIX,cloudcode-pa.googleapis.com
 DOMAIN-KEYWORD,cloudcode-pa
+DOMAIN-KEYWORD,daily-cloudcode-pa
 
 # notebooklm.google
 DOMAIN-SUFFIX,notebooklm.google
