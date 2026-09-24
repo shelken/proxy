@@ -4,6 +4,9 @@
 
 ```text
 proxy/
+├── Cargo.toml            # workspace 清单（crate 在 scripts/sb-sync-rs，版本真源在那边）
+├── Cargo.lock            # workspace 锁文件
+├── release-plz.toml      # release-plz git_only 配置
 ├── scripts/
 │   └── sb-sync-rs/       # sb-sync 客户端编码 + 服务端装配（Rust 单二进制）
 ├── config/
@@ -11,7 +14,7 @@ proxy/
 │   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sb-sync) 与用户指南
-├── .github/workflows/    # CI：ci-sb-sync 门禁；tag v* 触发二进制与镜像发布
+├── .github/workflows/    # CI：ci-sb-sync 门禁；release-plz 开版本 PR；release-sb-sync 发布二进制与镜像
 ├── Dockerfile            # 服务端镜像（sing-box CLI + sb-sync）
 └── justfile              # 统一测试与运维指令入口
 ```
@@ -22,7 +25,7 @@ proxy/
 flowchart TD
     subgraph S1 ["1. 规则编译 (CI)"]
         R_SRC["规则清单 (config/rules/index.txt + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
-        GHA --> R_BIN["各端产物\n(singbox 64 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
+        GHA --> R_BIN["各端产物\n(singbox 66 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
     end
 
     subgraph S2 ["2. 客户端编码 (sb-sync encode)"]

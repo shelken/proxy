@@ -6,4 +6,5 @@ config/
 docs/
 postmortems/
 scripts/
+target/
 **/*.md

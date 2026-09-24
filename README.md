@@ -40,7 +40,7 @@ mise install github:shelken/proxy@latest
 subs:
   - https://example.com/api/v1/client/subscribe?token=...
 nodes:
-  - hysteria2://password@host:port/?obfs=salamander&obfs-password=...#SelfHost
+  - hysteria2://password@host:port/?obfs=salamander&obfs-password=...#selfhost
 ```
 
 生成订阅 URL（自动写剪切板，公钥从服务端实时获取）：
@@ -72,35 +72,19 @@ Apple-AI|appleai|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/
 `DOMAIN-REGEX` / `IP-CIDR` / `IP-CIDR6` / `SRC-IP-CIDR` / `SRC-PORT` / `DST-PORT` /
 `PROCESS-NAME` / `GEOIP` 等标准分流语法。详见 [config/rules/README.md](./config/rules/README.md)。
 
-## 核心策略组规范
+## 核心策略组
 
-底模位于 `config/sing-box/template.json`，核心策略组与默认出口如下：
+底模 `config/sing-box/template.json` 定义 23 个策略组（selector / urltest）。全部组都开了 `interrupt_exist_connections`，切换节点即掐断该组存量连接，长连接立刻在新节点重拨。无匹配节点的组在装配阶段整体不产出，不会让内核因缺 tag 而启动失败。
 
-| 策略组 Tag | 默认出口 | 候选池规则 |
-| :--- | :--- | :--- |
-| `SelfHost`（urltest） | 自动测速最快 | 私有节点（tag 匹配 `vps`/`hy2`/`SelfHost`），每 2 分钟测速 |
-| `proxy` | `SelfHost` | 自建私有节点首发，机场专线节点全量追加 |
-| `openai` | `SelfHost` | 优先自建节点，备选港、日、台、美节点 |
-| `gemini` | `openai` | 优先跟随 OpenAI 分组，备选日本节点 |
-| `dev` | `SelfHost` | 优先自建节点，备选香港节点 |
-| `adultnsfw` | `SelfHost` | 优先自建节点，备选直连与专用节点 |
-| `appleai` | `direct` | 优先直连，备选自建节点与主代理 |
-| `ptcg` | `SelfHost` | 优先自建节点，备选主代理与直连，日本节点正则匹配 |
-| `japansite` | `proxy` | 优先跟随主代理，备选日本节点 |
-| `opencode` | `proxy` | 优先跟随主代理，备选全量节点 |
-| `zai` | `proxy` | z.ai（智谱 GLM）家族域名，优先跟随主代理 |
-| `hk` | 首个命中节点 | 地区组：名称匹配香港正则，无节点时兜底 `proxy` |
-| `jp` | 首个命中节点 | 地区组：名称匹配日本正则，无节点时兜底 `proxy` |
-| `us` | 首个命中节点 | 地区组：名称匹配美国正则，无节点时兜底 `proxy` |
-| `tw` | 首个命中节点 | 地区组：名称匹配台湾正则，无节点时兜底 `proxy` |
-| `sg` | 首个命中节点 | 地区组：名称匹配新加坡正则，无节点时兜底 `proxy` |
-| `kr` | 首个命中节点 | 地区组：名称匹配韩国正则，无节点时兜底 `proxy` |
-| `microsoft` | `proxy` | Microsoft 域名（blackmatrix7），可切直连 |
-| `apple` | `direct` | Apple 域名（blackmatrix7），直连优先，与 `appleai` 互不重叠 |
-| `paypal` | `direct` | PayPal 域名（blackmatrix7），直连优先 |
-| `grok` | `proxy` | Grok (xAI) 域名，来源 Loon 个人规则 |
-| `1024` | `proxy` | 域名关键词 `1024proxy`，来源 Loon 个人规则 |
-| `tailscale` | `proxy` | Tailscale 场景组，暂无域名规则，按需切换 |
+组名、默认出口与候选池以底模为准，直接查当前值：
+
+```bash
+# 全部策略组及其默认出口（无 default 表示取组内首个命中节点）
+jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) → \(.default // "首个命中节点")"' config/sing-box/template.json
+
+# 单个组的候选池（outbounds 里是节点名正则，装配时展开为实际节点）
+jq '.outbounds[] | select(.tag=="openai")' config/sing-box/template.json
+```
 
 ## 目录索引
 
@@ -144,7 +128,7 @@ just vm-stop
 ```
 
 `test-sandbox` 会先自动取当前 HEAD 的 Linux 产物、在 VM 内起服务端并取回它实际响应的
-配置，再驱动内核做规则集装载与 18 个命中断言。产物需先由
+配置，再驱动内核做规则集装载与 19 个命中断言（12 个独占规则集 + 7 个共用规则集）。产物需先由
 `gh workflow run release-sb-sync.yml --ref <分支>` 构建（或已存在的同名分支构建）。
 
 Rust 部分（`scripts/sb-sync-rs/`）的编译校验由远程 CI 承担

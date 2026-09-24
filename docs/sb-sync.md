@@ -8,7 +8,7 @@
 
 | | 客户端 | 服务端 |
 | :--- | :--- | :--- |
-| 子命令 | `encode`、`keygen` | `server` |
+| 子命令 | `encode`、`keygen`、`trace`（诊断） | `server` |
 | 运行位置 | 任意 arm Mac（mise 安装） | 容器（home-ops） |
 | 输入 | 本机 YAML 配置 | 加密 URL 查询参数 |
 | 输出 | 剪切板订阅 URL | sing-box 配置 JSON |
@@ -293,11 +293,14 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | :--- | :--- |
 | `Cargo.toml` / `Cargo.lock` | 仓库根 workspace 清单与锁文件（release-plz 版本推导要求清单与 `.git` 同目录） |
 | `scripts/sb-sync-rs/Cargo.toml` | crate 清单，版本真源 |
-| `scripts/sb-sync-rs/src/main.rs` | CLI 入口与三个子命令分派 |
+| `scripts/sb-sync-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `keygen` / `version` 分派 |
 | `scripts/sb-sync-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装 |
 | `scripts/sb-sync-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |
 | `scripts/sb-sync-rs/src/server.rs` | HTTP 路由、载荷解析、CLI 合并调用、临时目录 RAII |
 | `scripts/sb-sync-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
 | `scripts/sb-sync-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
 | `scripts/sb-sync-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
+| `scripts/sb-sync-rs/src/trace.rs` | 真机全链路探测：内核 debug 日志流 → DNS/路由决策与出口链路 |
+| `scripts/sb-sync-rs/src/paths.rs` | 客户端 YAML 配置路径解析（`~/.config/sing-box/config.yaml`） |
+| `scripts/sb-sync-rs/src/lib.rs` | 模块声明与 crate 级 lint 门禁（`forbid(unsafe_code)`、`deny(warnings, clippy::all, pedantic)`、生产代码禁 panic） |
 | `config/sing-box/template.json` | 生产底模（策略组与路由骨架） |
