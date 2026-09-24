@@ -7,6 +7,8 @@ on:
     branches: ["**"]
     paths:
       - "scripts/sb-sync-rs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "config/sing-box/template.json"
       - ".mise.toml"
       - "Dockerfile"
