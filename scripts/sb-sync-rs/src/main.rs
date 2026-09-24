@@ -153,7 +153,9 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
             "--api" => {
                 api = Some(it.next().ok_or("trace: --api 需要一个地址")?.clone());
             }
-            other if domain.is_none() && !other.starts_with('-') => domain = Some(other.to_string()),
+            other if domain.is_none() && !other.starts_with('-') => {
+                domain = Some(other.to_string())
+            }
             other => return Err(format!("trace: 未知参数 {other}（{usage_hint}）")),
         }
     }

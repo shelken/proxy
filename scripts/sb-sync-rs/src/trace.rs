@@ -18,12 +18,10 @@ use std::time::{Duration, Instant};
 pub fn system_resolve(domain: &str) -> Option<(String, u128)> {
     let start = Instant::now();
     let addrs: Vec<_> = (domain, 0u16).to_socket_addrs().ok()?.collect();
-    let ip = addrs
-        .iter()
-        .find_map(|a| match a {
-            std::net::SocketAddr::V4(v4) => Some(v4.ip().to_string()),
-            _ => None,
-        })?;
+    let ip = addrs.iter().find_map(|a| match a {
+        std::net::SocketAddr::V4(v4) => Some(v4.ip().to_string()),
+        _ => None,
+    })?;
     Some((ip, start.elapsed().as_millis()))
 }
 
@@ -54,10 +52,7 @@ struct KernelDecisions {
 }
 
 /// 从内核 debug 日志流实时捕获针对指定域名的 DNS 与路由决策。
-fn capture_decisions(
-    controller: &str,
-    domain: &str,
-) -> (Option<String>, Option<String>) {
+fn capture_decisions(controller: &str, domain: &str) -> (Option<String>, Option<String>) {
     let decisions = Arc::new(Mutex::new(KernelDecisions::default()));
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -115,11 +110,9 @@ fn capture_decisions(
     // 触发 1: 发送 DNS 查询
     let dom = domain.to_string();
     let ctrl_dns = controller.to_string();
-    let _ = ureq::get(&format!(
-        "http://{ctrl_dns}/dns/query?name={dom}&type=A"
-    ))
-    .timeout(Duration::from_secs(2))
-    .call();
+    let _ = ureq::get(&format!("http://{ctrl_dns}/dns/query?name={dom}&type=A"))
+        .timeout(Duration::from_secs(2))
+        .call();
 
     // 触发 2: 发送 HTTPS 流量，触发内核 route 判定
     let dom_http = domain.to_string();
@@ -252,7 +245,9 @@ pub fn trace(domain: &str, controller: Option<String>) -> u8 {
             }
         }
         None => {
-            println!("⚠ Clash API       未配置或不可达，跳过内核层判定（传 --api 127.0.0.1:9090 指定）");
+            println!(
+                "⚠ Clash API       未配置或不可达，跳过内核层判定（传 --api 127.0.0.1:9090 指定）"
+            );
         }
     }
 
