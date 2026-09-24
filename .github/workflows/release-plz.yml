@@ -1,0 +1,123 @@
+# 版本准备：main 上的改动推导出下一个版本，开一个 Release PR。
+#
+# 这里只做版本准备，不打 tag、不发 Release。tag 由 release-sb-sync.yml 在检测到
+# 清单版本变化时创建（同一次 run 内完成），所以全程只需要仓库自带的 GITHUB_TOKEN
+# ——用 GITHUB_TOKEN 创建的历史 tag 无法触发 on.push.tags 的工作流，把 tag 移出
+# 触发链路就不需要引入 PAT。
+#
+# workflow_dispatch：手动指定版本。用于首次迁移，或只改了 crate 外文件
+# （底模 / .mise.toml / Dockerfile）的发版——那些改动不会进入自动推导。
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "目标版本（X.Y.Z，不带 v 前缀）"
+        required: true
+        type: string
+      notes:
+        description: "本次发布说明，写入 CHANGELOG"
+        required: true
+        type: string
+
+# contents: 推版本分支与打 tag 之外的写操作；pull-requests: 开/更新 Release PR
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # 按 conventional commits 推导版本，开或更新 Release PR
+  version-pr:
+    name: open version PR
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sb-sync-release-plz
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # release-plz 内部要读 cargo metadata
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 清单版本是版本真源。历史漂移（清单 0.3.0 而最高 tag v0.5.0）时，
+      # release-plz 以 tag commit 内的清单为基线，会提出低于已发布版本的版本号——
+      # 那种 PR 合并后会静默丢掉版本号。这里直接跳过，并要求先用下面的表单迁移。
+      - name: Check version is not behind released tags
+        id: guard
+        run: |
+          set -euo pipefail
+          MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
+          HIGHEST=$(git tag --list 'v*' | sed -E 's/^v//' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -n "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$HIGHEST" "$MANIFEST" | sort -V | tail -1)" != "$MANIFEST" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::清单版本 $MANIFEST 低于最高稳定 tag v$HIGHEST；已跳过，请先用手动版本表单迁移"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run release-plz release-pr
+        if: steps.guard.outputs.skip != 'true'
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+          version: 0.3.169
+          manifest_path: scripts/sb-sync-rs/Cargo.toml
+          config: scripts/sb-sync-rs/release-plz.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 手动指定版本：只改三份文件并开 PR，不碰 tag 与 Release
+  prepare-manual:
+    name: prepare version PR (manual)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sb-sync-release-manual
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # set-version 要读 cargo metadata 并更新 Cargo.lock；本 job 还要跑
+      # cargo tree --locked 校验锁文件，两者都需要工具链
+      - uses: dtolnay/rust-toolchain@stable
+
+      # release-plz 的预置清单不含这个工具，会走 cargo-binstall 预编译二进制
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: release-plz@0.3.169
+
+      - name: Prepare version files
+        env:
+          TARGET_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-release.py --version "$TARGET_VERSION" --notes "$RELEASE_NOTES"
+
+      - name: Create version PR
+        id: pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          base: main
+          branch: manual-release
+          title: "chore: release sb-sync ${{ inputs.version }}"
+          commit-message: "chore: release sb-sync ${{ inputs.version }}"
+          add-paths: |
+            scripts/sb-sync-rs/Cargo.toml
+            scripts/sb-sync-rs/Cargo.lock
+            scripts/sb-sync-rs/CHANGELOG.md
+          body: |
+            由 `release-plz` 工作流的 workflow_dispatch 准备。
+
+            合并后 main 上的清单版本变化会被 `release-sb-sync` 检测到，
+            由它创建 tag、构建三平台二进制与双架构镜像、公开 Release。

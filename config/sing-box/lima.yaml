@@ -28,6 +28,11 @@ portForwards:
 
 propagateProxyEnv: false
 
+# 内核版本由 just vm-create 从 .mise.toml 读取后传入；provision 里用
+# $PARAM_SING_BOX_VERSION 引用（Lima 把 param 键映射为 PARAM_<KEY> 环境变量）
+param:
+  SING_BOX_VERSION: ""
+
 containerd:
   system: false
   user: false
@@ -40,7 +45,7 @@ provision:
       #!/bin/sh
       set -eu
 
-      SB_VERSION=1.14.1
+      SB_VERSION="${PARAM_SING_BOX_VERSION:?必须通过 just vm-create 传入内核版本}"
       BUN_VERSION=1.4.2
       BIN_DIR=/opt/proxy-test/bin
 

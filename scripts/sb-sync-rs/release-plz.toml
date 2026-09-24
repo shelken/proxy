@@ -1,0 +1,10 @@
+# 版本与 CHANGELOG 由 release-plz 按 conventional commits 推导。
+#
+# 这个 crate 不发 crates.io（git_only）：版本只存在于 git tag，因此
+# cargo publish 被跳过，基线版本来自最新 release tag 内的清单。
+#
+# 只跑 release-pr 这一条命令（见 release-plz.yml）。它与 release 命令是两套
+# 独立代码：git_release_enable / release_always 只有 release 命令读取，在这里
+# 写没有作用；tag 与 GitHub Release 由 release-sb-sync.yml 在同一次 run 内产出。
+[workspace]
+git_only = true

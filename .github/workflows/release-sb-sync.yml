@@ -1,4 +1,4 @@
-# sb-sync 单二进制发布：打 tag 后编译三平台产物并上传 GitHub Release。
+# sb-sync 单二进制发布：main 上的清单版本变化后，编译三平台产物并上传 GitHub Release。
 #
 # 产物消费者：
 #   - macOS：mise [tools."github:shelken/proxy"]（客户端 encode/keygen）
@@ -9,13 +9,16 @@
 # arm64 Linux 在 ubuntu-24.04-arm，amd64 Linux 在 ubuntu-latest。
 # 原生构建的附带好处是每个产物都能在其构建机上直接跑 version 冒烟，
 # 模拟构建做不到这一点（异架构二进制无法执行）。
+#
+# 触发点是 push 到 main，不是 tag：用仓库自带的 GITHUB_TOKEN 创建 tag / Release
+# 属于「被抑制的事件」，不会触发 on.push.tags 的工作流（要绕开只能引入 PAT）。
+# 这里把 tag 降级为同一次 run 内的产物——先校验版本、打 tag，再构建、发布，
+# 全程一个 token、一次 run，不依赖任何跨工作流触发。
 name: release-sb-sync
 
 on:
   push:
-    tags:
-      # 语义版本 tag（mise github 后端按 v<semver> 查询 release）
-      - "v*"
+    branches: [main]
   # 手动触发用于验证构建链路本身（不发版、不上传）：Dockerfile 与
   # include_str! 路径这类问题不验证就要等发版才暴露，代价过高
   workflow_dispatch:
@@ -26,10 +29,94 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# 并发 push 时串行执行：第二个 run 的 prepare 会看到 Release 已存在而自行跳过，
+# 不会重复发布。不取消进行中的 run，否则会留下「tag 已建、产物未发」的中间态。
+concurrency:
+  group: sb-sync-release
+  cancel-in-progress: false
+
 jobs:
-  # 三平台二进制产出。tag 与手动触发都编译，只有 tag 会上传。
+  # 版本校验 + 打 tag。只做判定与建 tag，不改写任何文件。
+  #
+  # 「GitHub Release 已存在」是唯一的已发布判据，不是 tag：构建中途失败会留下
+  # 已建但未发布的 tag，若拿 tag 当判据，这个版本就再也发不出来了。而 Release
+  # 由发布 job 在产物齐全后才创建（见下方 release job）。
+  #
+  # 原实现用 sed 把 tag 写进 Cargo.toml 却不改 Cargo.lock，与后续 --locked
+  # 冲突，三个平台的构建会一起失败（见 postmortems/004）。现在版本由版本 PR
+  # 一并提交，构建只校验不改写。
+  prepare:
+    name: verify version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      # release 发版 / snapshot 只验证 / skip 该版本已发布，无需构建
+      mode: ${{ steps.check.outputs.mode }}
+      tag: ${{ steps.check.outputs.tag }}
+      snapshot_tag: ${{ steps.check.outputs.snapshot_tag }}
+      kernel_version: ${{ steps.kernel.outputs.version }}
+    steps:
+      # prepare 只读清单与锁文件、查 Release，不读 git 历史，浅克隆即可
+      - uses: actions/checkout@v5
+
+      # 内核版本只写在 .mise.toml。这里解析一次，docker 的两个架构 job 复用，
+      # 不必各自再装一遍 mise
+      - uses: jdx/mise-action@v4
+        with:
+          cache: false
+          install: false
+
+      - id: kernel
+        run: |
+          set -euo pipefail
+          V=$(mise config get --file .mise.toml tools.sing-box)
+          test -n "$V" || { echo "无法从 .mise.toml 读取 sing-box 版本"; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "sing-box 内核版本: $V"
+
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
+          LOCKED=$(awk '/^name = "sb-sync"$/{getline; print}' scripts/sb-sync-rs/Cargo.lock | sed -E 's/^version *= *"(.*)"/\1/')
+          test -n "$MANIFEST" || { echo "无法从 Cargo.toml 读取版本"; exit 1; }
+          test "$MANIFEST" = "$LOCKED" || {
+            echo "Cargo.toml ($MANIFEST) 与 Cargo.lock ($LOCKED) 版本不一致"; exit 1; }
+          echo "version=$MANIFEST" >> "$GITHUB_OUTPUT"
+          echo "snapshot_tag=snapshot-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            # 手动触发：只做快照，不发版、不建 tag
+            echo "mode=snapshot" >> "$GITHUB_OUTPUT"
+            echo "手动触发：按快照构建 ${GITHUB_SHA::12}"
+            exit 0
+          fi
+
+          TAG="v$MANIFEST"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >/dev/null 2>&1; then
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
+            echo "$TAG 的 Release 已存在，无需构建"
+            exit 0
+          fi
+
+          # tag 缺失就补上（构建失败会留下已建 tag，重跑时跳过这一步即可）
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG 已存在，复用"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
+            echo "已创建 tag $TAG -> ${GITHUB_SHA::12}"
+          fi
+          echo "mode=release" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # 三平台二进制产出。正式发布与手动快照都编译。
   binaries:
     name: binary (${{ matrix.artifact }})
+    needs: prepare
+    if: needs.prepare.outputs.mode != 'skip'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -75,26 +162,8 @@ jobs:
           key: sb-sync-${{ matrix.target }}-${{ hashFiles('scripts/sb-sync-rs/Cargo.lock') }}
           restore-keys: sb-sync-${{ matrix.target }}-
 
-      # 单一事实来源 = git tag；构建前把 tag 写入 Cargo.toml，
-      # 避免二进制版本与发布版本漂移。手动触发时 ref 是分支名，不做同步。
-      #
-      # 改完 Cargo.toml 必须同步 Cargo.lock：下面两步都带 --locked，
-      # 锁文件与清单不一致时 cargo 会以「lock file needs to be updated but
-      # --locked was passed」直接失败。本步骤只在 tag 路径执行，手动触发测不到，
-      # 漏掉要等真发版才暴露——所以这行不能省。
-      - name: Sync version with tag
-        if: startsWith(github.ref, 'refs/tags/')
-        working-directory: scripts/sb-sync-rs
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-          rm Cargo.toml.bak
-          cargo update --workspace
-
       # e2e 测试要真跑一次内核合并（server::tests::node_direct_rule_*），
-      # 内核不在 PATH 时它们以「启动内核失败（sing-box）: os error 2」失败——
-      # 而本 job 原先不装内核，于是这三平台构建在测试步就全挂，连带 needs 它的
-      # docker job 被跳过、发不出镜像。ci-sb-sync 装了内核所以 PR 上看不出来。
+      # 内核不在 PATH 时它们以「启动内核失败（sing-box）: os error 2」失败。
       # 版本由 .mise.toml 固定，与本地和 ci-sb-sync 同源，此处不另写版本号。
       - uses: jdx/mise-action@v4
         with:
@@ -110,18 +179,15 @@ jobs:
           cargo build --release --locked --target ${{ matrix.target }}
           cp "target/${{ matrix.target }}/release/sb-sync" "../../${{ matrix.artifact }}"
 
-      # 每个产物在其构建机上原生执行：架构错了或动态链接缺失都会在这里暴露
-      - name: Smoke test binary
+      # 架构错了或动态链接缺失都会在 file 这里暴露。
+      # 版本用完整等式而非子串匹配：0.5.1 vs 0.5.10 用 grep 也能过。
+      # 快照路径也执行——快照同样要证明「这棵树的二进制版本 == 清单」。
+      - name: Assert binary version
         run: |
           file "${{ matrix.artifact }}"
-          ./${{ matrix.artifact }} version
-          ./${{ matrix.artifact }} --help >/dev/null 2>&1 || true
-
-      - name: Assert version matches tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          ./${{ matrix.artifact }} version | grep -q "sb-sync ${GITHUB_REF_NAME#v}" || {
-            echo "二进制版本与 tag 不一致"; exit 1; }
+          ACTUAL=$(./${{ matrix.artifact }} version)
+          test "$ACTUAL" = "sb-sync ${{ needs.prepare.outputs.version }}" || {
+            echo "二进制版本与清单不一致: $ACTUAL"; exit 1; }
 
       # Linux musl 产物必须是静态链接：沙箱 VM 与容器都不保证有 glibc 兼容层，
       # 动态链接的二进制会在那里以 "not found"（缺解释器）而不是明确报错失败。
@@ -143,38 +209,68 @@ jobs:
           fi
           echo "$FILE_OUT" | grep -qE 'statically linked|static-pie linked'
 
+      # overwrite: 重跑失败 job 时同名 artifact 已存在，不覆盖会直接报错
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
           retention-days: 7
+          overwrite: true
 
   # 单独一个 job 汇总上传：三个矩阵 job 并发调 action-gh-release 会竞争创建
   # 同一个 tag 的 release（同时 POST 时后到者收到 422 already_exists）。
   # 先各自传 artifact 再一次性发布，既避免竞争也让发布说明只生成一次。
+  #
+  # needs 含 docker-merge：镜像验证不通过就不该公开 Release。GHCR 与 GitHub 之间
+  # 没有事务，这里保证的顺序是「镜像先成立、Release 后公开」。
   release:
     name: publish release
-    needs: binaries
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [prepare, binaries, docker-merge]
+    if: needs.prepare.outputs.mode == 'release'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       # 只取二进制 artifact。不带 pattern 时 merge-multiple 会把同 run 内**全部**
-      # artifact 拍平进 dist/（包括 docker job 上传的 digests-*），随后 dist/* 会把
-      # 那些十六进制命名的空文件当作发布资产推上去。正常 tag 运行里 docker job 要
-      # 多平台构建、必然晚于本 job，所以触发路径是「重跑本 job」那一刻。
+      # artifact 拍平进 dist/（包括 docker job 上传的 digests-*），随后会把
+      # 那些十六进制命名的空文件当作发布资产推上去。
       - uses: actions/download-artifact@v4
         with:
           pattern: sb-sync-*
           path: dist
           merge-multiple: true
 
-      - name: List assets
-        run: ls -la dist/
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum sb-sync-aarch64-apple-darwin \
+                    sb-sync-aarch64-unknown-linux-musl \
+                    sb-sync-x86_64-unknown-linux-musl > SHA256SUMS
+
+      # 说明正文取版本 PR 写进 CHANGELOG 的那一段，不由 GitHub 按 PR 标题自动生成
+      - name: Extract release notes
+        run: |
+          set -euo pipefail
+          VERSION='${{ needs.prepare.outputs.version }}'
+          awk -v v="$VERSION" '
+            /^## \[/ { if (in_sec) exit; if ($0 ~ "^## \\[" v "\\]") in_sec = 1 }
+            in_sec { print }
+          ' scripts/sb-sync-rs/CHANGELOG.md > RELEASE_NOTES.md
+          grep -q '[^[:space:]]' RELEASE_NOTES.md || {
+            echo "CHANGELOG 缺少 $VERSION 的 release 段"; exit 1; }
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
-          generate_release_notes: true
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          # 非默认值：缺资产时立刻失败，而不是发个空 Release
+          fail_on_unmatched_files: true
+          files: |
+            dist/sb-sync-aarch64-apple-darwin
+            dist/sb-sync-aarch64-unknown-linux-musl
+            dist/sb-sync-x86_64-unknown-linux-musl
+            dist/SHA256SUMS
 
   # 每平台原生构建镜像并推送 digest，再由 merge job 组装 manifest list。
   #
@@ -185,12 +281,8 @@ jobs:
   # 约束，两种架构都必须能真跑。模拟构建的产物无法在构建机上执行，验不了。
   docker:
     name: image (${{ matrix.platform }})
-    needs: binaries
-    # tag 上跑是正式发布；workflow_dispatch 也跑，但只推到快照 tag —— 多架构
-    # manifest 合并这条路只有在真推一次之后才能确认（imagetools create 的
-    # digest 拼接、GHCR 权限都验不到），而它原本只在发版时才第一次执行。
-    # 推分支名 tag 会污染镜像 tag 空间，故用 snapshot-<sha> 这种一次性名字。
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [prepare, binaries]
+    if: needs.prepare.outputs.mode != 'skip'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -233,6 +325,7 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          build-args: SING_BOX_VERSION=${{ needs.prepare.outputs.kernel_version }}
           load: true
           tags: sb-sync-server:smoke
           cache-from: type=gha
@@ -254,9 +347,10 @@ jobs:
           echo "pubkey=$PK"
           test "${#PK}" -eq 64
           echo "$PK" | grep -qE '^[0-9a-f]{64}$'
-          # 镜像内二进制的架构必须与本平台一致
-          docker exec sb-sync-smoke /usr/local/bin/sb-sync version
-          docker logs sb-sync-smoke
+          # 镜像内二进制的架构必须与本平台一致，且版本与清单一致
+          ACTUAL=$(docker exec sb-sync-smoke /usr/local/bin/sb-sync version)
+          test "$ACTUAL" = "sb-sync ${{ needs.prepare.outputs.version }}" || {
+            echo "镜像内二进制版本与清单不一致: $ACTUAL"; exit 1; }
           docker rm -f sb-sync-smoke
 
       - name: Build and push by digest
@@ -265,6 +359,7 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          build-args: SING_BOX_VERSION=${{ needs.prepare.outputs.kernel_version }}
           # 按 digest 推送：多平台各自出一个 manifest，最终合并成 list
           outputs: type=image,name=ghcr.io/${{ github.repository }}/sb-sync-server,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
@@ -276,18 +371,21 @@ jobs:
           DIGEST="${{ steps.build.outputs.digest }}"
           touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
 
+      # overwrite + 7 天：重跑失败 job 时旧 digest 必须还在，否则 merge job
+      # 会拉到不完整的平台集合
       - uses: actions/upload-artifact@v4
         with:
           name: digests-${{ strategy.job-index }}
           path: ${{ runner.temp }}/digests/*
-          retention-days: 1
+          retention-days: 7
+          overwrite: true
 
   # 把各平台 digest 合并成 manifest list。单平台 push 只产生架构专属 manifest，
   # 没有这一步 `docker pull` 在另一架构上会失败。
   docker-merge:
     name: merge image manifest
-    needs: docker
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: [prepare, docker]
+    if: needs.prepare.outputs.mode != 'skip'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -307,17 +405,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 正式发版才推进 latest；手动触发只落一次性快照，不覆盖已发布镜像
+      # 正式发布推进 latest；手动触发只落一次性快照，不动 latest。
+      # 走正式路径的前提是「该版本尚无 Release」，而版本只能递增（由
+      # prepare-release.py 保证），所以这里必为当前最高版本，无需再比较 tag。
       - name: Resolve tags
         id: tags
+        env:
+          MODE: ${{ needs.prepare.outputs.mode }}
+          SNAPSHOT: ${{ needs.prepare.outputs.snapshot_tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
+          set -euo pipefail
           REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "primary=${REPO}:snapshot-${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
-            echo "extra=" >> $GITHUB_OUTPUT
+          if [ "$MODE" = "release" ]; then
+            echo "primary=${REPO}:latest" >> "$GITHUB_OUTPUT"
+            echo "extra=-t ${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
           else
-            echo "primary=${REPO}:latest" >> $GITHUB_OUTPUT
-            echo "extra=-t ${REPO}:${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "primary=${REPO}:${SNAPSHOT}" >> "$GITHUB_OUTPUT"
+            echo "extra=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create manifest list and push
@@ -328,7 +433,14 @@ jobs:
             -t "${{ steps.tags.outputs.primary }}" ${{ steps.tags.outputs.extra }} \
             $(printf "${REPO}@sha256:%s " *)
 
-      # 列出结果确认两个架构都在 list 里——漏了架构不会有别的信号
-      - name: Inspect manifest
+      # 漏了架构不会有别的信号：这里断言平台集合恰好是这两种。
+      # unknown/unknown 是 BuildKit 附带的 attestation，不是架构。
+      - name: Assert manifest platforms
         run: |
-          docker buildx imagetools inspect "${{ steps.tags.outputs.primary }}"
+          set -euo pipefail
+          RAW=$(docker buildx imagetools inspect "${{ steps.tags.outputs.primary }}" --raw)
+          echo "$RAW" | jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' \
+            | grep -v 'unknown/unknown' | sort -u > /tmp/platforms
+          cat /tmp/platforms
+          diff <(printf 'linux/amd64\nlinux/arm64\n') /tmp/platforms || {
+            echo "manifest 平台集合不符"; exit 1; }
