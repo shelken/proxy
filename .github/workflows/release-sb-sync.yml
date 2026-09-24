@@ -173,11 +173,12 @@ jobs:
         working-directory: scripts/sb-sync-rs
         run: cargo test --release --locked --target ${{ matrix.target }}
 
+      # workspace 化后 target 目录在仓库根，不在 crate 目录
       - name: Build
         working-directory: scripts/sb-sync-rs
         run: |
           cargo build --release --locked --target ${{ matrix.target }}
-          cp "target/${{ matrix.target }}/release/sb-sync" "../../${{ matrix.artifact }}"
+          cp "../../target/${{ matrix.target }}/release/sb-sync" "../../${{ matrix.artifact }}"
 
       # 架构错了或动态链接缺失都会在 file 这里暴露。
       # 版本用完整等式而非子串匹配：0.5.1 vs 0.5.10 用 grep 也能过。
