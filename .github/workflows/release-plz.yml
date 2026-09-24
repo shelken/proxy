@@ -1,0 +1,150 @@
+# 版本准备与发版 tag。
+#
+# push 到 main：先按「合并了 Release PR」发 tag（release），再准备下一个版本的
+# Release PR（release-pr）。tag 用仓库级 PAT 推送，这样 release-sb-sync.yml 会被
+# 触发；默认 GITHUB_TOKEN 推的 tag/PR 不会触发其他工作流。
+#
+# workflow_dispatch：手动准备 Release PR，用于首次迁移、指定版本，或只改了
+# crate 外文件（底模 / .mise.toml / Dockerfile）的发版。它只建 PR，不直接打 tag。
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "目标版本（X.Y.Z，不带 v 前缀）"
+        required: true
+        type: string
+      notes:
+        description: "本次发布说明，写入 CHANGELOG"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  versioning:
+    name: tag release PR merge, then prepare next
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sb-sync-release-plz
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # release-plz 内部要读 cargo metadata 与更新 Cargo.lock
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 清单版本是版本真源，tag 由它决定。历史漂移（清单 0.3.0 而最高 tag
+      # v0.5.0）时 release-plz 会以 tag commit 内的清单为基线，提出低于已发布
+      # 版本的 PR——这里的守卫直接跳过，并要求先用下面的手动表单迁移。
+      - name: Check version is not behind released tags
+        id: guard
+        run: |
+          set -euo pipefail
+          MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
+          HIGHEST=$(git tag --list 'v*' | sed -E 's/^v//' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -n "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$HIGHEST" "$MANIFEST" | sort -V | tail -1)" != "$MANIFEST" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::清单版本 $MANIFEST 低于最高稳定 tag v$HIGHEST；已跳过，请先用手动版本表单迁移"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # release_always = false：只有关联的 Release PR（分支前缀 release-plz-）
+      # 合并时才创建 tag
+      - name: Run release-plz release
+        if: steps.guard.outputs.skip != 'true'
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+          version: 0.3.169
+          manifest_path: scripts/sb-sync-rs/Cargo.toml
+          config: scripts/sb-sync-rs/release-plz.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      - name: Run release-plz release-pr
+        if: steps.guard.outputs.skip != 'true'
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+          version: 0.3.169
+          manifest_path: scripts/sb-sync-rs/Cargo.toml
+          config: scripts/sb-sync-rs/release-plz.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+  prepare-manual:
+    name: prepare release PR (manual version)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sb-sync-release-manual
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # set-version 要读 cargo metadata 并更新 Cargo.lock；本 job 还要跑
+      # cargo tree --locked 校验锁文件，两者都需要工具链
+      - uses: dtolnay/rust-toolchain@stable
+
+      # release-plz 的预置清单不含这个工具，会走 cargo-binstall 预编译二进制
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: release-plz@0.3.169
+
+      - name: Prepare version files
+        env:
+          TARGET_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-release.py --version "$TARGET_VERSION" --notes "$RELEASE_NOTES"
+
+      - name: Create release PR
+        id: pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          base: main
+          branch: release-plz-manual
+          title: "chore: release sb-sync ${{ inputs.version }}"
+          commit-message: "chore: release sb-sync ${{ inputs.version }}"
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          branch-token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          add-paths: |
+            scripts/sb-sync-rs/Cargo.toml
+            scripts/sb-sync-rs/Cargo.lock
+            scripts/sb-sync-rs/CHANGELOG.md
+          body: |
+            由 `release-plz` 工作流的 workflow_dispatch 准备。
+
+            合并后 `versioning` 会为清单里的版本创建 tag，并触发 `release-sb-sync`
+            构建三平台二进制与双架构镜像。
+
+      # 同为机器人生成的旧版本 PR 会被手动准备的版本取代，留着只会误导
+      - name: Close stale release-plz PRs
+        if: steps.pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          NEW_PR: ${{ steps.pr.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          gh pr list --state open --limit 50 --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("release-plz-")) | select(.headRefName != "release-plz-manual") | .number' \
+          | while read -r number; do
+              [ -n "$number" ] || continue
+              gh pr comment "$number" --body "已被 #$NEW_PR 取代，关闭。"
+              gh pr close "$number"
+            done

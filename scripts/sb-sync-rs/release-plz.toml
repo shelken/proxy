@@ -1,0 +1,14 @@
+# 版本与 CHANGELOG 由 release-plz 按 conventional commits 推导。
+#
+# 这个 crate 不发 crates.io（git_only）：版本只存在于 git tag，因此
+# cargo publish 被跳过，基线版本来自最新 release tag 内的清单。
+#
+# git_release_enable = false：GitHub Release 由 release-sb-sync.yml 负责，
+# 那里要同时上传三个平台的二进制与校验和，release-plz 建的 Release 没有资产。
+#
+# release_always = false：只有合并「分支名以 release-plz- 开头」的 Release PR
+# 才打 tag，普通 main 提交不会意外发版。
+[workspace]
+git_only = true
+git_release_enable = false
+release_always = false

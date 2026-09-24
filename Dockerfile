@@ -4,7 +4,10 @@
 # 组装 manifest list。二进制由 CI 预编译后 COPY 进来，镜像构建不再重复编译。
 #
 # 构建上下文要求 sb-sync 二进制位于 ./sb-sync（由 workflow 就地产出后放入）。
-FROM ghcr.io/sagernet/sing-box:v1.14.1 AS singbox
+# 内核版本只在 .mise.toml 声明，由 CI 读取后以 --build-arg 传入。
+# 不设默认值：漏传时立即失败，而不是悄悄用某个旧版本。
+ARG SING_BOX_VERSION
+FROM ghcr.io/sagernet/sing-box:v${SING_BOX_VERSION} AS singbox
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata

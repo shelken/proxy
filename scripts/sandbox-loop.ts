@@ -145,8 +145,8 @@ function listRuns(filters: string[]): {
 /**
  * 决定二进制内容的路径。判据不是「commit 相等」，而是「这些路径与产物构建时一致」。
  *
- * `release-sb-sync.yml` 也在列：它决定 toolchain、target 与 cargo 构建参数，
- * 并在 tag 构建时改写 Cargo.toml 的版本——改动它同样会改变产物。
+ * `release-sb-sync.yml` 也在列：它决定 toolchain、target 与 cargo 构建参数——
+ * 改动它同样会改变产物（版本本身不在此列，它由 Cargo.toml 决定，见上面的路径）。
  */
 const BINARY_INPUTS = [
   "scripts/sb-sync-rs",

@@ -96,23 +96,30 @@ sequenceDiagram
 
 ## 5. 发布与门禁链路
 
+发布操作规范见根目录 `RELEASE.md`。版本真源是 `scripts/sb-sync-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新（含 `Cargo.lock` 与 `CHANGELOG.md`）。
+
 ```text
 每次改动 (scripts/sb-sync-rs/** 或 template.json) → ci-sb-sync.yml
   → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
-  → 装 sing-box 1.14.1 → cargo test → cargo build --release
-  → cargo build --release → docker build（不推送）+ 起容器验 /healthz 与 /pubkey
+  → mise 装 .mise.toml 里的 sing-box → cargo test → cargo build --release
+  → cargo build --release → docker build（--build-arg 内核版本，不推送）
+    + 起容器验 /healthz 与 /pubkey
 
-git tag v* → release-sb-sync.yml
+合并 Release PR → release-plz.yml 按清单版本创建 tag（PAT 推送）
+  → release-sb-sync.yml 的 prepare 校验 tag == 清单版本且 Cargo.lock 一致
   三平台各自在原生 runner 上 cargo test --release → cargo build --release
     aarch64-apple-darwin      (macos-15)          客户端
     aarch64-unknown-linux-musl (ubuntu-24.04-arm) 沙箱 VM 与 arm64 节点
     x86_64-unknown-linux-musl  (ubuntu-latest)    amd64 节点
-  → 每个产物在构建机上原生跑 version 冒烟；Linux 产物断言静态链接（无解释器段）
-  → 三份二进制上传 GitHub Release
+  → 每个产物在构建机上原生跑 version 冒烟并断言等于清单版本；Linux 断言静态链接
   → 每平台取本架构二进制就地 load 起容器冒烟，再按 digest 推送镜像
-  → imagetools create 合并为 manifest list（arm64 + amd64）
+  → imagetools create 合并为 manifest list（断言恰为 arm64 + amd64）
+  → 三份二进制 + SHA256SUMS 上传 GitHub Release（说明取 CHANGELOG 段）
   → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取 darwin 产物
 ```
 
+构建期不改写任何文件：版本由 Release PR 提交，CI 只校验。原实现的 `sed` 改 `Cargo.toml` 却不改 `Cargo.lock`，与后续 `--locked` 冲突，三个平台会同时失败（见 `postmortems/004`）。
+
 `workflow_dispatch` 会跑完同一条镜像链路，但只推到 `snapshot-<sha>` 一次性 tag：
 多架构 manifest 合并只在发版时第一次执行的话，digest 拼接与 GHCR 权限都验不到。
+超过 14 天的快照镜像由 `cleanup-snapshot-images.yml` 每日回收。

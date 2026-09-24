@@ -31,9 +31,10 @@ test-sign:
     @just run-test cmcc-sign
 
 # --- 沙箱 VM 生命周期 ---
-# 创建沙箱 VM（一次性）
+# 创建沙箱 VM（一次性）。内核版本取自 .mise.toml（反引号在每次执行该 recipe 时求值，
+# 不会影响其他 recipe），并通过 Lima 参数传给 provision。
 vm-create:
-    limactl create --name={{vm_name}} --tty=false {{justfile_directory()}}/config/sing-box/lima.yaml
+    limactl create --name={{vm_name}} --tty=false --param SING_BOX_VERSION="{{`mise config get --file .mise.toml tools.sing-box`}}" {{justfile_directory()}}/config/sing-box/lima.yaml
 
 # 启动沙箱 VM
 vm-start:
