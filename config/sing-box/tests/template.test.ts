@@ -77,6 +77,17 @@ describe("template.json structural verification", () => {
     expect(tun.address[0]).not.toBe("198.18.0.1/30");
   });
 
+  test("routes Lan and PTR queries to local system DNS", () => {
+    const rules = template.dns?.rules ?? [];
+    const lanRule = rules.find((r) => r.rule_set?.includes("Lan"));
+    expect(lanRule).toBeDefined();
+    expect(lanRule.server).toBe("dns-local-system");
+
+    const ptrRule = rules.find((r) => r.query_type?.includes("PTR"));
+    expect(ptrRule).toBeDefined();
+    expect(ptrRule.server).toBe("dns-local-system");
+  });
+
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
     const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
     const [tunIp, tunBits] = tunAddr.split("/");

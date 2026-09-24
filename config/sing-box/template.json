@@ -50,6 +50,18 @@
       },
       {
         "rule_set": [
+          "Lan"
+        ],
+        "server": "dns-local-system"
+      },
+      {
+        "query_type": [
+          "PTR"
+        ],
+        "server": "dns-local-system"
+      },
+      {
+        "rule_set": [
           "ChinaMax-dns"
         ],
         "server": "dns-direct-cn"
