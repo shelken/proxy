@@ -586,6 +586,7 @@ mod tests {
         assert_eq!(
             selector_tags,
             vec![
+                "selfhost",
                 "proxy",
                 "openai",
                 "gemini",
@@ -620,9 +621,9 @@ mod tests {
         assert_eq!(proxy["default"], json!("selfhost"));
     }
 
-    /// urltest 组同样是填充对象，且 selfhost 组须按模式命中让位后的节点。
+    /// selector 与 urltest 组按模式命中对应节点。
     #[test]
-    fn urltest_groups_are_populated() {
+    fn groups_are_populated() {
         let mut tpl = crate::template::embedded_template().expect("内嵌底模");
         let input = input_with_fetcher(
             "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@192.0.2.2:8388#hk-02",
@@ -634,12 +635,22 @@ mod tests {
         let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
         let selfhost = outbounds
             .iter()
-            .find(|o| o["type"] == "urltest" && o["tag"] == "selfhost")
-            .expect("selfhost urltest 组缺失");
+            .find(|o| o["type"] == "selector" && o["tag"] == "selfhost")
+            .expect("selfhost selector 组缺失");
         assert_eq!(
             selfhost["outbounds"],
             json!(["selfhost-node"]),
             "selfhost 组模式 (?i)(vps|hy2|selfhost) 应命中让位后的 selfhost-node"
+        );
+
+        let hk = outbounds
+            .iter()
+            .find(|o| o["type"] == "urltest" && o["tag"] == "hk")
+            .expect("hk urltest 组缺失");
+        assert_eq!(
+            hk["outbounds"],
+            json!(["hk-02"]),
+            "hk urltest 组应命中 hk-02 节点"
         );
     }
 

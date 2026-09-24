@@ -24,6 +24,7 @@ mod node;
 mod paths;
 mod server;
 mod template;
+mod trace;
 
 use std::process::Command;
 
@@ -35,6 +36,7 @@ fn main() {
     let result = match cmd {
         Some("encode") => cmd_encode(rest),
         Some("server") => cmd_server(rest),
+        Some("trace") => cmd_trace(rest),
         Some("keygen") => {
             let (sk, pk) = config::keygen();
             println!("SERVER_PRIVATE_KEY={sk}");
@@ -60,9 +62,8 @@ fn usage() -> String {
     [
         "sb-sync — 客户端加密编码 + 服务端原生合并",
         "",
-        "用法:",
         "  sb-sync encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
-        "  sb-sync server [--port 8080]                 启动服务端（需 SERVER_PRIVATE_KEY 环境变量）",
+        "  sb-sync trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
         "  sb-sync keygen                                 生成服务端 X25519 公私钥对（Hex）",
         "  sb-sync version                                显示版本",
     ]
@@ -130,7 +131,48 @@ fn cmd_encode(rest: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// server: 解析端口并启动服务循环。
+/// 新架构无本地产物;SFM 场景产物在 SFM 组容器 configs/ 下。
+/// 兼容旧路径 ~/.config/sing-box/singbox.json(存在则读其 clash_api 配置)。
+fn legacy_config_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var_os("HOME")
+            .map(|h| h.to_owned())
+            .unwrap_or_default(),
+    )
+    .join(".config/sing-box/singbox.json")
+}
+
+/// trace: 真机全链路探测。--api 显式指定 Clash API,缺省读产物配置。
+fn cmd_trace(rest: &[String]) -> Result<(), String> {
+    let usage_hint = "trace 用法: sb-sync trace <domain> [--api <127.0.0.1:9090>]";
+    let mut domain: Option<String> = None;
+    let mut api: Option<String> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--api" => {
+                api = Some(it.next().ok_or("trace: --api 需要一个地址")?.clone());
+            }
+            other if domain.is_none() && !other.starts_with('-') => domain = Some(other.to_string()),
+            other => return Err(format!("trace: 未知参数 {other}（{usage_hint}）")),
+        }
+    }
+    let domain = domain.ok_or(usage_hint)?;
+    let controller = match api {
+        Some(a) => Some(a),
+        None => std::fs::read_to_string(legacy_config_path())
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| trace::clash_controller(&v))
+            .or_else(|| Some("127.0.0.1:9090".to_string())),
+    };
+    let fails = trace::trace(&domain, controller);
+    if fails > 0 {
+        return Err(format!("{fails} 个阶段失败"));
+    }
+    Ok(())
+}
+
 fn cmd_server(rest: &[String]) -> Result<(), String> {
     let port: u16 = match rest {
         [p] if p == "--port" || p == "-p" => return Err("server: --port 需要一个数字参数".into()),
