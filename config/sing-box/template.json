@@ -465,14 +465,11 @@
       "tag": "direct"
     },
     {
-      "type": "urltest",
+      "type": "selector",
       "tag": "selfhost",
       "outbounds": [
         "(?i)(vps|hy2|selfhost)"
-      ],
-      "url": "http://www.gstatic.com/generate_204",
-      "interval": "2m0s",
-      "tolerance": 50
+      ]
     },
     {
       "type": "selector",
