@@ -4,3 +4,4 @@
 - [002 · SQLite 列错位读取与 BLOB 误读导致错误结论](./002-sqlite-column-misread.md)
 - [003 · CI artifact 不保留可执行位导致容器启动失败](./003-ci-artifact-exec-bit.md)
 - [004 · tag 守卫内的步骤躲过 CI，首次执行即发版](./004-tag-guarded-step-bypasses-ci.md)
+- [005 · tag 作为发布触发点，迫使引入长期 PAT](./005-tag-trigger-forces-pat.md)
