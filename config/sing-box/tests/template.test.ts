@@ -35,9 +35,9 @@ describe("template.json structural verification", () => {
     expect(excluded).toContain("100.64.0.0/10");
   });
 
-  test("declares all 32 public rule sets", () => {
+  test("declares all 33 public and companion rule sets", () => {
     const ruleSets = template.route?.rule_set ?? [];
-    expect(ruleSets.length).toBe(32);
+    expect(ruleSets.length).toBe(33);
     const tags = ruleSets.map((r) => r.tag);
     expect(tags).not.toContain("zone-internal");
     expect(tags).toContain("OpenAI");
@@ -79,7 +79,7 @@ describe("template.json structural verification", () => {
 
   test("routes Lan, local domain suffixes, and PTR queries to local system DNS", () => {
     const rules = template.dns?.rules ?? [];
-    const lanRule = rules.find((r) => r.rule_set?.includes("Lan"));
+    const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
     expect(lanRule).toBeDefined();
     expect(lanRule.server).toBe("dns-local-system");
 

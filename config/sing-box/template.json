@@ -50,7 +50,7 @@
       },
       {
         "rule_set": [
-          "Lan"
+          "Lan-dns"
         ],
         "server": "dns-local-system"
       },
@@ -469,6 +469,13 @@
         "tag": "ChinaMax-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Lan-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
         "update_interval": "1d"
       }
     ]
