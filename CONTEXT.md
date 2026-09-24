@@ -15,10 +15,10 @@
 仓库根的 Cargo workspace 清单，无版本号。crate 在 `scripts/sb-sync-rs`，版本真源是该 crate 的 `Cargo.toml`。根清单必须留在仓库根：release-plz 的 `git_only` 模式在清单所在目录打开 Git 仓库。
 
 **底模（template）**
-sing-box 配置的公共骨架：双入站、内网穿透、23 大分流策略组、route_exclude_address。服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模（仅 https，严格校验）。
+sing-box 配置的公共骨架：双入站、内网穿透、分流策略组与 route_exclude_address。服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模（仅 https，严格校验）。
 
 **订阅 URL（subscription URL）**
-客户端 `encode` 的产物。携带 ECIES 密文（`/sub?d=`），粘进 SFM Remote Profile 一次后长期有效，由 SFM 按间隔自动拉取。
+客户端 `encode` 的产物。密文载荷就是本机 YAML 配置（ECIES，`/sub?d=`），粘贴进 SFM Remote Profile 后由 SFM 按间隔拉取；配置一变就要重新 `encode` 并覆盖该 profile 里的 URL（每次密文都不同）。
 
 **服务端公钥（server public key）**
 `GET /pubkey` 的返回值，由服务端私钥推导。非机密，客户端 `encode` 自动获取，无需手工配置。

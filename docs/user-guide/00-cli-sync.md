@@ -5,7 +5,7 @@
 前置条件只有两个：macOS（Apple Silicon）与 [mise](https://mise.jdx.dev)。不需要本仓库源码。
 
 服务端形态（`sb-sync server`）由部署者维护，见 [sb-sync 架构](../sb-sync.md)。
-本机只需要使用 `encode`（与部署时用一次的 `keygen`）。
+本机只需要使用 `encode`（与部署时用一次的 `keygen`）；连接异常时用 `sb-sync trace <域名>` 现场诊断。
 
 ## 安装
 
@@ -70,7 +70,7 @@ sb-sync encode -s https://sub.example.com
 
 然后把 URL 粘进 SFM 的 Remote Profile，详见 [01-mac-sfm.md](./01-mac-sfm.md)。
 
-配置改动后重新执行 `encode` 即可。URL 不含时间戳，不会过期
+配置改动后重新执行 `encode`，并把新 URL 覆盖进 SFM（旧 URL 里是旧的密文，不会自动更新）。
 
 ## 安全边界
 
