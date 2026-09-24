@@ -96,10 +96,12 @@ sequenceDiagram
 
 ## 5. 发布与门禁链路
 
-发布操作规范见根目录 `RELEASE.md`。版本真源是 `scripts/sb-sync-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新（含 `Cargo.lock` 与 `CHANGELOG.md`）。
+发布操作规范见根目录 `RELEASE.md`。版本真源是 `scripts/sb-sync-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新（含根 `Cargo.lock` 与 `CHANGELOG.md`）。
+
+仓库根 `Cargo.toml` 是 workspace 清单（不含版本），必须留在根：release-plz 的 `git_only` 模式在清单所在目录打开 Git 仓库且不向上层搜索 `.git`，放回 crate 子目录会让版本推导直接失败。cargo 的 `target/` 同样属于 workspace 根。
 
 ```text
-每次改动 (scripts/sb-sync-rs/** 或 template.json) → ci-sb-sync.yml
+每次改动 (scripts/sb-sync-rs/**、根 Cargo.toml/Cargo.lock 或 template.json) → ci-sb-sync.yml
   → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
   → mise 装 .mise.toml 里的 sing-box → cargo test → cargo build --release
   → cargo build --release → docker build（--build-arg 内核版本，不推送）

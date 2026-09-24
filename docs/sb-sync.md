@@ -291,6 +291,8 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 
 | 文件 | 职责 |
 | :--- | :--- |
+| `Cargo.toml` / `Cargo.lock` | 仓库根 workspace 清单与锁文件（release-plz 版本推导要求清单与 `.git` 同目录） |
+| `scripts/sb-sync-rs/Cargo.toml` | crate 清单，版本真源 |
 | `scripts/sb-sync-rs/src/main.rs` | CLI 入口与三个子命令分派 |
 | `scripts/sb-sync-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装 |
 | `scripts/sb-sync-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |

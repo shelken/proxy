@@ -150,6 +150,8 @@ function listRuns(filters: string[]): {
  */
 const BINARY_INPUTS = [
   "scripts/sb-sync-rs",
+  "Cargo.toml",
+  "Cargo.lock",
   "config/sing-box/template.json",
   ".github/workflows/release-sb-sync.yml",
 ];
