@@ -109,7 +109,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           base: main
-          branch: release-plz-manual
+          branch: manual-release
           title: "chore: release sb-sync ${{ inputs.version }}"
           commit-message: "chore: release sb-sync ${{ inputs.version }}"
           add-paths: |
@@ -121,19 +121,3 @@ jobs:
 
             合并后 main 上的清单版本变化会被 `release-sb-sync` 检测到，
             由它创建 tag、构建三平台二进制与双架构镜像、公开 Release。
-
-      # 同为机器人生成的旧版本 PR 会被手动准备的版本取代，留着只会误导
-      - name: Close stale version PRs
-        if: steps.pr.outputs.pull-request-number != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEW_PR: ${{ steps.pr.outputs.pull-request-number }}
-        run: |
-          set -euo pipefail
-          gh pr list --state open --limit 50 --json number,headRefName \
-            --jq '.[] | select(.headRefName | startswith("release-plz-")) | select(.headRefName != "release-plz-manual") | .number' \
-          | while read -r number; do
-              [ -n "$number" ] || continue
-              gh pr comment "$number" --body "已被 #$NEW_PR 取代，关闭。"
-              gh pr close "$number"
-            done

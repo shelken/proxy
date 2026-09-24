@@ -15,9 +15,8 @@ on:
       - "config/sing-box/lima.yaml"
       - ".github/workflows/ci-sb-sync.yml"
       - ".github/workflows/release-sb-sync.yml"
-      - ".github/workflows/release-plz.yml"
-  # pull_request 不做路径过滤：release-plz 开的 Release PR 只改 crate 内文件时
-  # 也必须拿到 CI 终态，否则分支保护会一直 Pending。省算力交给上面的 push paths。
+  # pull_request 不按路径过滤：版本 PR 与只改构建文件的 PR 也要拿到确定终态，
+  # 否则检查列表停在 Pending、无从判断。省算力交给上面的 push paths。
   pull_request:
   workflow_dispatch:
 
@@ -154,5 +153,4 @@ jobs:
           # 与私钥推导出的公钥必须一致（长度 64 且为十六进制）
           test "${#PK}" -eq 64
           echo "$PK" | grep -qE '^[0-9a-f]{64}$'
-          docker logs sb-sync-ci
           docker rm -f sb-sync-ci

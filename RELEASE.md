@@ -17,13 +17,13 @@
 
 底模、`.mise.toml`、`Dockerfile` 等 crate 外改动不会进入自动版本 PR，用表单指定：
 
-Actions → `release-plz` → Run workflow → 填 `version`（`X.Y.Z`，不带 `v` 前缀）与 `notes`（写入 CHANGELOG 的说明）→ 等生成的 `release-plz-manual` PR 通过 CI 后合并。
+Actions → `release-plz` → Run workflow → 填 `version`（`X.Y.Z`，不带 `v` 前缀）与 `notes`（写入 CHANGELOG 的说明）→ 等生成的 PR 通过 CI 后合并。
 
 ```sh
 gh workflow run release-plz.yml --ref main -f version=0.6.0 -f notes='底模路由调整'
 ```
 
-版本必须严格大于当前清单版本与所有已发布 tag，否则脚本在写入任何文件之前失败。手动准备的 PR 创建成功后，旧的机器人版本 PR 会被自动关闭并留评论指向新 PR。
+版本必须严格大于当前清单版本与所有已发布 tag，否则脚本在写入任何文件之前失败。自动版本 PR 由 release-plz 自己维护，同时存在的多余版本 PR 会被它关闭。
 
 ## 快照验证
 
@@ -33,11 +33,7 @@ gh workflow run release-plz.yml --ref main -f version=0.6.0 -f notes='底模路�
 gh workflow run release-sb-sync.yml --ref <分支或 tag>
 ```
 
-产物是 `snapshot-<sha>` 一次性镜像 tag 与 run artifact。超过 14 天的快照镜像由 `cleanup-snapshot-images.yml` 每日回收；该工作流也可手动 dry-run：
-
-```sh
-gh workflow run cleanup-snapshot-images.yml -f dry_run=true
-```
+产物是 `snapshot-<sha>` 一次性镜像 tag 与 run artifact。包是公开包，GHCR 对公开包不计量存储，这些快照不需要定期回收。
 
 ## 失败处理
 

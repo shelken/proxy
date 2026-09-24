@@ -124,4 +124,4 @@ sequenceDiagram
 
 `workflow_dispatch` 会跑完同一条镜像链路，但只推到 `snapshot-<sha>` 一次性 tag：
 多架构 manifest 合并只在发版时第一次执行的话，digest 拼接与 GHCR 权限都验不到。
-超过 14 天的快照镜像由 `cleanup-snapshot-images.yml` 每日回收。
+包是公开包，GHCR 对公开包不计量存储，这些快照无需回收。

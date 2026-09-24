@@ -50,14 +50,29 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.check.outputs.version }}
+      # release 发版 / snapshot 只验证 / skip 该版本已发布，无需构建
+      mode: ${{ steps.check.outputs.mode }}
       tag: ${{ steps.check.outputs.tag }}
-      publish: ${{ steps.check.outputs.publish }}
       snapshot_tag: ${{ steps.check.outputs.snapshot_tag }}
-      build_needed: ${{ steps.check.outputs.build_needed }}
+      kernel_version: ${{ steps.kernel.outputs.version }}
     steps:
+      # prepare 只读清单与锁文件、查 Release，不读 git 历史，浅克隆即可
       - uses: actions/checkout@v5
+
+      # 内核版本只写在 .mise.toml。这里解析一次，docker 的两个架构 job 复用，
+      # 不必各自再装一遍 mise
+      - uses: jdx/mise-action@v4
         with:
-          fetch-depth: 0
+          cache: false
+          install: false
+
+      - id: kernel
+        run: |
+          set -euo pipefail
+          V=$(mise config get --file .mise.toml tools.sing-box)
+          test -n "$V" || { echo "无法从 .mise.toml 读取 sing-box 版本"; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "sing-box 内核版本: $V"
 
       - id: check
         env:
@@ -74,18 +89,14 @@ jobs:
 
           if [ "$GITHUB_EVENT_NAME" != "push" ]; then
             # 手动触发：只做快照，不发版、不建 tag
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "mode=snapshot" >> "$GITHUB_OUTPUT"
             echo "手动触发：按快照构建 ${GITHUB_SHA::12}"
             exit 0
           fi
 
           TAG="v$MANIFEST"
           if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >/dev/null 2>&1; then
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "build_needed=false" >> "$GITHUB_OUTPUT"
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
             echo "$TAG 的 Release 已存在，无需构建"
             exit 0
           fi
@@ -98,15 +109,14 @@ jobs:
               -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
             echo "已创建 tag $TAG -> ${GITHUB_SHA::12}"
           fi
+          echo "mode=release" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "publish=true" >> "$GITHUB_OUTPUT"
-          echo "build_needed=true" >> "$GITHUB_OUTPUT"
 
   # 三平台二进制产出。正式发布与手动快照都编译。
   binaries:
     name: binary (${{ matrix.artifact }})
     needs: prepare
-    if: needs.prepare.outputs.build_needed == 'true'
+    if: needs.prepare.outputs.mode != 'skip'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -169,16 +179,12 @@ jobs:
           cargo build --release --locked --target ${{ matrix.target }}
           cp "target/${{ matrix.target }}/release/sb-sync" "../../${{ matrix.artifact }}"
 
-      # 每个产物在其构建机上原生执行：架构错了或动态链接缺失都会在这里暴露
-      - name: Smoke test binary
-        run: |
-          file "${{ matrix.artifact }}"
-          ./${{ matrix.artifact }} version
-
-      # 完整等式而非子串匹配：版本号错一位（0.5.1 vs 0.5.10）用 grep 也能过。
+      # 架构错了或动态链接缺失都会在 file 这里暴露。
+      # 版本用完整等式而非子串匹配：0.5.1 vs 0.5.10 用 grep 也能过。
       # 快照路径也执行——快照同样要证明「这棵树的二进制版本 == 清单」。
       - name: Assert binary version
         run: |
+          file "${{ matrix.artifact }}"
           ACTUAL=$(./${{ matrix.artifact }} version)
           test "$ACTUAL" = "sb-sync ${{ needs.prepare.outputs.version }}" || {
             echo "二进制版本与清单不一致: $ACTUAL"; exit 1; }
@@ -220,7 +226,7 @@ jobs:
   release:
     name: publish release
     needs: [prepare, binaries, docker-merge]
-    if: needs.prepare.outputs.publish == 'true'
+    if: needs.prepare.outputs.mode == 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -241,7 +247,6 @@ jobs:
           sha256sum sb-sync-aarch64-apple-darwin \
                     sb-sync-aarch64-unknown-linux-musl \
                     sb-sync-x86_64-unknown-linux-musl > SHA256SUMS
-          cat SHA256SUMS
 
       # 说明正文取版本 PR 写进 CHANGELOG 的那一段，不由 GitHub 按 PR 标题自动生成
       - name: Extract release notes
@@ -259,8 +264,7 @@ jobs:
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           body_path: RELEASE_NOTES.md
-          generate_release_notes: false
-          draft: false
+          # 非默认值：缺资产时立刻失败，而不是发个空 Release
           fail_on_unmatched_files: true
           files: |
             dist/sb-sync-aarch64-apple-darwin
@@ -278,7 +282,7 @@ jobs:
   docker:
     name: image (${{ matrix.platform }})
     needs: [prepare, binaries]
-    if: needs.prepare.outputs.build_needed == 'true'
+    if: needs.prepare.outputs.mode != 'skip'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -305,21 +309,6 @@ jobs:
       - name: Stage binary into context
         run: mv image-context/${{ matrix.artifact }} sb-sync
 
-      # 镜像基底内核的版本只在 .mise.toml 声明；这里只取 mise CLI，不装内核
-      - uses: jdx/mise-action@v4
-        with:
-          cache: false
-          install: false
-
-      - name: Resolve kernel version
-        id: kernel
-        run: |
-          set -euo pipefail
-          V=$(mise config get --file .mise.toml tools.sing-box)
-          test -n "$V" || { echo "无法从 .mise.toml 读取 sing-box 版本"; exit 1; }
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "sing-box 内核版本: $V"
-
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -336,7 +325,7 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          build-args: SING_BOX_VERSION=${{ steps.kernel.outputs.version }}
+          build-args: SING_BOX_VERSION=${{ needs.prepare.outputs.kernel_version }}
           load: true
           tags: sb-sync-server:smoke
           cache-from: type=gha
@@ -362,7 +351,6 @@ jobs:
           ACTUAL=$(docker exec sb-sync-smoke /usr/local/bin/sb-sync version)
           test "$ACTUAL" = "sb-sync ${{ needs.prepare.outputs.version }}" || {
             echo "镜像内二进制版本与清单不一致: $ACTUAL"; exit 1; }
-          docker logs sb-sync-smoke
           docker rm -f sb-sync-smoke
 
       - name: Build and push by digest
@@ -371,7 +359,7 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          build-args: SING_BOX_VERSION=${{ steps.kernel.outputs.version }}
+          build-args: SING_BOX_VERSION=${{ needs.prepare.outputs.kernel_version }}
           # 按 digest 推送：多平台各自出一个 manifest，最终合并成 list
           outputs: type=image,name=ghcr.io/${{ github.repository }}/sb-sync-server,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
@@ -397,15 +385,11 @@ jobs:
   docker-merge:
     name: merge image manifest
     needs: [prepare, docker]
-    if: needs.prepare.outputs.build_needed == 'true'
+    if: needs.prepare.outputs.mode != 'skip'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    # 与快照清理工作流同一组：两边都在改镜像索引，不能并发
-    concurrency:
-      group: sb-sync-registry-publication
-      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -427,13 +411,13 @@ jobs:
       - name: Resolve tags
         id: tags
         env:
-          PUBLISH: ${{ needs.prepare.outputs.publish }}
+          MODE: ${{ needs.prepare.outputs.mode }}
           SNAPSHOT: ${{ needs.prepare.outputs.snapshot_tag }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
-          if [ "$PUBLISH" = "true" ]; then
+          if [ "$MODE" = "release" ]; then
             echo "primary=${REPO}:latest" >> "$GITHUB_OUTPUT"
             echo "extra=-t ${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
           else
