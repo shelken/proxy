@@ -11,6 +11,7 @@
 - `docs/`: 架构与使用文档（`ARCH.md` 全局架构、`sb-sync.md` 实现细节、`user-guide/` 用户指南）
 - `postmortems/`: 事故与踩坑记录（编号递增，索引见 `postmortems/README.md`）
 - `.github/workflows/`: CI 工作流
+- `RELEASE.md`: 发布说明
 
 ## 基本原则
 
