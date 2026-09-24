@@ -134,12 +134,8 @@ fn cmd_encode(rest: &[String]) -> Result<(), String> {
 /// 新架构无本地产物;SFM 场景产物在 SFM 组容器 configs/ 下。
 /// 兼容旧路径 ~/.config/sing-box/singbox.json(存在则读其 clash_api 配置)。
 fn legacy_config_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(
-        std::env::var_os("HOME")
-            .map(|h| h.clone())
-            .unwrap_or_default(),
-    )
-    .join(".config/sing-box/singbox.json")
+    std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join(".config/sing-box/singbox.json")
 }
 
 /// trace: 真机全链路探测。--api 显式指定 Clash API,缺省读产物配置。
