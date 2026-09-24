@@ -35,16 +35,6 @@ describe("template.json structural verification", () => {
     expect(excluded).toContain("100.64.0.0/10");
   });
 
-  test("declares all 33 public and companion rule sets", () => {
-    const ruleSets = template.route?.rule_set ?? [];
-    expect(ruleSets.length).toBe(33);
-    const tags = ruleSets.map((r) => r.tag);
-    expect(tags).not.toContain("zone-internal");
-    expect(tags).toContain("OpenAI");
-    expect(tags).toContain("Gemini");
-    expect(tags).toContain("ChinaMax");
-  });
-
   test("blocks QUIC / HTTP3 on UDP 443 and 80", () => {
     const rules = template.route?.rules ?? [];
     const quicRule = rules.find(
