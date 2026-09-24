@@ -4,29 +4,14 @@
 
 ## 功能
 
-- **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.txt` 统一声明，是各端产物的唯一来源
-- **标准化 sing-box 底模**：双入站、FakeIP DNS、23 大分流策略组，含内网穿透
-- **多客户端产物**：规则编译为 `.srs` / clash yaml 等格式，由 CI 自动发布到 `sing-box-rules` 分支供远程引用
-- **Loon 插件**：移动端与 macOS 端插件（去广告、自动化签到等），独立开关与幂等保证
+- **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.txt` 统一声明，编译为 sing-box `.srs`、Clash yaml 等产物并由 CI 发布到 `sing-box-rules` 分支供远程引用
+- **标准化 sing-box 底模**：双入站、FakeIP DNS、分流策略组与内网穿透的完整骨架，策略组清单见底模自身
 - **设备侧订阅交付（sb-sync）**：本机订阅与节点加密成一条 URL，服务端装配后由 SFM 按间隔自动拉取，凭据零外泄
-- **沙箱验证**：Lima VM 内仿真双入站与路由表，黑盒诊断分流链路
+- **Loon 插件**：移动端与 macOS 端插件（去广告、自动化签到等），独立开关与幂等保证
 
 ## 快速上手
 
-本仓库产出的配置可直接被客户端引用。以 sing-box 为例：
-
-**1. 确认规则是否满足需求**
-
-分流规则在 `config/rules/`。检查 `index.txt` 里的 `tag|policy|source` 清单，
-需要增删域名时改 `custom/*.list`，或直接在 `index.txt` 追加一行。
-
-**2. 拿到底模**
-
-`config/sing-box/template.json` 是完整配置骨架，含双入站与 23 个策略组。
-它通过 `rule_set` 远程引用 `sing-box-rules` 分支上编译好的 `.srs`，按天自动更新；
-自用场景直接套用即可，换自己的规则产物时才需改这些地址。
-
-**3. 在设备上交付（Mac + SFM）**
+### 用户：在设备上接入（Mac + SFM）
 
 装 sb-sync（依赖 [mise](https://mise.jdx.dev)，无需本仓库源码）：
 
@@ -51,6 +36,13 @@ sb-sync encode -s https://sub.example.com
 
 把 URL 粘进 SFM 的 Remote Profile，之后由 SFM 按间隔自动拉取。
 逐步操作见[用户指南](./docs/user-guide/README.md)。
+
+### 自建：套用自己的规则与底模
+
+`config/rules/index.txt` 是规则清单，`config/sing-box/template.json` 是完整配置骨架，
+它通过 `rule_set` 远程引用 `sing-box-rules` 分支上编译好的 `.srs`、按天自动更新。
+自用场景直接套用即可，换自己的规则产物时才需改这些地址；增删域名改 `config/rules/custom/*.list`，
+或直接在 `index.txt` 追加一行。开发环境搭建与测试命令见[贡献](#贡献)。
 
 ## 核心配置
 
@@ -95,7 +87,9 @@ jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) �
 
 ## 贡献
 
-个人仓库，变更以自用为准。提交前确保测试通过：
+个人仓库，变更以自用为准。系统架构见 [docs/ARCH.md](./docs/ARCH.md)，全部可用命令见 [justfile](./justfile)。
+
+环境准备与常用测试：
 
 ```bash
 mise install
