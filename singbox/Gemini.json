@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "ai.google.dev",
+        "alkalicore-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+        "webchannel-alkalimakersuite-pa.clients6.google.com",
+        "cloudaicompanion.googleapis.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "notebooklm-pa.googleapis.com",
+        "notebooklm.googleapis.com",
+        "antigravity-pa.googleapis.com",
+        "antigravity.googleapis.com"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "deepmind.com",
+        "deepmind.google",
+        "developerprofiles-pa.googleapis.com",
+        "geller-pa.googleapis.com",
+        "generativelanguage.googleapis.com",
+        "proactivebackend-pa.googleapis.com",
+        "robinfrontend-pa.googleapis.com",
+        "servd-anthropic-website.b-cdn.net",
+        "subscriptionsfirstparty-pa.googleapis.com",
+        "ai.studio",
+        "aistudio.google.com",
+        "bard.google.com",
+        "gemini.google.com",
+        "gemini.google",
+        "generativeai.google",
+        "makersuite.google.com",
+        "cloudcode-pa.googleapis.com",
+        "notebooklm.google",
+        "notebooklm.google.com",
+        "nanobanana.ai",
+        "antigravity.google",
+        "antigravity-unleash.goog",
+        "stitch.withgoogle.com"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "cloudcode-pa",
+        "daily-cloudcode-pa"
+      ]
+    }
+  ]
+}

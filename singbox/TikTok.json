@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "p16-tiktokcdn-com.akamaized.net"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "byteoversea.com",
+        "ibytedtos.com",
+        "ibyteimg.com",
+        "ipstatp.com",
+        "muscdn.com",
+        "musical.ly",
+        "sgpstatp.com",
+        "snssdk.com",
+        "tik-tokapi.com",
+        "tiktok.com",
+        "tiktokcdn.com",
+        "tiktokv.com"
+      ]
+    },
+    {
+      "domain_keyword": [
+        "-tiktokcdn-com"
+      ]
+    }
+  ]
+}
