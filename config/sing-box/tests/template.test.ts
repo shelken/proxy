@@ -118,16 +118,23 @@ describe("template.json structural verification", () => {
   });
 
 
-  test("declares all 9 native strategy groups", () => {
-    const selectors = (template.outbounds ?? []).filter((o) => o.type === "selector");
-    const tags = selectors.map((s) => s.tag);
-    const expected = [
-      "proxy", "openai", "gemini", "dev", "adultnsfw",
-      "appleai", "ptcg", "japansite", "opencode"
-    ];
-    for (const tag of expected) {
-      expect(tags).toContain(tag);
-    }
+  test("每个非 direct 的路由目标都有对应 selector 策略组", () => {
+    // 契约：route.rules 里 route 到的出站，必须是在 outbounds 里声明的 selector。
+    // 故意不手抄组名清单：加一个策略组就要改测试，且漏改时断言的子集照旧通过，
+    // 新组实际没有任何覆盖（anthropic 加进来时就踩过）。
+    const selectors = new Set(
+      (template.outbounds ?? [])
+        .filter((o) => o.type === "selector")
+        .map((s) => s.tag),
+    );
+    const targets = new Set(
+      (template.route?.rules ?? [])
+        .map((r) => r.outbound)
+        .filter((o) => typeof o === "string" && o !== "direct"),
+    );
+    expect(targets.size).toBeGreaterThan(0);
+    const missing = [...targets].filter((tag) => !selectors.has(tag));
+    expect(missing).toEqual([]);
   });
 
   test("enables interrupt_exist_connections on all selector and urltest groups", () => {
