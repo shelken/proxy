@@ -236,11 +236,11 @@ describe("convert --client singbox", () => {
     ]);
   });
 
-  test("没有域名条目的列表生成 DNS 伴生时构建失败", () => {
-    // 抄一份只有 IP 的规则进 DNS 规则，等于把废弃写法再写一遍，宁可构建失败。
-    expect(() => emitSingboxDns(normalizeRuleLines("IP-CIDR,10.0.0.0/8"))).toThrow(
-      /没有域名类条目/,
-    );
+  test("没有域名条目的列表产出空规则集，而不是构建失败", () => {
+    // 空规则集是合法的（内核接受 rules: []），且任何清单都可能被设备 overlay 的
+    // DNS 规则引用；构建期无法预知谁会被引用，所以这里不能抛错。
+    const emission = emitSingboxDns(normalizeRuleLines("IP-CIDR,10.0.0.0/8"));
+    expect(JSON.parse(emission.text)).toEqual({ version: 3, rules: [] });
   });
 });
 
