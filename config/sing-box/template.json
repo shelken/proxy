@@ -63,6 +63,12 @@
         "server": "dns-local-system"
       },
       {
+        "rule_set": [
+          "MyDirect-dns"
+        ],
+        "server": "dns-local-system"
+      },
+      {
         "query_type": [
           "PTR"
         ],
@@ -490,6 +496,13 @@
         "tag": "Lan-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyDirect-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
         "update_interval": "1d"
       }
     ]

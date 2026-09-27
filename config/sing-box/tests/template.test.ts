@@ -84,6 +84,21 @@ describe("template.json structural verification", () => {
     expect(ptrRule.server).toBe("dns-local-system");
   });
 
+  test("个人域规则集走系统 DNS 且排在 FakeIP 之前", () => {
+    const rules = template.dns?.rules ?? [];
+    const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
+    expect(zoneRule).toBeDefined();
+    // 必须是 dns-local-system：局域网内由路由器应答真实内网 IP，
+    // 拿到真实 IP 后出站直连无需再解析，绕开 fakeip → 拨号解析 NXDOMAIN
+    expect(zoneRule.server).toBe("dns-local-system");
+
+    // first match wins：命中 fakeip 之前必须已被本条拦下，否则仍会拿到假 IP
+    const fakeipIndex = rules.findIndex((r) => r.server === "dns-fakeip");
+    const zoneIndex = rules.indexOf(zoneRule);
+    expect(fakeipIndex).toBeGreaterThan(-1);
+    expect(zoneIndex).toBeLessThan(fakeipIndex);
+  });
+
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
     const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
     const [tunIp, tunBits] = tunAddr.split("/");
