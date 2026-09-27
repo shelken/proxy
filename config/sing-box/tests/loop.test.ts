@@ -114,16 +114,16 @@ function decision(log: string, value: string): string | undefined {
 }
 
 describe("规则集装载", () => {
-  test("底模引用的 32 个规则集产物齐备且内核已完成装载", async () => {
+  test("底模引用的每个规则集产物齐备且内核已完成装载", async () => {
     // 装载失败会让内核 FATAL 退出，waitFor 通过即验证了「全部读入」
     await sb!.waitFor("sing-box started");
 
     const template = JSON.parse(
       readFileSync(resolve(import.meta.dir, "../template.json"), "utf-8"),
     ) as { route: { rule_set: { tag: string }[] } };
-    expect(template.route.rule_set).toHaveLength(32);
 
-    // 逐个确认文件存在：区分「内核没读」与「产物根本没生成」
+    // 逐个确认文件存在：区分「内核没读」与「产物根本没生成」。
+    // 不比对数量：数量由底模决定，写死只在加规则集时制造假失败。
     const missing = template.route.rule_set
       .map((rs) => rs.tag)
       .filter((tag) => !existsSync(`${WORK}/rules/${tag}.srs`));

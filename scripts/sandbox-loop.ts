@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const VM = "proxy-test";
 const ARTIFACT = "sb-sync-aarch64-unknown-linux-musl";
@@ -61,8 +61,12 @@ function fail(stage: string, detail: string): never {
  *
  * 二进制只由 `BINARY_INPUTS` 列出那几处决定（底模经 include_str! 内嵌）。所以判据
  * 不是「commit 相等」，而是「这些路径与产物构建时一致」——纯删除/文档提交的 HEAD
- * 不会触发 release 工作流，此时回退到最近一次成功构建是安全的，且必须把实际使用
- * 的 commit 打出来。
+ * 不会触发 release 工作流，此时回退到最近一次带产物的构建是安全的，且必须把实际
+ * 使用的 commit 打出来。
+ *
+ * 候选来自 artifacts API 而非 run 列表：`mode=skip` 的 run（该版本已发布）同样
+ * `conclusion=success` 且 `headSha=HEAD`，但构建 job 全被跳过、零产物，一旦进入
+ * 候选就会在下载阶段失败。按「有可下载产物」筛，这类 run 天然不在池子里。
  *
  * 一旦这些路径确有差异就直接报错：那种情况下的产物与被测代码不对应，
  * 静默使用会产生最难排查的假绿。
@@ -80,37 +84,25 @@ function ensureBinary(): void {
     }
   }
 
-  const exact = listRuns([`--commit=${head}`]).find(
-    (r) => r.conclusion === "success" && r.headSha === head,
-  );
-  let chosen: { databaseId: number; headSha: string };
-
-  if (exact) {
-    chosen = exact;
-  } else {
-    // HEAD 没有构建（工作流按 path 过滤触发）。回退到最近一次成功，但只在
-    // Rust 源码与底模均无差异时可信。
-    const branch = host(["git", "rev-parse", "--abbrev-ref", "HEAD"]).out.trim();
-    const pool = [
-      ...listRuns([`--branch=${branch}`]),
-      ...listRuns(["--branch=main"]),
-    ].filter((r) => r.conclusion === "success");
-    const usable = pool.find((r) => relevantDiff(r.headSha, head) === "");
-    if (!usable) {
-      const diff = pool[0] ? relevantDiff(pool[0].headSha, head) : "(无可用产物)";
-      fail(
-        "查找 CI 产物",
-        `HEAD ${head.slice(0, 8)} 无对应产物，回退候选中也没有 Rust 源码/底模一致的构建。\n` +
-          `  先执行 gh workflow run release-sb-sync.yml --ref ${branch} 并等它跑完\n` +
-          `  差异: ${diff}`,
-      );
-    }
-    chosen = usable;
+  const branch = host(["git", "rev-parse", "--abbrev-ref", "HEAD"]).out.trim();
+  const runs = listArtifactRuns();
+  const pick = chooseArtifact(runs, head, relevantDiff);
+  if (!pick) {
+    const diff = runs[0] ? relevantDiff(runs[0].headSha, head) : "(无可用产物)";
+    fail(
+      "查找 CI 产物",
+      `HEAD ${head.slice(0, 8)} 无对应产物，带产物的构建里也没有 Rust 源码/底模一致的。\n` +
+        `  先执行 gh workflow run release-sb-sync.yml --ref ${branch} 并等它跑完\n` +
+        `  差异: ${diff}`,
+    );
+  }
+  if (!pick.exact) {
     console.log(
-      `[引导] 警告：产物来自 ${usable.headSha.slice(0, 8)}（HEAD ${head.slice(0, 8)} 无构建）；\n` +
+      `[引导] 警告：产物来自 ${pick.chosen.headSha.slice(0, 8)}（HEAD ${head.slice(0, 8)} 无构建）；\n` +
         `         已确认 scripts/sb-sync-rs/** 与 template.json 无差异，二进制等价`,
     );
   }
+  const chosen = pick.chosen;
 
   rmSync(ARTIFACT_DIR, { recursive: true, force: true });
   mkdirSync(ARTIFACT_DIR, { recursive: true });
@@ -125,21 +117,60 @@ function ensureBinary(): void {
   writeFileSync(stamp, chosen.headSha);
 }
 
-/** 查询 release 工作流的运行记录。 */
-function listRuns(filters: string[]): {
+/** 一个带可下载产物的构建。 */
+export interface ArtifactRun {
   databaseId: number;
-  conclusion: string;
   headSha: string;
-}[] {
+}
+
+/**
+ * 从 artifacts API 的响应里取出「未过期」的构建记录。
+ *
+ * 响应形状缺字段说明 GitHub API 契约变了，硬失败而不是当成空列表——把契约破坏
+ * 静默成「没有可用产物」会让排查绕远路。
+ */
+export function selectArtifactRuns(raw: string): ArtifactRun[] {
+  const parsed = JSON.parse(raw) as {
+    artifacts?: { expired?: boolean; workflow_run?: { id?: number; head_sha?: string } }[];
+  };
+  if (!Array.isArray(parsed.artifacts)) {
+    fail("解析产物列表", `artifacts API 响应缺少 artifacts 数组: ${raw.slice(0, 200)}`);
+  }
+  return parsed.artifacts
+    .filter((a) => a.expired === false)
+    .map((a) => {
+      const id = a.workflow_run?.id;
+      const sha = a.workflow_run?.head_sha;
+      if (typeof id !== "number" || typeof sha !== "string") {
+        fail("解析产物列表", `产物记录缺少 workflow_run.id/head_sha: ${JSON.stringify(a)}`);
+      }
+      return { databaseId: id, headSha: sha };
+    });
+}
+
+/**
+ * 从候选里挑一个可用的：优先 headSha 精确相同，其次首个产物等价（`diffOf` 返回空串）。
+ * 都不满足返回 null，由调用方报错。抽成纯函数以便不碰网络地覆盖选择逻辑。
+ */
+export function chooseArtifact(
+  runs: ArtifactRun[],
+  head: string,
+  diffOf: (from: string, to: string) => string,
+): { chosen: ArtifactRun; exact: boolean } | null {
+  const exact = runs.find((r) => r.headSha === head);
+  if (exact) return { chosen: exact, exact: true };
+  const usable = runs.find((r) => diffOf(r.headSha, head) === "");
+  return usable ? { chosen: usable, exact: false } : null;
+}
+
+/** 查询带可下载产物的构建记录（按创建时间倒序，新的在前）。 */
+function listArtifactRuns(): ArtifactRun[] {
   const r = host([
-    "gh", "run", "list",
-    "--workflow=release-sb-sync.yml",
-    ...filters,
-    "--limit=20",
-    "--json=databaseId,conclusion,headSha",
+    "gh", "api",
+    `repos/{owner}/{repo}/actions/artifacts?name=${ARTIFACT}&per_page=100`,
   ]);
-  if (r.code !== 0) fail("查询 CI 运行", r.err.trim());
-  return JSON.parse(r.out) as { databaseId: number; conclusion: string; headSha: string }[];
+  if (r.code !== 0) fail("查询 CI 产物", r.err.trim());
+  return selectArtifactRuns(r.out);
 }
 
 /**
@@ -171,8 +202,39 @@ function relevantDiff(from: string, to: string): string {
   return r.out.trim();
 }
 
+/**
+ * 同步前确认本地规则产物齐备。
+ *
+ * `pushToGuest` 把 `generated/singbox/` 整目录拷进 VM，缺哪个文件只有内核启动时
+ * 才暴露成 `parse rule-set: open ...: no such file or directory`，报错点离根因
+ * （没跑全量构建）很远。这里按底模声明的 tag 当场核对，缺了就直说要先构建。
+ *
+ * 与 `just rules-check` 的区别：那条校验清单与底模是否一致，这条只问「本地产物
+ * 是否齐到能喂给内核」，两者互补。
+ */
+function verifyLocalArtifacts(): void {
+  const templatePath = resolve(import.meta.dir, "../config/sing-box/template.json");
+  const template = JSON.parse(readFileSync(templatePath, "utf-8")) as {
+    route?: { rule_set?: { tag?: string }[] };
+  };
+  const tags = (template.route?.rule_set ?? [])
+    .map((rs) => rs.tag)
+    .filter((tag): tag is string => typeof tag === "string");
+  const genDir = resolve(import.meta.dir, "../config/rules/generated/singbox");
+  const missing = tags.filter((tag) => !existsSync(join(genDir, `${tag}.srs`)));
+  if (missing.length > 0) {
+    fail(
+      "检查本地规则产物",
+      `底模声明了 ${tags.length} 个规则集，本地 generated/singbox/ 缺 ${missing.length} 个：\n` +
+        `  ${missing.join(", ")}\n` +
+        `  先执行 just rules-build 生成全量产物再引导`,
+    );
+  }
+}
+
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
+  verifyLocalArtifacts();
   const r = guest(`
     mkdir -p /work
     cp ${REPO_IN_GUEST}/.sandbox-artifacts/sb-sync ${GUEST_BINARY}
