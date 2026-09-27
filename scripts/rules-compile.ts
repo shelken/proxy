@@ -519,7 +519,7 @@ export function emitSingbox(ruleLines: string[]): Emission {
 }
 
 /** 只保留按查询名匹配的字段，产出 DNS 规则专用的规则集。 */
-export function emitSingboxDns(ruleLines: string[], label = ""): Emission {
+export function emitSingboxDns(ruleLines: string[]): Emission {
   const base = emitSingbox(ruleLines);
   const payload = JSON.parse(base.text) as {
     kind?: string;
@@ -537,12 +537,9 @@ export function emitSingboxDns(ruleLines: string[], label = ""): Emission {
     }
     if (Object.keys(domainFields).length > 0) kept.push(domainFields);
   }
-  if (kept.length === 0) {
-    // 抄一份没有域名条目的列表进 DNS 规则，等于把废弃写法再写一遍，宁可构建失败。
-    throw new Error(
-      `${label || "规则集"}里没有域名类条目，生成不出 DNS 规则用的规则集`,
-    );
-  }
+  // 没有域名条目时产出空规则集而不是报错：空规则集是合法的（内核接受 rules: []），
+  // 而任何清单都可能被设备 overlay 的 DNS 规则引用，构建期无法预知谁会被引用。
+  // 之前在这里抛错，等于把「谁会被引用」这个运行期的决定提前到构建期猜。
   return { text: `${jsonPretty(toSourceJson(kept))}\n`, skipped: base.skipped, specialRefs: [] };
 }
 
@@ -783,7 +780,7 @@ export function buildOne(
   }
 
   if (dnsCompanion) {
-    const dns = emitSingboxDns(ruleLines, item.tag);
+    const dns = emitSingboxDns(ruleLines);
     const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.json`);
     writeText(dnsPath, dns.text);
     compileSrs(binary, dnsPath, dnsPath.replace(/\.json$/, ".srs"));
@@ -819,8 +816,6 @@ export function runBuild(options: BuildOptions): number {
     return 1;
   }
 
-  // companions 里是伴生名（ChinaMax-dns），buildOne 需要按基础名判断
-  const companions = new Set(dnsCompanionNames(template, items));
   const targets = options.all ? items : [findItem(items, options.tag ?? "")];
 
   if (options.all) rmSync(GENERATED_DIR, { recursive: true, force: true });
@@ -828,8 +823,10 @@ export function runBuild(options: BuildOptions): number {
 
   let built = 0;
   for (const item of targets) {
-    const needsDns = companions.has(dnsRulesetName(outputName(item.tag)));
-    const results = buildOne(item, binary, needsDns);
+    // 每个 tag 都产出 `-dns` 伴生，而不是只产底模引用到的那几个：
+    // 设备 overlay 的运行期引用无法在构建期枚举，缺哪份都会让内核启动 FATAL。
+    // 底模仍只需声明自己真正引用的伴生，校验语义（validateTemplate）不变。
+    const results = buildOne(item, binary, true);
     const parts = results.map((r) => `${r.client}=${r.total - r.skipped}/${r.total}`);
     console.log(`built ${item.tag} -> ${parts.join(", ")}`);
     built++;
@@ -840,7 +837,7 @@ export function runBuild(options: BuildOptions): number {
     console.log(`skipped reports (${reports.length}):`);
     for (const r of reports) console.log(`  ${r}`);
   }
-  console.log(`done: built=${built}, dns_companions=${companions.size}`);
+  console.log(`done: built=${built}, dns_companions=${built}`);
   return 0;
 }
 
