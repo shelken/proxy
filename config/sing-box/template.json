@@ -45,6 +45,41 @@
     ],
     "rules": [
       {
+        "domain": ["int.ooooo.space"],
+        "action": "predefined",
+        "rcode": "NOERROR",
+        "answer": []
+      },
+      {
+        "domain": [
+          "minio.int.ooooo.space",
+          "minio-ui.int.ooooo.space",
+          "nvidia-dls.int.ooooo.space",
+          "pve-mine.int.ooooo.space",
+          "ghcr-mirror.int.ooooo.space",
+          "quay-mirror.int.ooooo.space",
+          "mirror-gcr-mirror.int.ooooo.space",
+          "k8s-mirror.int.ooooo.space"
+        ],
+        "query_type": ["A"],
+        "action": "predefined",
+        "rcode": "NOERROR",
+        "answer": ["*.int.ooooo.space. IN A 192.168.6.144"]
+      },
+      {
+        "domain_suffix": ["int.ooooo.space"],
+        "query_type": ["A"],
+        "action": "predefined",
+        "rcode": "NOERROR",
+        "answer": ["*.int.ooooo.space. IN A 192.168.69.46"]
+      },
+      {
+        "domain_suffix": ["int.ooooo.space"],
+        "action": "predefined",
+        "rcode": "NOERROR",
+        "answer": []
+      },
+      {
         "clash_mode": "direct",
         "server": "dns-local-system"
       },

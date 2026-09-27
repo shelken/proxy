@@ -84,6 +84,45 @@ describe("template.json structural verification", () => {
     expect(ptrRule.server).toBe("dns-local-system");
   });
 
+  test("answers internal domain statically before fakeip", () => {
+    const rules = template.dns?.rules ?? [];
+    const fakeipIndex = rules.findIndex((r) => r.server === "dns-fakeip");
+    expect(fakeipIndex).toBeGreaterThan(0);
+
+    // 集群外精确记录必须先于网关通配（first match wins）
+    const precise = rules.find(
+      (r) => r.domain?.includes("minio.int.ooooo.space"),
+    );
+    expect(precise).toBeDefined();
+    expect(precise.action).toBe("predefined");
+    expect(rules.indexOf(precise)).toBeLessThan(fakeipIndex);
+
+    const wildcard = rules.find(
+      (r) => r.domain_suffix?.includes("int.ooooo.space") && r.query_type?.includes("A"),
+    );
+    expect(wildcard).toBeDefined();
+    expect(wildcard.action).toBe("predefined");
+    expect(wildcard.answer).toContain("*.int.ooooo.space. IN A 192.168.69.46");
+    expect(rules.indexOf(precise)).toBeLessThan(rules.indexOf(wildcard));
+
+    // 根名不是服务入口，任何类型都返回 NOERROR 空应答
+    const apex = rules.find((r) => r.domain?.includes("int.ooooo.space"));
+    expect(apex).toBeDefined();
+    expect(apex.rcode).toBe("NOERROR");
+    expect(apex.answer).toEqual([]);
+
+    // 非 A 记录（AAAA/HTTPS）返回 NOERROR 空应答，不落 fakeip
+    const fallback = rules.find(
+      (r) =>
+        r.domain_suffix?.includes("int.ooooo.space") &&
+        r.query_type === undefined,
+    );
+    expect(fallback).toBeDefined();
+    expect(fallback.rcode).toBe("NOERROR");
+    expect(fallback.answer).toEqual([]);
+    expect(rules.indexOf(fallback)).toBeLessThan(fakeipIndex);
+  });
+
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
     const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
     const [tunIp, tunBits] = tunAddr.split("/");
