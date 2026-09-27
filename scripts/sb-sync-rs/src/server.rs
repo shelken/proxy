@@ -656,4 +656,72 @@ mod tests {
         assert_eq!(v2["log"]["level"], json!("debug"));
         assert!(v2["inbounds"].is_array(), "底模入站不应被 overlay 抹掉");
     }
+
+    /// 守 merge 的标量优先级契约：层名字典序在前的层，标量胜出。
+    ///
+    /// 这条依赖内核的实测行为（`server.rs` 里 LAYER_* 的注释所述），一旦内核
+    /// 改变语义，overlay 覆盖底模标量会静默失效。没有断言时只能靠线上现象发现。
+    #[test]
+    fn overlay_scalar_wins_over_base_after_merge() {
+        if let Some(reason) = kernel_unavailable_reason() {
+            eprintln!("skip: {reason}");
+            return;
+        }
+        let base = json!({
+            "log": {"level": "warn"},
+            "route": {"final": "proxy", "default_domain_resolver": {"server": "dns-direct-cn"}}
+        });
+        let overlay = json!({
+            "log": {"level": "debug"},
+            "route": {"default_domain_resolver": {"server": "dns-local-system"}}
+        });
+        let merged = merge_overlay(&base, Some(&overlay)).expect("合并应成功");
+        assert_eq!(
+            merged["log"]["level"],
+            json!("debug"),
+            "overlay 标量应压过底模"
+        );
+        let resolver = merged["route"]["default_domain_resolver"]["server"]
+            .as_str()
+            .or_else(|| merged["route"]["default_domain_resolver"].as_str());
+        assert_eq!(
+            resolver,
+            Some("dns-local-system"),
+            "overlay 的 resolver 应胜出"
+        );
+
+        // 无 overlay 时底模标量保留
+        let merged_base = merge_overlay(&base, None).expect("无 overlay 合并应成功");
+        assert_eq!(merged_base["log"]["level"], json!("warn"));
+    }
+
+    /// 守内核版本一致性：编译期固定的 `.mise.toml` 版本必须与运行时内核一致。
+    ///
+    /// merge 的标量/数组合并语义随内核实现变化，只对某个版本验证过。开发机 PATH
+    /// 上若挂着另一个版本，本地测试通过而线上行为不同。这条把差异点出来。
+    #[test]
+    fn kernel_version_matches_pinned_toolchain() {
+        const MISE_TOML: &str = include_str!("../../../.mise.toml");
+        let pinned = MISE_TOML
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("sing-box"))
+            .and_then(|rest| rest.split('"').nth(1))
+            .expect(".mise.toml 应固定 sing-box 版本");
+        if let Some(reason) = kernel_unavailable_reason() {
+            eprintln!("skip: {reason}");
+            return;
+        }
+        let out = std::process::Command::new(template::resolve_singbox_binary())
+            .arg("version")
+            .output()
+            .expect("执行 sing-box version");
+        let text = String::from_utf8_lossy(&out.stdout);
+        // 首行形如 `sing-box version 1.14.1`
+        let actual = text.split_whitespace().nth(2).unwrap_or("");
+        assert_eq!(
+            actual, pinned,
+            "运行的内核版本 {actual} 与 .mise.toml 固定的 {pinned} 不一致：\
+             merge 语义可能随版本变化，先对齐再跑测试"
+        );
+    }
 }
