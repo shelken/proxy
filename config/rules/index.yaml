@@ -1,0 +1,44 @@
+# 规则清单 —— 本仓库是唯一权威规则源
+#
+# 格式：tag: source
+#   tag     产物文件名，也是 sing-box 里的 rule_set tag
+#   source  仓库相对路径则读本地文件；以 http 开头则按 URL 拉取
+#
+# 只编辑本文件与 custom/ 下的列表：各客户端产物（sing-box .srs / clash yaml / plain）
+# 由 scripts/rules-compile.ts 编译，CI 自动发布到 sing-box-rules 分支，底模按
+# update_interval 远程引用。详见 config/rules/README.md
+#
+# 键按 ASCII 忽略大小写排序，同字母大小写相邻。纯数字 tag 须加引号（如 "1024"），
+# 否则 YAML 会解析成数字键。
+
+"1024": config/rules/custom/1024.list
+Adult: config/rules/custom/Adult.list
+Advertising: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Advertising/Advertising.list
+Apple: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Apple/Apple_Domain.list
+Apple-AI: config/rules/custom/Apple-AI.list
+cftunnel: config/rules/custom/cftunnel.list
+ChinaMax: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/ChinaMax/ChinaMax.list
+dev: config/rules/custom/dev.list
+Facebook: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Facebook/Facebook.list
+Gemini: config/rules/custom/Gemini.list
+geoip-cn: https://raw.githubusercontent.com/Loon0x00/LoonLiteRules/main/direct/cn.list
+grok: config/rules/custom/grok.list
+Hijacking: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list
+Instagram: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Instagram/Instagram.list
+Japan: config/rules/custom/Japan.list
+Lan: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Lan/Lan.list
+Microsoft: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Microsoft/Microsoft.list
+MyDirect: config/rules/custom/MyDirect.list
+MyProxy: config/rules/custom/MyProxy.list
+MyReject: config/rules/custom/MyReject.list
+OpenAI: config/rules/custom/OpenAI.list
+opencode: config/rules/custom/opencode.list
+PayPal: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/PayPal/PayPal.list
+Privacy: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Privacy/Privacy.list
+ptcg: config/rules/custom/ptcg.list
+Spotify: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Loon/Spotify/Spotify.list
+Telegram: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Telegram/Telegram.list
+TikTok: https://raw.githubusercontent.com/Semporia/TikTok-Unlock/master/Loon/TikTok.list
+Twitter: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/63bc79ab90647613b9f2df80389caf133e4b6214/rule/Loon/Twitter/Twitter.list
+YouTube: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/YouTube/YouTube.list
+zai: config/rules/custom/zai.list

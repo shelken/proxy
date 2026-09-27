@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * 规则编译器：`config/rules/index.txt` 清单 → 各客户端规则产物 + `sing-box` 二进制规则集。
+ * 规则编译器：`config/rules/index.yaml` 清单 → 各客户端规则产物 + `sing-box` 二进制规则集。
  *
  * 三种产物形态，同一份源规则各自表达：
  *   - singbox  源规则 JSON，再用官方 `sing-box rule-set compile` 编成 `.srs`
@@ -19,7 +19,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const MANIFEST_PATH = join(ROOT, "config/rules/index.txt");
+const MANIFEST_PATH = join(ROOT, "config/rules/index.yaml");
 const GENERATED_DIR = join(ROOT, "config/rules/generated");
 const TEMPLATE_PATH = join(ROOT, "config/sing-box/template.json");
 const SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
@@ -124,7 +124,6 @@ export interface Emission {
 
 export interface ManifestItem {
   tag: string;
-  policy: string;
   source: string;
 }
 
@@ -198,20 +197,24 @@ export function orphanCustomLists(items: ManifestItem[]): string[] {
     .sort();
 }
 
+/**
+ * 解析清单 YAML：顶层是 `tag: source` 映射，注释与空行由 YAML 解析器处理。
+ *
+ * 纯数字 tag 在文件里须带引号，否则 YAML 解析成数字键——JS 对象键恒为字符串，
+ * 这里不额外转换，由文件侧约定保证形态一致。
+ */
 export function loadManifest(path = MANIFEST_PATH): ManifestItem[] {
+  const raw = readFileSync(path, "utf8");
+  const parsed = Bun.YAML.parse(raw);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`清单必须是 tag: source 映射: ${path}`);
+  }
   const items: ManifestItem[] = [];
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const parts = line.split("|").map((p) => p.trim());
-    if (parts.length !== 3) {
-      throw new Error(`清单行格式错误（应为 tag|policy|source）: ${line}`);
+  for (const [tag, source] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof source !== "string" || !source) {
+      throw new Error(`清单项 ${tag} 的 source 必须是非空字符串`);
     }
-    const [tag, policy, source] = parts;
-    if (!tag || !policy || !source) {
-      throw new Error(`清单行有空字段: ${line}`);
-    }
-    items.push({ tag, policy, source });
+    items.push({ tag, source });
   }
   return items;
 }
@@ -651,16 +654,19 @@ export function dnsCompanionNames(template: Template, items: ManifestItem[]): st
 /**
  * 校验底模与清单是否漂移。这是底模那侧唯一被生成器触碰的地方。
  *
- * 两点必须一致，任一处不一致都说明有人改了单边：
- *   1. 底模 route.rule_set 声明的 tag 集合 == 清单 tag 集合 + DNS 伴生
- *   2. 底模 route.rules 里每个 tag 的去向 == 清单 policy 列
+ * 不变量：底模 route.rule_set 声明的 tag 集合 == 清单 tag 集合 + DNS 伴生，
+ * 且清单里每个 tag 都出现在 route.rules 里。任一处不一致都说明有人改了单边：
+ * 模板声明了没构建的 .srs，内核启动即 FATAL。
+ *
+ * 路由去向（outbound）由底模单方面决定，不再与清单交叉校验——底模的手写分组
+ * （多 tag 合组、顺序即优先级）无法由清单派生，硬校验只会逼出无意义的重复字段。
  *
  * 底模是手写单一配置源，这里只报错不改写。静默回写会覆盖手写意图
  * （如 `apple` 从 direct 聚合里拆出来独立成组）。
  */
 export function validateTemplate(template: Template, items: ManifestItem[]): string[] {
   const errors: string[] = [];
-  const expectedPolicies = new Map(items.map((i) => [i.tag, i.policy]));
+  const manifestTags = new Set(items.map((i) => i.tag));
   // 先算伴生：它自身会对「DNS 规则引用清单外规则集」直接抛错，这属于配置错误。
   const companions = new Set(dnsCompanionNames(template, items));
 
@@ -678,16 +684,9 @@ export function validateTemplate(template: Template, items: ManifestItem[]): str
     for (const tag of tags) routed.set(String(tag), dest);
   }
 
-  for (const [tag, policy] of expectedPolicies) {
+  for (const tag of manifestTags) {
     if (!declared.has(tag)) errors.push(`清单里的 ${tag} 未在底模 route.rule_set 声明`);
-    const actual = routed.get(tag);
-    if (actual === undefined) {
-      errors.push(`清单里的 ${tag} 未出现在底模 route.rules`);
-    } else if (actual !== policy) {
-      errors.push(
-        `清单与底模路由不一致：${tag} 清单写 policy=${policy}，底模路由到 ${actual}`,
-      );
-    }
+    if (!routed.has(tag)) errors.push(`清单里的 ${tag} 未出现在底模 route.rules`);
   }
 
   for (const companion of companions) {
@@ -700,7 +699,7 @@ export function validateTemplate(template: Template, items: ManifestItem[]): str
   }
 
   for (const tag of declared) {
-    if (!expectedPolicies.has(tag) && !companions.has(tag)) {
+    if (!manifestTags.has(tag) && !companions.has(tag)) {
       errors.push(`底模声明了 ${tag}，但它既不在清单里也不是 DNS 伴生`);
     }
   }
@@ -810,7 +809,7 @@ export function runBuild(options: BuildOptions): number {
   const orphans = orphanCustomLists(items);
   if (orphans.length > 0) {
     console.warn(
-      `WARN: 以下 custom/ 列表没有被 index.txt 引用，不会产出任何规则：\n  ${orphans.join("\n  ")}`,
+      `WARN: 以下 custom/ 列表没有被 index.yaml 引用，不会产出任何规则：\n  ${orphans.join("\n  ")}`,
     );
   }
 
@@ -832,7 +831,7 @@ export function runBuild(options: BuildOptions): number {
     const needsDns = companions.has(dnsRulesetName(outputName(item.tag)));
     const results = buildOne(item, binary, needsDns);
     const parts = results.map((r) => `${r.client}=${r.total - r.skipped}/${r.total}`);
-    console.log(`built ${item.tag} -> ${parts.join(", ")}, policy=${item.policy}`);
+    console.log(`built ${item.tag} -> ${parts.join(", ")}`);
     built++;
   }
 
@@ -929,7 +928,7 @@ function cmdCheck(): number {
   const items = loadManifest();
   const orphans = orphanCustomLists(items);
   for (const rel of orphans) {
-    console.warn(`WARN: ${rel} 没有被 index.txt 引用，不会产出任何规则`);
+    console.warn(`WARN: ${rel} 没有被 index.yaml 引用，不会产出任何规则`);
   }
   const errors = validateTemplate(loadTemplate(), items);
   if (errors.length === 0) {

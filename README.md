@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.txt` 统一声明，编译为 sing-box `.srs`、Clash yaml 等产物并由 CI 发布到 `sing-box-rules` 分支供远程引用
+- **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.yaml` 统一声明，编译为 sing-box `.srs`、Clash yaml 等产物并由 CI 发布到 `sing-box-rules` 分支供远程引用
 - **标准化 sing-box 底模**：双入站、FakeIP DNS、分流策略组与内网穿透的完整骨架，策略组清单见底模自身
 - **设备侧订阅交付（sb-sync）**：本机订阅与节点加密成一条 URL，服务端装配后由 SFM 按间隔自动拉取，凭据零外泄
 - **Loon 插件**：移动端与 macOS 端插件（去广告、自动化签到等），独立开关与幂等保证
@@ -39,26 +39,28 @@ sb-sync encode -s https://sub.example.com
 
 ### 自建：套用自己的规则与底模
 
-`config/rules/index.txt` 是规则清单，`config/sing-box/template.json` 是完整配置骨架，
+`config/rules/index.yaml` 是规则清单，`config/sing-box/template.json` 是完整配置骨架，
 它通过 `rule_set` 远程引用 `sing-box-rules` 分支上编译好的 `.srs`、按天自动更新。
 自用场景直接套用即可，换自己的规则产物时才需改这些地址；增删域名改 `config/rules/custom/*.list`，
-或直接在 `index.txt` 追加一行。开发环境搭建与测试命令见[贡献](#贡献)。
+或直接在 `index.yaml` 追加一项。开发环境搭建与测试命令见[贡献](#贡献)。
 
 ## 核心配置
 
-`config/rules/index.txt` 是唯一需要手工维护的规则清单，三列以竖线分隔：
+`config/rules/index.yaml` 是唯一需要手工维护的规则清单，顶层是 `tag: source` 映射：
 
-```text
-tag|policy|source
-MyReject|reject|config/rules/custom/MyReject.list
-Apple-AI|appleai|https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple_AI/Apple_AI.list
+```yaml
+MyReject: config/rules/custom/MyReject.list
+Apple-AI: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple_AI/Apple_AI.list
+"1024": config/rules/custom/1024.list
 ```
 
-| 列 | 说明 |
+| 字段 | 说明 |
 | :--- | :--- |
-| `tag` | 规则集标识，也是底模里的 `rule_set` tag |
-| `policy` | 目标出站策略组；`reject` 会编译成 `action: reject` |
-| `source` | 仓库相对路径读本地文件，`http` 开头则按 URL 拉取 |
+| key | 规则集标识，也是底模里的 `rule_set` tag |
+| value | 仓库相对路径读本地文件，`http` 开头则按 URL 拉取 |
+
+键按 ASCII 忽略大小写排序，同字母大小写相邻；纯数字 tag 须加引号（如 `"1024"`），
+否则 YAML 会解析成数字键。出站去向由底模单方面决定，清单不再重复声明。
 
 自定义列表（`custom/*.list`）支持 `DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` /
 `DOMAIN-REGEX` / `IP-CIDR` / `IP-CIDR6` / `SRC-IP-CIDR` / `SRC-PORT` / `DST-PORT` /
@@ -76,7 +78,7 @@ jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) �
 
 ## 目录索引
 
-- `config/rules/`：分流规则源（`index.txt` + `custom/`）与编译器 `scripts/rules-compile.ts`，详见其 [README](./config/rules/README.md)
+- `config/rules/`：分流规则源（`index.yaml` + `custom/`）与编译器 `scripts/rules-compile.ts`，详见其 [README](./config/rules/README.md)
 - `config/sing-box/`：sing-box 标准底模与沙箱闭环套件
 - `config/loon/`：Loon 配置文件与插件
 - `scripts/sb-sync-rs/`：sb-sync Rust 源码（客户端编码 + 服务端装配）
@@ -104,7 +106,7 @@ just trace google.com       # 沙箱内追踪指定域名的分流与真实出�
 改动 `config/rules/` 下的清单或底模后，用这两条确认并重建规则产物：
 
 ```bash
-just rules-check    # 校验清单 policy 与底模路由是否一致
+just rules-check    # 校验清单 tag 集合与底模声明是否一致
 just rules-build    # 全量编译各端产物（CI 也会在推送后自动做这件事）
 ```
 

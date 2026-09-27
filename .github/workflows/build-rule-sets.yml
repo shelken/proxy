@@ -11,7 +11,7 @@ on:
       # 发布分支自身由本工作流写入，不该再触发一轮
       - "sing-box-rules"
     paths:
-      - "config/rules/index.txt"
+      - "config/rules/index.yaml"
       - "config/rules/custom/**"
       - "config/sing-box/template.json"
       - "scripts/rules-compile.ts"

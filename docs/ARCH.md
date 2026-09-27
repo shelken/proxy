@@ -10,7 +10,7 @@ proxy/
 ├── scripts/
 │   └── sb-sync-rs/       # sb-sync 客户端编码 + 服务端装配（Rust 单二进制）
 ├── config/
-│   ├── rules/            # 分流规则源 (自定义 .list 与上游 index.txt)
+│   ├── rules/            # 分流规则源 (自定义 .list 与上游 index.yaml)
 │   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sb-sync) 与用户指南
@@ -24,7 +24,7 @@ proxy/
 ```mermaid
 flowchart TD
     subgraph S1 ["1. 规则编译 (CI)"]
-        R_SRC["规则清单 (config/rules/index.txt + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
+        R_SRC["规则清单 (config/rules/index.yaml + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
         GHA --> R_BIN["各端产物\n(singbox 66 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
     end
 
@@ -48,8 +48,8 @@ flowchart TD
 
 要点：
 
-- **规则产物自动重建**：改 `index.txt` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
-- **清单与底模强一致**：CI 校验每个 tag 的 policy 与底模 `route.rules` 的去向一致，漂移即失败（底模是手写单一配置源，编译器只报错不改写）
+- **规则产物自动重建**：改 `index.yaml` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
+- **清单与底模引用一致**：CI 校验清单 tag 集合与底模声明的规则集相互吻合，缺一即失败（底模是手写单一配置源，编译器只报错不改写）
 - **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
 - **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct` / `01-overlay` / `02-base` 命名，路径字典序决定优先级（标量取先者、数组按序拼接）
 - **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态
