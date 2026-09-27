@@ -168,6 +168,13 @@ fn compile_pattern(item: &str) -> Option<regex::Regex> {
 }
 
 /// 策略组填充：底模声明 selector/urltest 的 outbounds 占位项展开为真实节点标签。
+///
+/// 组之间可以互相引用（如 anthropic → openai）。订阅里没有某个组对应的节点时该组会被
+/// 剔除，此时任何引用它的组都必须同步剪掉这个引用，否则产物留下悬空 tag，
+/// 内核启动直接 FATAL `dependency[xxx] not found`。
+///
+/// 判活是「能否传递地落到具体节点」：只有直接含节点 / direct，或引用到已判活的组，才算活。
+/// 迭代到不再变化（最小不动点），保证剔除空组后不留悬空引用。
 fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
     let declared: Vec<&Value> = template["outbounds"]
         .as_array()
@@ -177,12 +184,15 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
                 .collect()
         })
         .unwrap_or_default();
-    let selector_tags: std::collections::HashSet<&str> =
+    let is_node_or_direct = |item: &str| item == "direct" || tags.iter().any(|t| t == item);
+    // 组间引用需要在判活阶段识别：占位项里若不是节点也不是 direct，就是组引用或模式。
+    let group_tags: std::collections::HashSet<&str> =
         declared.iter().filter_map(|s| s["tag"].as_str()).collect();
 
-    declared
-        .into_iter()
-        .filter_map(|sel| {
+    // 展开候选池：节点/direct 直接落地；对其它组的引用保留 tag；模式就地展开成节点。
+    let pools: Vec<(String, Vec<String>)> = declared
+        .iter()
+        .map(|sel| {
             let mut expanded: Vec<String> = Vec::new();
             for item in sel["outbounds"]
                 .as_array()
@@ -192,10 +202,7 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
                 let Some(item_str) = item.as_str() else {
                     continue;
                 };
-                if item_str == "direct"
-                    || selector_tags.contains(item_str)
-                    || tags.iter().any(|t| t == item_str)
-                {
+                if is_node_or_direct(item_str) || group_tags.contains(item_str) {
                     expanded.push(item_str.to_string());
                     continue;
                 }
@@ -206,17 +213,62 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
             // 去重 + 排除自身
             let mut seen = std::collections::HashSet::new();
             expanded.retain(|t| t != sel["tag"].as_str().unwrap_or("") && seen.insert(t.clone()));
-            if expanded.is_empty() {
-                // 空组(订阅无匹配节点)会让 sing-box FATAL "missing tags",整体跳过:
-                // 产物少一个组,路由不炸(国家组均不被 route 规则引用)。
+            (sel["tag"].as_str().unwrap_or("").to_string(), expanded)
+        })
+        .collect();
+
+    // 判活：某组只要能落到 具体节点 / direct / 已判活的组，就算活。迭代求最小不动点。
+    let mut alive: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        let mut changed = false;
+        for (tag, refs) in &pools {
+            if alive.contains(tag) {
+                continue;
+            }
+            if refs
+                .iter()
+                .any(|r| is_node_or_direct(r) || alive.contains(r))
+            {
+                alive.insert(tag.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    declared
+        .iter()
+        .filter_map(|sel| {
+            let tag = sel["tag"].as_str().unwrap_or("");
+            let kept: Vec<String> = pools
+                .iter()
+                .find(|(t, _)| t == tag)
+                .map(|(_, refs)| {
+                    refs.iter()
+                        .filter(|r| is_node_or_direct(r) || alive.contains(*r))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            if kept.is_empty() {
+                // 空组(订阅无匹配节点)会让 sing-box FATAL,整体跳过;引用它的组已在上面被剪掉。
                 eprintln!(
-                    "[sb-sync] 策略组 '{}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)",
-                    sel["tag"].as_str().unwrap_or("?")
+                    "[sb-sync] 策略组 '{tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)"
                 );
                 return None;
             }
-            let mut out = sel.clone();
-            out["outbounds"] = json!(expanded);
+            let mut out = (*sel).clone();
+            out["outbounds"] = json!(kept);
+            // default 指向被剔除的组时移除,否则同样是悬空引用。
+            if let Some(default) = out.get("default").and_then(|d| d.as_str()) {
+                if !kept.iter().any(|k| k == default) {
+                    if let Some(obj) = out.as_object_mut() {
+                        obj.remove("default");
+                    }
+                }
+            }
             if out.get("interrupt_exist_connections").is_none() {
                 out["interrupt_exist_connections"] = json!(true);
             }
@@ -350,6 +402,69 @@ mod tests {
             !groups.iter().any(|g| g["tag"] == "kr"),
             "kr 组应被跳过(无匹配节点)"
         );
+    }
+
+    /// 回归：订阅无 selfhost 节点时，组被剔除后任何指向它的引用都必须同步剪掉。
+    ///
+    /// 内核在启动阶段就检查 outbound 依赖，悬空 tag 会直接
+    /// FATAL `dependency[xxx] not found`，整份配置起不来（不是单组失效）。
+    /// 未剪引用前该场景由 `proxy.default = selfhost` 触发。
+    #[test]
+    fn dangling_group_refs_are_pruned() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = AssembleInput {
+            // 只有日本/新加坡节点：selfhost 组展开为空被剔除
+            sources: "hy2://pass@192.0.2.1:8388#jp-osaka-01|\
+                      hy2://pass@192.0.2.2:8388#sg-singapore-01"
+                .into(),
+            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        };
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
+        let defined: std::collections::HashSet<&str> =
+            outbounds.iter().filter_map(|o| o["tag"].as_str()).collect();
+
+        // 不变量：任何组引用的 tag 都必须真实存在（除 direct 外）
+        for group in outbounds
+            .iter()
+            .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
+        {
+            for member in group["outbounds"].as_array().expect("组内为数组") {
+                let member = member.as_str().unwrap_or("");
+                assert!(
+                    member == "direct" || defined.contains(member),
+                    "组 {} 引用了不存在的 tag {member}，全部定义: {defined:?}",
+                    group["tag"]
+                );
+            }
+            // default 也必须指向组内成员
+            if let Some(default) = group.get("default").and_then(|d| d.as_str()) {
+                assert!(
+                    group["outbounds"]
+                        .as_array()
+                        .is_some_and(|m| m.iter().any(|t| t == default)),
+                    "组 {} 的 default={default} 不在成员内",
+                    group["tag"]
+                );
+            }
+        }
+
+        // 该场景的具体形态：proxy 只剩节点，openai 退化为引用 proxy，anthropic 仍可达
+        let group = |tag: &str| {
+            outbounds
+                .iter()
+                .find(|o| o["tag"] == tag)
+                .unwrap_or_else(|| panic!("{tag} 组缺失"))
+        };
+        assert!(
+            group("proxy")["outbounds"]
+                .as_array()
+                .is_some_and(|m| !m.iter().any(|t| t == "selfhost")),
+            "proxy 不应再引用被剔除的 selfhost"
+        );
+        assert_eq!(group("anthropic")["default"], json!("openai"));
     }
 
     /// 回归：分组填充端到端——底模 HK 组 (?i) 模式应命中小写节点。
@@ -598,6 +713,7 @@ mod tests {
                 "selfhost",
                 "proxy",
                 "openai",
+                "anthropic",
                 "gemini",
                 "dev",
                 "adultnsfw",
@@ -610,7 +726,7 @@ mod tests {
                 "apple",
                 "paypal",
                 "grok",
-                "1024",
+                "1024proxy",
                 "tailscale",
             ],
             "selector 组集合与底模顺序"

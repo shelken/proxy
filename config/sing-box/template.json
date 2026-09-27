@@ -133,6 +133,13 @@
       },
       {
         "rule_set": [
+          "Anthropic"
+        ],
+        "action": "route",
+        "outbound": "anthropic"
+      },
+      {
+        "rule_set": [
           "Apple-AI"
         ],
         "action": "route",
@@ -175,10 +182,10 @@
       },
       {
         "rule_set": [
-          "1024"
+          "1024proxy"
         ],
         "action": "route",
-        "outbound": "1024"
+        "outbound": "1024proxy"
       },
       {
         "rule_set": [
@@ -249,9 +256,9 @@
     "rule_set": [
       {
         "type": "remote",
-        "tag": "1024",
+        "tag": "1024proxy",
         "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024.srs",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024proxy.srs",
         "update_interval": "1d"
       },
       {
@@ -266,6 +273,13 @@
         "tag": "Advertising",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Anthropic",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Anthropic.srs",
         "update_interval": "1d"
       },
       {
@@ -522,6 +536,17 @@
     },
     {
       "type": "selector",
+      "tag": "anthropic",
+      "outbounds": [
+        "openai",
+        "selfhost",
+        "(?i)(新加坡|坡|狮城|SG|Singapore|日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"
+      ],
+      "default": "openai",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
       "tag": "gemini",
       "outbounds": [
         "openai",
@@ -721,7 +746,7 @@
     },
     {
       "type": "selector",
-      "tag": "1024",
+      "tag": "1024proxy",
       "outbounds": [
         "proxy",
         "selfhost",

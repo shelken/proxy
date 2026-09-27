@@ -35,6 +35,13 @@ function singboxRules(input: string): SingBoxRule[] {
   return JSON.parse(emitSingbox(normalizeRuleLines(input)).text).rules;
 }
 
+/** 把清单内容写到临时文件，返回路径。测试只读不写仓库目录。 */
+function writeManifest(content: string): string {
+  const path = `/tmp/rules-manifest-${Math.random().toString(36).slice(2)}.yaml`;
+  Bun.write(path, content);
+  return path;
+}
+
 describe("归一化", () => {
   test("丢掉注释、空行与 YAML payload 外壳", () => {
     const lines = normalizeRuleLines(
@@ -311,21 +318,40 @@ describe("清单解析", () => {
     expect(outputName("***")).toBe("rule");
   });
 
-  test("清单行缺列或有空字段都直接报错", () => {
-    const write = (content: string): string => {
-      const path = `/tmp/rules-manifest-${Math.random().toString(36).slice(2)}.txt`;
-      Bun.write(path, content);
-      return path;
-    };
-    expect(() => loadManifest(write("OnlyTwo|Fields\n"))).toThrow(/格式错误/);
-    expect(() => loadManifest(write("tag||source\n"))).toThrow(/空字段/);
+  test("解析 tag: source 映射，注释与空行被忽略", () => {
+    const path = writeManifest(
+      [
+        "# 注释",
+        "OpenAI: config/rules/custom/OpenAI.list",
+        "",
+        "Twitter: https://example.com/Twitter.list",
+      ].join("\n"),
+    );
+    expect(loadManifest(path)).toEqual([
+      { tag: "OpenAI", source: "config/rules/custom/OpenAI.list" },
+      { tag: "Twitter", source: "https://example.com/Twitter.list" },
+    ]);
+  });
+
+  test("数字键带引号时仍是字符串 tag", () => {
+    const path = writeManifest('"867": config/rules/custom/x.list');
+    expect(loadManifest(path)).toEqual([{ tag: "867", source: "config/rules/custom/x.list" }]);
+  });
+
+  test("source 非字符串或为空时直接报错", () => {
+    expect(() => loadManifest(writeManifest("OpenAI:\n"))).toThrow(/必须是非空字符串/);
+    expect(() => loadManifest(writeManifest("OpenAI: ''\n"))).toThrow(/必须是非空字符串/);
+  });
+
+  test("顶层不是映射时报错", () => {
+    expect(() => loadManifest(writeManifest("- a\n- b\n"))).toThrow(/必须是 tag: source 映射/);
   });
 
   test("只在 custom/ 放文件、不写进清单时能被识别为孤儿", () => {
     // 真实踩过的坑：把新列表丢进 custom/ 就以为 CI 会发现它。
     // 清单是唯一入口，孤儿文件不产出任何规则，所以必须显式提醒。
     const orphans = orphanCustomLists([
-      { tag: "Known", policy: "proxy", source: "config/rules/custom/MyReject.list" },
+      { tag: "Known", source: "config/rules/custom/MyReject.list" },
     ]);
     expect(orphans).toContain("config/rules/custom/OpenAI.list");
     expect(orphans).not.toContain("config/rules/custom/MyReject.list");
@@ -334,8 +360,8 @@ describe("清单解析", () => {
 
 describe("底模契约校验", () => {
   const items: ManifestItem[] = [
-    { tag: "MyReject", policy: "reject", source: "config/rules/custom/MyReject.list" },
-    { tag: "OpenAI", policy: "openai", source: "config/rules/custom/OpenAI.list" },
+    { tag: "MyReject", source: "config/rules/custom/MyReject.list" },
+    { tag: "OpenAI", source: "config/rules/custom/OpenAI.list" },
   ];
   const template = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     route: {
@@ -353,21 +379,18 @@ describe("底模契约校验", () => {
     expect(validateTemplate(template(), items)).toEqual([]);
   });
 
-  test("policy 与底模路由不一致时报出该 tag", () => {
-    // 真实踩过：template 把 Apple 从 direct 聚合拆出独立 apple 组，清单没同步改 policy。
+  test("清单里的 tag 未出现在 route.rules 时报错", () => {
+    // 模板声明了 rule_set 却没写路由规则：规则集不会生效，属于配置漏写。
     const drift = validateTemplate(
       template({
         route: {
           rule_set: [{ tag: "MyReject" }, { tag: "OpenAI" }],
-          rules: [
-            { rule_set: ["MyReject"], action: "reject" },
-            { rule_set: ["OpenAI"], action: "route", outbound: "proxy" },
-          ],
+          rules: [{ rule_set: ["MyReject"], action: "reject" }],
         },
       }),
       items,
     );
-    expect(drift.some((e) => e.includes("OpenAI") && e.includes("openai") && e.includes("proxy"))).toBe(
+    expect(drift.some((e) => e.includes("OpenAI") && e.includes("未出现在底模 route.rules"))).toBe(
       true,
     );
   });

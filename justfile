@@ -82,8 +82,8 @@ rules-build:
 rules-build-one tag:
     @bun scripts/rules-compile.ts build {{tag}}
 
-# 校验清单（index.txt）与底模（template.json）路由是否一致
-# 改了底模的路由分组却忘了同步清单 policy 时，这里会直接报出是哪个 tag
+# 校验清单（index.yaml）的 tag 集合与底模（template.json）声明是否一致
+# 改了底模的规则集引用却忘了同步清单时，这里会直接报出是哪个 tag
 rules-check:
     @bun scripts/rules-compile.ts check
 
