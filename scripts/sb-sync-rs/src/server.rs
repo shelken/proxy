@@ -193,6 +193,49 @@ fn run_singbox_merge_with(
     std::fs::read_to_string(&result_path).map_err(|e| format!("读取合并结果失败: {e}"))
 }
 
+/// 离线校验用：把 overlay 合并到底模上，返回合并结果 JSON。
+///
+/// 与 `handle_sub` 走同一条合并路径（同一套层名与优先级），差别只在没有反回环层
+/// （它需要订阅节点，属运行期数据）。层序不变，故 overlay 与底模的相对优先级一致。
+pub fn merge_overlay(base: &Value, overlay: Option<&Value>) -> Result<Value, String> {
+    let dir = TempMergeDir::create()?;
+    let mut layers: Vec<(&str, &Value)> = Vec::with_capacity(2);
+    if let Some(ov) = overlay {
+        layers.push((LAYER_OVERLAY, ov));
+    }
+    layers.push((LAYER_BASE, base));
+    let text = run_singbox_merge(&dir, &layers)?;
+    serde_json::from_str(&text).map_err(|e| format!("合并结果不是合法 JSON: {e}"))
+}
+
+/// 离线校验用：对配置跑一次内核 `check`（只验语法与引用，不建 TUN、不联网）。
+pub fn kernel_check(cfg: &Value) -> Result<(), String> {
+    let dir = TempMergeDir::create()?;
+    let path = dir.path.join("candidate.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(cfg).map_err(|e| format!("序列化候选配置失败: {e}"))?,
+    )
+    .map_err(|e| format!("写候选配置失败: {e}"))?;
+    let output = std::process::Command::new(template::resolve_singbox_binary())
+        .arg("check")
+        .arg("-c")
+        .arg(path.display().to_string())
+        .output()
+        .map_err(|e| format!("启动内核失败: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let brief: String = stderr
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    Err(format!("内核 check 失败:\n  {brief}"))
+}
+
 /// 单次请求完整处理：解密 → 装配 → 合并 → JSON 字符串。
 fn handle_sub(
     secret_key: &crypto::CryptoStaticSecret,

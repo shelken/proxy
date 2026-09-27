@@ -28,6 +28,16 @@ sb-sync encode -s <server>
 密文载荷就是这份配置本身，每次 `encode` 都用新的临时密钥与随机 nonce，所以 URL 必然变化。
 **必须**把新 URL 贴回 SFM 覆盖旧值：profile 存的是 URL 字符串，不更新就永远拉的是旧配置。
 
+改完先跑一次离线校验，在重贴 SFM 之前确认 overlay 合法且真的生效：
+
+```bash
+sb-sync check -c ~/.config/sing-box/config.yaml
+```
+
+它把 overlay 合到底模上跑内核 `check` 并打印生效摘要（`dns.rules` 逐条、`route.default_domain_resolver`、
+`log.level`）。两条典型问题它当场拦下：overlay 引用一个没声明的 `rule_set`（SFM 里才会
+`FATAL ... rule-set not found`），以及改动被底模盖过没生效。
+
 **只改了本机配置文件之外的东西**（服务端底模文件、机场订阅里新增的节点）— 无需任何操作。
 服务端每次 `/sub` 请求都现拉订阅、现加载底模，SFM 下次定时拉取即取到新内容。
 
