@@ -7,6 +7,7 @@
 - `config/loon/`: Loon 配置与插件（移动端 + macOS 桌面端），含 `plugins/` 插件目录与各端 `.conf` 配置
 - `config/clash/`、`config/surge/`: 备用客户端配置
 - `scripts/`: 构建等脚本
+- `scripts/sb-sync-rs/`: sb-sync源码(`docs/sb-sync.md`文档介绍)
 - `docs/adr/`: 架构决策记录（编号递增，一个决策一篇）
 - `docs/`: 架构与使用文档（`ARCH.md` 全局架构、`sb-sync.md` 实现细节、`user-guide/` 用户指南）
 - `postmortems/`: 事故与踩坑记录（编号递增，索引见 `postmortems/README.md`）
@@ -17,7 +18,7 @@
 
 - 优先从github进行搜索类似需求的代码, 参考实现, 根据用户需求进行规划
 - 任何代理软件的配置必须阅读最新文档, 禁止使用被任何标记为废弃的配置项
-- 禁止读取任何隐私配置, 读取到任何 订阅链接/密码 必须停止
+- 禁止读取任何隐私配置, 读取到任何 订阅链接/密码 必须停止(例如`~/.config/sing-box/config.yaml`有节点)
 
 ## 开发约束
 
