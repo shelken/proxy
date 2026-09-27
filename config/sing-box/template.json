@@ -133,6 +133,13 @@
       },
       {
         "rule_set": [
+          "Anthropic"
+        ],
+        "action": "route",
+        "outbound": "anthropic"
+      },
+      {
+        "rule_set": [
           "Apple-AI"
         ],
         "action": "route",
@@ -266,6 +273,13 @@
         "tag": "Advertising",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Anthropic",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Anthropic.srs",
         "update_interval": "1d"
       },
       {
@@ -518,6 +532,17 @@
         "(?i)(港|日本|台湾|GPT|美)"
       ],
       "default": "selfhost",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "anthropic",
+      "outbounds": [
+        "openai",
+        "selfhost",
+        "(?i)(新加坡|坡|狮城|SG|Singapore|日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"
+      ],
+      "default": "openai",
       "interrupt_exist_connections": true
     },
     {

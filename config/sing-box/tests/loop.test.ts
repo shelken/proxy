@@ -25,6 +25,7 @@ const CONFIG = `${WORK}/config.json`;
  */
 const HITS: { value: string; ruleSet: string; outbound: string }[] = [
   { value: "1024proxy.net", ruleSet: "1024proxy", outbound: "1024proxy" },
+  { value: "api.anthropic.com", ruleSet: "Anthropic", outbound: "anthropic" },
   { value: "s.dsqcjk.com", ruleSet: "Adult", outbound: "adultnsfw" },
   { value: "guzzoni.apple.com", ruleSet: "Apple-AI", outbound: "appleai" },
   { value: "ai.google.dev", ruleSet: "Gemini", outbound: "gemini" },

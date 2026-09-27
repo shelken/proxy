@@ -14,6 +14,7 @@
 "1024proxy": config/rules/custom/1024proxy.list
 Adult: config/rules/custom/Adult.list
 Advertising: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Advertising/Advertising.list
+Anthropic: config/rules/custom/Anthropic.list
 Apple: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Apple/Apple_Domain.list
 Apple-AI: config/rules/custom/Apple-AI.list
 cftunnel: config/rules/custom/cftunnel.list

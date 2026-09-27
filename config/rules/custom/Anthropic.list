@@ -1,0 +1,12 @@
+# Anthropic / Claude
+# 源：v2fly domain-list-community/data/anthropic（与 MetaCubeX geosite anthropic 一致）
+# cdn.usefathom.com 来自 blackmatrix7 的 Claude 列表
+DOMAIN,cdn.usefathom.com
+DOMAIN,servd-anthropic-website.b-cdn.net
+DOMAIN-SUFFIX,anthropic.com
+DOMAIN-SUFFIX,clau.de
+DOMAIN-SUFFIX,claude.ai
+DOMAIN-SUFFIX,claude.com
+DOMAIN-SUFFIX,claudemcpclient.com
+DOMAIN-SUFFIX,claudemcpcontent.com
+DOMAIN-SUFFIX,claudeusercontent.com
