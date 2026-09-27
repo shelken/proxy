@@ -150,7 +150,7 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 
 ### 实例复用
 
-服务端直接复用客户端的装配管线（`collect_nodes` / `finalize` / `populate_selectors`），因此「节点标签分配、策略组展开、空组跳过」在两个形态下语义一致。策略组匹配不到节点时整组跳过并告警，避免 sing-box `missing tags` 致命错误
+服务端直接复用客户端的装配管线（`collect_nodes` / `finalize` / `populate_selectors`），因此「节点标签分配、策略组展开、空组跳过」在两个形态下语义一致。策略组匹配不到节点时整组跳过并告警，同时剪掉其它组对它的引用（含 `default`），避免产物留下悬空 tag 触发 sing-box `dependency[...] not found` 致命错误
 
 ## 6. 合并机制
 
