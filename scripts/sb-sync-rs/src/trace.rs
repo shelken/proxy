@@ -6,6 +6,10 @@
 //!   2. 路由走线：具体哪条路由规则命中、分配到哪个策略组（`route(gemini)` / `route(direct)` 等）
 //!   3. 出口链路：连接实际经过的节点链（`vps-hy2 → selfhost → openai → gemini`）
 //!   4. 首字节耗时：端到端真实延迟
+//!
+//! 与 `scripts/trace-route.ts`（沙箱侧）的分工：本模块跑在真机上，验证**当前部署**
+//! 在真实网络环境下的表现；沙箱侧在 Lima VM 内用于**离线复现**配置裁决。两者被测
+//! 对象不同，各自维护日志解析；改任一侧只需与内核实际日志格式对齐，不必互相同步。
 
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
@@ -102,6 +106,12 @@ struct KernelDecisions {
     fakeip_answer: Option<String>,
     /// 拨号解析失败证据行（`lookup failed for <domain>: ...`）
     dial_failure: Option<String>,
+    /// 拨号解析成功行（`lookup succeed for <domain>: ...`）
+    dial_success: Option<String>,
+    /// 拨号解析发起行（`dns: lookup domain <domain>`）。
+    /// 这行存在而整条链路无 dns: match，就是「拨号走 default_domain_resolver、
+    /// 不经 dns.rules」的直接证据。
+    dial_lookup: Option<String>,
 }
 
 /// 处理一行日志：确认它是否属于目标域名，是则把决策/证据写进 `guard`。
@@ -146,6 +156,10 @@ fn absorb_line(
         }
     } else if payload.contains("lookup failed for ") && guard.dial_failure.is_none() {
         guard.dial_failure = Some(payload.trim().to_string());
+    } else if payload.contains("lookup succeed for ") && guard.dial_success.is_none() {
+        guard.dial_success = Some(payload.trim().to_string());
+    } else if payload.contains("dns: lookup domain ") && guard.dial_lookup.is_none() {
+        guard.dial_lookup = Some(payload.trim().to_string());
     } else if payload.contains("exchanged")
         && payload.contains(" IN A ")
         && guard.fakeip_answer.is_none()
@@ -355,10 +369,18 @@ pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
                 }
             }
 
-            // 拨号解析证据行：诊断内网名失败的关键一行，缺失时旧版报告无从定位
+            // 拨号解析证据行：诊断内网名失败的关键一行，缺失时旧版报告无从定位。
+            // 同时报出「拨号走哪个解析路径」：这行不经 dns.rules，只认
+            // route.default_domain_resolver，与入站查询是两条不同的解析路径。
             if let Some(f) = &decisions.dial_failure {
-                println!("✗ 出站拨号解析   {f}");
+                println!(
+                    "✗ 出站拨号解析   {f}  ← 不经 dns.rules，只认 route.default_domain_resolver"
+                );
                 fails += 1;
+            } else if let Some(s) = &decisions.dial_success {
+                println!("✓ 出站拨号解析   {s}");
+            } else if let Some(l) = &decisions.dial_lookup {
+                println!("· 出站拨号解析   {l}  (已发起，未观察到结果行)");
             } else if let Some(ans) = &decisions.fakeip_answer.filter(|a| is_fakeip(a)) {
                 println!(
                     "⚠ 出站拨号解析   拿到 fakeip 答案 {ans}，未观察到失败行（可能连接未走到拨号）"
@@ -535,5 +557,51 @@ mod tests {
         );
         assert_eq!(g.fakeip_answer.as_deref(), Some("198.18.0.2"));
         assert!(is_fakeip(g.fakeip_answer.as_deref().unwrap_or("")));
+    }
+
+    /// 拨号解析的三行证据（发起 / 成功 / 失败）都要能抓到，且互不覆盖。
+    /// 这是报告里「出站拨号解析」段的唯一数据来源。
+    #[test]
+    fn absorb_line_captures_dial_path_evidence() {
+        let mut g = KernelDecisions::default();
+
+        // 发起行：它存在而链路无 dns: match，就是「拨号不经 dns.rules」的直接证据
+        let mut ids = vec!["444".to_string()];
+        absorb_line(
+            "[444 4ms] dns: lookup domain prometheus.ooooo.space",
+            "prometheus.ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        assert!(g
+            .dial_lookup
+            .as_deref()
+            .unwrap_or("")
+            .contains("lookup domain"));
+        assert!(g.dial_failure.is_none() && g.dial_success.is_none());
+
+        // 失败行
+        absorb_line(
+            "[444 6ms] dns: lookup failed for prometheus.ooooo.space: (exchange4: NXDOMAIN | exchange6: NXDOMAIN)",
+            "prometheus.ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        assert!(g.dial_failure.as_deref().unwrap_or("").contains("NXDOMAIN"));
+        assert!(g.dial_success.is_none(), "失败不应同时被记成成功");
+
+        // 成功行（另一请求）
+        let mut d = KernelDecisions::default();
+        absorb_line(
+            "[555 4ms] dns: lookup succeed for kelee.one: 104.21.33.74",
+            "kelee.one",
+            &mut vec!["555".to_string()],
+            &mut d,
+        );
+        assert!(d
+            .dial_success
+            .as_deref()
+            .unwrap_or("")
+            .contains("104.21.33.74"));
     }
 }
