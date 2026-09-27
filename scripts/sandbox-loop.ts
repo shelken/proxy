@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const VM = "proxy-test";
 const ARTIFACT = "sb-sync-aarch64-unknown-linux-musl";
@@ -202,8 +202,39 @@ function relevantDiff(from: string, to: string): string {
   return r.out.trim();
 }
 
+/**
+ * 同步前确认本地规则产物齐备。
+ *
+ * `pushToGuest` 把 `generated/singbox/` 整目录拷进 VM，缺哪个文件只有内核启动时
+ * 才暴露成 `parse rule-set: open ...: no such file or directory`，报错点离根因
+ * （没跑全量构建）很远。这里按底模声明的 tag 当场核对，缺了就直说要先构建。
+ *
+ * 与 `just rules-check` 的区别：那条校验清单与底模是否一致，这条只问「本地产物
+ * 是否齐到能喂给内核」，两者互补。
+ */
+function verifyLocalArtifacts(): void {
+  const templatePath = resolve(import.meta.dir, "../config/sing-box/template.json");
+  const template = JSON.parse(readFileSync(templatePath, "utf-8")) as {
+    route?: { rule_set?: { tag?: string }[] };
+  };
+  const tags = (template.route?.rule_set ?? [])
+    .map((rs) => rs.tag)
+    .filter((tag): tag is string => typeof tag === "string");
+  const genDir = resolve(import.meta.dir, "../config/rules/generated/singbox");
+  const missing = tags.filter((tag) => !existsSync(join(genDir, `${tag}.srs`)));
+  if (missing.length > 0) {
+    fail(
+      "检查本地规则产物",
+      `底模声明了 ${tags.length} 个规则集，本地 generated/singbox/ 缺 ${missing.length} 个：\n` +
+        `  ${missing.join(", ")}\n` +
+        `  先执行 just rules-build 生成全量产物再引导`,
+    );
+  }
+}
+
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
+  verifyLocalArtifacts();
   const r = guest(`
     mkdir -p /work
     cp ${REPO_IN_GUEST}/.sandbox-artifacts/sb-sync ${GUEST_BINARY}
