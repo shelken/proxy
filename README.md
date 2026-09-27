@@ -51,7 +51,7 @@ sb-sync encode -s https://sub.example.com
 ```yaml
 MyReject: config/rules/custom/MyReject.list
 Apple-AI: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple_AI/Apple_AI.list
-"1024": config/rules/custom/1024.list
+"1024proxy": config/rules/custom/1024proxy.list
 ```
 
 | 字段 | 说明 |
@@ -59,8 +59,8 @@ Apple-AI: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/
 | key | 规则集标识，也是底模里的 `rule_set` tag |
 | value | 仓库相对路径读本地文件，`http` 开头则按 URL 拉取 |
 
-键按 ASCII 忽略大小写排序，同字母大小写相邻；纯数字 tag 须加引号（如 `"1024"`），
-否则 YAML 会解析成数字键。出站去向由底模单方面决定，清单不再重复声明。
+键按 ASCII 忽略大小写排序，同字母大小写相邻；数字开头的 tag 一律加引号（如 `"1024proxy"`），
+避免 YAML 把纯数字键解析成数字。出站去向由底模单方面决定，清单不再重复声明。
 
 自定义列表（`custom/*.list`）支持 `DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` /
 `DOMAIN-REGEX` / `IP-CIDR` / `IP-CIDR6` / `SRC-IP-CIDR` / `SRC-PORT` / `DST-PORT` /

@@ -24,7 +24,7 @@ const CONFIG = `${WORK}/config.json`;
  * 节点是假 URI，被测对象是裁决结果而非代理连通性（ADR-0003）。
  */
 const HITS: { value: string; ruleSet: string; outbound: string }[] = [
-  { value: "1024proxy.net", ruleSet: "1024", outbound: "1024" },
+  { value: "1024proxy.net", ruleSet: "1024proxy", outbound: "1024proxy" },
   { value: "s.dsqcjk.com", ruleSet: "Adult", outbound: "adultnsfw" },
   { value: "guzzoni.apple.com", ruleSet: "Apple-AI", outbound: "appleai" },
   { value: "ai.google.dev", ruleSet: "Gemini", outbound: "gemini" },

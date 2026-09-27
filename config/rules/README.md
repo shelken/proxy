@@ -18,14 +18,14 @@ config/rules/
 ```yaml
 OpenAI: config/rules/custom/OpenAI.list
 Apple-AI: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple_AI/Apple_AI.list
-"1024": config/rules/custom/1024.list
+"1024proxy": config/rules/custom/1024proxy.list
 ```
 
 - **key**：规则集标识，对应底模里的 `rule_set` 标签
 - **value**：本地文件路径（仓库相对路径）或远端上游下载链接（以 `http` 开头）
 
-键按 ASCII 忽略大小写排序，同字母大小写相邻。纯数字 tag 须加引号，
-否则 YAML 会解析成数字键。
+键按 ASCII 忽略大小写排序，同字母大小写相邻。数字开头的 tag 一律加引号，
+避免 YAML 把纯数字键解析成数字。
 
 出站去向（`direct` / `proxy` / `reject` 等）由底模 `route.rules` 单方面决定，
 清单不再重复声明；`just rules-check` 只校验清单 tag 集合与底模声明的规则集一致。

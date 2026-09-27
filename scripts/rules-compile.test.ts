@@ -333,11 +333,9 @@ describe("清单解析", () => {
     ]);
   });
 
-  test("数字 tag 带引号时键仍是字符串", () => {
-    const path = writeManifest('"1024": config/rules/custom/1024.list');
-    expect(loadManifest(path)).toEqual([
-      { tag: "1024", source: "config/rules/custom/1024.list" },
-    ]);
+  test("数字键带引号时仍是字符串 tag", () => {
+    const path = writeManifest('"867": config/rules/custom/x.list');
+    expect(loadManifest(path)).toEqual([{ tag: "867", source: "config/rules/custom/x.list" }]);
   });
 
   test("source 非字符串或为空时直接报错", () => {

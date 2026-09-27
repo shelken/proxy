@@ -610,7 +610,7 @@ mod tests {
                 "apple",
                 "paypal",
                 "grok",
-                "1024",
+                "1024proxy",
                 "tailscale",
             ],
             "selector 组集合与底模顺序"
