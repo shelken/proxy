@@ -71,7 +71,6 @@ jobs:
           cp config/rules/generated/singbox/*.srs publish/singbox/
           cp config/rules/generated/clash/*.yaml publish/clash/
           cp config/rules/generated/plain/*.list publish/plain/
-          cp config/rules/generated/45-ruleset-remote.json publish/45-ruleset.json
           echo "产物统计:"
           for d in singbox clash plain; do echo "  $d: $(ls -1 publish/$d | wc -l)"; done
 

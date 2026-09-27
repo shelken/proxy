@@ -22,8 +22,6 @@ const ROOT = resolve(import.meta.dir, "..");
 const MANIFEST_PATH = join(ROOT, "config/rules/index.txt");
 const GENERATED_DIR = join(ROOT, "config/rules/generated");
 const TEMPLATE_PATH = join(ROOT, "config/sing-box/template.json");
-const REMOTE_BASE =
-  "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules";
 const SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
 const SING_GEOSITE_PREFIX =
   "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
@@ -709,73 +707,6 @@ export function validateTemplate(template: Template, items: ManifestItem[]): str
   return errors;
 }
 
-// ---------------------------------------------------------------- 索引 / 路由片段
-
-export function buildIndex(items: ManifestItem[]): unknown {
-  return {
-    version: 2,
-    entries: items.map((item) => {
-      const name = outputName(item.tag);
-      const paths: Record<string, string> = {};
-      const remoteUrls: Record<string, string> = {};
-      for (const client of Object.keys(SUFFIXES) as Client[]) {
-        const suffix = SUFFIXES[client];
-        paths[client] = `config/rules/generated/${client}/${name}${suffix}`;
-        remoteUrls[client] = `${REMOTE_BASE}/${client}/${name}${suffix}`;
-      }
-      return {
-        tag: item.tag,
-        policy: item.policy,
-        source: item.source,
-        output_name: name,
-        local_source: !item.source.startsWith("http"),
-        paths,
-        remote_urls: remoteUrls,
-      };
-    }),
-  };
-}
-
-/**
- * 发布分支用的路由片段：声明全部远端 rule_set 并按 policy 分组下发路由。
- *
- * 与底模的 route 段同构，供不克隆本仓库的用户直接引用。policy 分组的顺序按清单首次
- * 出现顺序稳定排列，保证同一份清单每次产出相同。
- */
-export function buildRemoteRouteset(items: ManifestItem[], companions: string[]): unknown {
-  const byPolicy = new Map<string, string[]>();
-  for (const item of items) {
-    const bucket = byPolicy.get(item.policy) ?? [];
-    bucket.push(item.tag);
-    byPolicy.set(item.policy, bucket);
-  }
-
-  const rules: unknown[] = [];
-  for (const [policy, tags] of byPolicy) {
-    const sorted = [...tags].sort();
-    rules.push(
-      policy === "reject"
-        ? { rule_set: sorted, action: "reject" }
-        : { rule_set: sorted, action: "route", outbound: policy },
-    );
-  }
-
-  const ruleSetEntry = (name: string): Record<string, string> => ({
-    type: "remote",
-    tag: name,
-    format: "binary",
-    url: `${REMOTE_BASE}/singbox/${name}.srs`,
-    update_interval: "1d",
-  });
-
-  const declared = [...items]
-    .sort((a, b) => outputName(a.tag).localeCompare(outputName(b.tag)))
-    .map((item) => ruleSetEntry(outputName(item.tag)));
-  declared.push(...companions.map(ruleSetEntry));
-
-  return { route: { rule_set: declared, rules } };
-}
-
 // ---------------------------------------------------------------- 构建
 
 export function ensureSingBox(): string {
@@ -905,17 +836,6 @@ export function runBuild(options: BuildOptions): number {
     built++;
   }
 
-  if (options.all) {
-    writeText(
-      join(GENERATED_DIR, "index.json"),
-      `${jsonPretty(buildIndex(items))}\n`,
-    );
-    writeText(
-      join(GENERATED_DIR, "45-ruleset-remote.json"),
-      `${jsonPretty(buildRemoteRouteset(items, [...companions]))}\n`,
-    );
-  }
-
   const reports = listReports();
   if (reports.length > 0) {
     console.log(`skipped reports (${reports.length}):`);
@@ -956,7 +876,7 @@ function usage(): string {
     "rules-compile — 规则清单 → 各端产物",
     "",
     "用法:",
-    "  bun scripts/rules-compile.ts build --all              全量构建并写 index.json",
+    "  bun scripts/rules-compile.ts build --all              全量构建",
     "  bun scripts/rules-compile.ts build <tag>              只构建单个 tag",
     "  bun scripts/rules-compile.ts convert --input <文件|-> --client <singbox|clash|plain> [--output <文件|->] [--dns-only] [--report <文件>]",
     "  bun scripts/rules-compile.ts check                    只校验底模与清单有无漂移",
