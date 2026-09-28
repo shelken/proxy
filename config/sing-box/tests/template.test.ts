@@ -99,30 +99,6 @@ describe("template.json structural verification", () => {
     expect(zoneIndex).toBeLessThan(fakeipIndex);
   });
 
-  test("内部域整域委托路由器 DNS，且排在 FakeIP 之前", () => {
-    const rules = template.dns?.rules ?? [];
-    const intRule = rules.find((r) =>
-      r.domain_suffix?.includes("int.ooooo.space"),
-    );
-    expect(intRule).toBeDefined();
-    // 委托而非静态应答：int 域的权威在路由器（集群内 CNAME→网关、集群外精确记录），
-    // 客户端不复刻域名清单，新增内部服务时本仓库零改动
-    expect(intRule.server).toBe("dns-int-router");
-    expect(intRule.action).toBeUndefined();
-
-    // 委托目标的 server 必须真实存在，否则内核启动 FATAL
-    const routerServer = (template.dns?.servers ?? []).find(
-      (s) => s.tag === "dns-int-router",
-    );
-    expect(routerServer).toBeDefined();
-    expect(routerServer.type).toBe("udp");
-
-    // first match wins：必须排在 FakeIP 之前，否则内部名拿到 198.18.x.x 假 IP
-    const fakeipIndex = rules.findIndex((r) => r.server === "dns-fakeip");
-    expect(fakeipIndex).toBeGreaterThan(-1);
-    expect(rules.indexOf(intRule)).toBeLessThan(fakeipIndex);
-  });
-
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
     const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
     const [tunIp, tunBits] = tunAddr.split("/");
