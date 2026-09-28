@@ -34,6 +34,11 @@
       },
       {
         "type": "udp",
+        "tag": "dns-int-router",
+        "server": "192.168.6.1"
+      },
+      {
+        "type": "udp",
         "tag": "dns-direct-cn",
         "server": "223.5.5.5"
       },
@@ -44,6 +49,10 @@
       }
     ],
     "rules": [
+      {
+        "domain_suffix": ["int.ooooo.space"],
+        "server": "dns-int-router"
+      },
       {
         "clash_mode": "direct",
         "server": "dns-local-system"
