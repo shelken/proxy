@@ -99,6 +99,34 @@ describe("template.json structural verification", () => {
     expect(zoneIndex).toBeLessThan(fakeipIndex);
   });
 
+  test("内部域静态应答排在 FakeIP 之前，且零出站", () => {
+    const rules = template.dns?.rules ?? [];
+    // 通配只给 A 记录应答；AAAA/HTTPS 等其余类型答成空结果，不落 FakeIP
+    const wildcard = rules.find(
+      (r) => r.domain_suffix?.includes(".int.ooooo.space"),
+    );
+    expect(wildcard).toBeDefined();
+    expect(wildcard.query_type).toContain("A");
+    expect(wildcard.action).toBe("predefined");
+    expect(wildcard.answer[0]).toContain("192.168.69.46");
+
+    // 不带点：同时兜住根名与子域的非 A 查询
+    const emptyRule = rules.find(
+      (r) =>
+        r.domain_suffix?.includes("int.ooooo.space") && !r.query_type,
+    );
+    expect(emptyRule).toBeDefined();
+    expect(emptyRule.action).toBe("predefined");
+    expect(emptyRule).not.toBe(wildcard);
+
+    // first match wins：两条都必须排在 FakeIP 之前，否则内部名拿到假 IP
+    const fakeipIndex = rules.findIndex((r) => r.server === "dns-fakeip");
+    expect(fakeipIndex).toBeGreaterThan(-1);
+    for (const r of [wildcard, emptyRule]) {
+      expect(rules.indexOf(r)).toBeLessThan(fakeipIndex);
+    }
+  });
+
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
     const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
     const [tunIp, tunBits] = tunAddr.split("/");

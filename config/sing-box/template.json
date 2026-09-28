@@ -45,6 +45,16 @@
     ],
     "rules": [
       {
+        "domain_suffix": [".int.ooooo.space"],
+        "query_type": ["A"],
+        "action": "predefined",
+        "answer": ["*. IN A 192.168.69.46"]
+      },
+      {
+        "domain_suffix": ["int.ooooo.space"],
+        "action": "predefined"
+      },
+      {
         "clash_mode": "direct",
         "server": "dns-local-system"
       },
