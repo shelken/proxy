@@ -45,6 +45,15 @@
     ],
     "rules": [
       {
+        "domain_suffix": ["int.ooooo.space"],
+        "action": "predefined",
+        "answer": ["*.int.ooooo.space. IN A 192.168.69.46"]
+      },
+      {
+        "domain": ["int.ooooo.space"],
+        "action": "predefined"
+      },
+      {
         "clash_mode": "direct",
         "server": "dns-local-system"
       },
