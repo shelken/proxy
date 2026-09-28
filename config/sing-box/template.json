@@ -45,7 +45,7 @@
     ],
     "rules": [
       {
-        "domain_suffix": ["int.ooooo.space"],
+        "rule_set": ["homelab-dns"],
         "action": "predefined",
         "answer": ["*.int.ooooo.space. IN A 192.168.69.46"]
       },
@@ -243,7 +243,8 @@
           "Lan",
           "MyDirect",
           "cftunnel",
-          "geoip-cn"
+          "geoip-cn",
+          "homelab"
         ],
         "action": "route",
         "outbound": "direct"
@@ -383,6 +384,13 @@
       },
       {
         "type": "remote",
+        "tag": "homelab",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/homelab.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
         "tag": "MyProxy",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
@@ -512,6 +520,13 @@
         "tag": "MyDirect-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "homelab-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/homelab-dns.srs",
         "update_interval": "1d"
       }
     ]
