@@ -1,3 +1,0 @@
-# 内部域（home-ops 集群与 sakamoto 集群外服务的统一入口后缀）
-# 用途：DNS 层静态应答（template.json predefined），让客户端不依赖家庭 DNS 也能解析内部入口
-DOMAIN-SUFFIX,int.ooooo.space

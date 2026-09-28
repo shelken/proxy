@@ -34,6 +34,11 @@
       },
       {
         "type": "udp",
+        "tag": "dns-int-router",
+        "server": "192.168.6.1"
+      },
+      {
+        "type": "udp",
         "tag": "dns-direct-cn",
         "server": "223.5.5.5"
       },
@@ -45,13 +50,8 @@
     ],
     "rules": [
       {
-        "domain": ["int.ooooo.space"],
-        "action": "predefined"
-      },
-      {
-        "rule_set": ["homelab-dns"],
-        "action": "predefined",
-        "answer": ["*.int.ooooo.space. IN A 192.168.69.46"]
+        "domain_suffix": ["int.ooooo.space"],
+        "server": "dns-int-router"
       },
       {
         "clash_mode": "direct",
@@ -243,8 +243,7 @@
           "Lan",
           "MyDirect",
           "cftunnel",
-          "geoip-cn",
-          "homelab"
+          "geoip-cn"
         ],
         "action": "route",
         "outbound": "direct"
@@ -384,13 +383,6 @@
       },
       {
         "type": "remote",
-        "tag": "homelab",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/homelab.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
         "tag": "MyProxy",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
@@ -520,13 +512,6 @@
         "tag": "MyDirect-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "homelab-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/homelab-dns.srs",
         "update_interval": "1d"
       }
     ]

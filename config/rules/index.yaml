@@ -25,7 +25,6 @@ Gemini: config/rules/custom/Gemini.list
 geoip-cn: https://raw.githubusercontent.com/Loon0x00/LoonLiteRules/main/direct/cn.list
 grok: config/rules/custom/grok.list
 Hijacking: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Hijacking/Hijacking.list
-homelab: config/rules/custom/homelab.list
 Instagram: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Instagram/Instagram.list
 Japan: config/rules/custom/Japan.list
 Lan: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Loon/Lan/Lan.list
