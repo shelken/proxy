@@ -745,6 +745,66 @@ mod tests {
         assert_eq!(proxy["default"], json!("selfhost"));
     }
 
+    /// 真实装配产物上的策略组可达性（第 4 项）与 tailscale 引用完整性（第 5 项）。
+    ///
+    /// 此前这两项的结论只来自对 template.json 的静态阅读；这里从内嵌底模走真实
+    /// `finalize`，在产物的策略组图上判定，而不是复述模板字段。
+    #[test]
+    fn assembled_groups_isolate_region_urltest_and_drop_tailscale() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@192.0.2.2:8388#hk-01|\
+             hy2://pass@192.0.2.3:8388#jp-01|hy2://pass@192.0.2.4:8388#us-01",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
+        let tag_of = |o: &Value| o["tag"].as_str().unwrap_or("").to_string();
+
+        // 第 5 项：tailscale selector 已从底模移除，产物中不得再出现
+        assert!(
+            !outbounds.iter().any(|o| tag_of(o) == "tailscale"),
+            "tailscale 组不应出现在装配产物中"
+        );
+
+        let urltest_tags: Vec<String> = outbounds
+            .iter()
+            .filter(|o| o["type"] == "urltest")
+            .map(&tag_of)
+            .collect();
+        assert!(
+            urltest_tags.iter().any(|t| t == "hk"),
+            "hk 测速组应有节点支撑，实际: {urltest_tags:?}"
+        );
+
+        // 第 4 项：业务 selector 的候选池不引用地区测速组
+        for group_tag in ["proxy", "openai", "anthropic", "gemini", "dev"] {
+            let Some(group) = outbounds
+                .iter()
+                .find(|o| o["type"] == "selector" && tag_of(o) == group_tag)
+            else {
+                continue;
+            };
+            let pool: Vec<String> = group["outbounds"]
+                .as_array()
+                .expect("候选池为数组")
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect();
+            let borrowed: Vec<&String> = pool
+                .iter()
+                .filter(|m| urltest_tags.iter().any(|u| u == *m))
+                .collect();
+            assert!(
+                borrowed.is_empty(),
+                "{group_tag} 候选池不应引用地区测速组，实际引用了 {borrowed:?}"
+            );
+        }
+    }
+
     /// selector 与 urltest 组按模式命中对应节点。
     #[test]
     fn groups_are_populated() {
