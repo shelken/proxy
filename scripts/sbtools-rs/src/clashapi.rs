@@ -49,8 +49,7 @@ pub fn get_json(controller: &str, path: &str) -> Result<Value, String> {
 /// /logs 流式读取（连接建立后只吐新行，无回放）。返回逐行 `BufRead`。
 ///
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
-/// PR3 的 logs 命令是首个调用方，本 PR 仅落库客户端与单测。
-#[allow(dead_code)]
+/// `cmd_logs -f` 是当前调用方，PR4 的 live 归属段复用。
 pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(2))
@@ -100,6 +99,8 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let (sock, _) = listener.accept().unwrap();
             let mut req = std::io::BufReader::new(&sock);
+            let mut request_line = String::new();
+            req.read_line(&mut request_line).unwrap();
             loop {
                 let mut line = String::new();
                 if req.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
@@ -122,6 +123,7 @@ mod tests {
                     .unwrap();
             }
             sock.write_all(b"0\r\n\r\n").unwrap();
+            request_line
         });
 
         let mut reader = logs_stream(&addr.to_string(), "debug").expect("应连上测试服务");
@@ -134,7 +136,8 @@ mod tests {
         // 终止块之后到达 EOF
         let mut third = String::new();
         assert_eq!(reader.read_line(&mut third).unwrap(), 0);
-        handle.join().unwrap();
+        // 级别透传进 /logs 查询串
+        assert_eq!(handle.join().unwrap(), "GET /logs?level=debug HTTP/1.1\r\n");
     }
 
     #[test]

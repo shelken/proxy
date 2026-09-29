@@ -41,6 +41,7 @@ fn main() {
         Some("trace") => cmd_trace(rest),
         Some("check") => cmd_check(rest),
         Some("config") => cmd_config(rest),
+        Some("logs") => cmd_logs(rest),
         Some("keygen") => {
             let (sk, pk) = config::keygen();
             println!("SERVER_PRIVATE_KEY={sk}");
@@ -70,6 +71,7 @@ fn usage() -> String {
         "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
         "  sbtools check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
         "  sbtools config [--path <config.yaml|singbox.json>]  打印生效配置(隐私脱敏); SFM 可达时附 /configs 运行时摘要",
+        "  sbtools logs [-f] [-n N] [--level debug|info|warn|error]  查看日志: -f 跟踪 /logs 流, -n N 读 log.output 末 N 行",
         "  sbtools keygen                                 生成服务端 X25519 公私钥对（Hex）",
         "  sbtools version                                显示版本",
     ]
@@ -379,6 +381,153 @@ fn print_runtime_summary(controller: &str) {
     }
 }
 
+/// logs: 查看日志。`-n N` 读 log.output 末 N 行，`-f` 跟踪 clash api /logs 流。
+///
+/// /logs 只吐连接后的新行、无回放（附录 A 探针二），回看只能走 log.output 文件；
+/// SFM 磁盘直读受限，缺 log.output 时明示并退化 -f。Ctrl-C 走默认 SIGINT 终止。
+fn cmd_logs(rest: &[String]) -> Result<(), String> {
+    let usage_hint = "logs 用法: sbtools logs [-f] [-n N] [--level debug|info|warn|error]";
+    let mut follow = false;
+    let mut tail: Option<usize> = None;
+    let mut level = "info".to_string();
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-f" => follow = true,
+            "-n" => {
+                let v = it.next().ok_or("logs: -n 需要一个行数")?;
+                tail = Some(v.parse().map_err(|_| format!("logs: -n 非法行数: {v}"))?);
+            }
+            "--level" => {
+                let lv = it.next().ok_or("logs: --level 需要一个级别")?;
+                level.clone_from(lv);
+            }
+            other => return Err(format!("logs: 未知参数 {other}（{usage_hint}）")),
+        }
+    }
+    if !matches!(level.as_str(), "debug" | "info" | "warn" | "error") {
+        return Err(format!(
+            "logs: --level 仅支持 debug|info|warn|error，当前: {level}"
+        ));
+    }
+
+    // 生效配置解析一次：controller 与 overlay 的 log.output 都从这来。
+    // 磁盘读不到不报错（SFM 场景降级走缺省回环口），与 cmd_config 一致。
+    let eff = paths::discover_effective(None).ok();
+    let eff_value = eff.as_ref().and_then(|e| {
+        std::fs::read_to_string(&e.path)
+            .ok()
+            .and_then(|t| parse_config_text(&t, &e.path).ok())
+    });
+
+    let mut follow = follow || tail.is_none();
+    if let Some(n) = tail {
+        if let Some(path) = discover_log_output(eff_value.as_ref()).map(std::path::PathBuf::from) {
+            println!("✓ log.output: {}", path.display());
+            for line in tail_lines(&path, n)? {
+                println!("{line}");
+            }
+        } else {
+            println!(
+                "· 未配置 log.output（legacy singbox.json 与 overlay 均无），退化 -f 跟踪 /logs 流"
+            );
+            follow = true;
+        }
+    }
+    if follow {
+        follow_logs(&resolve_logs_controller(eff_value.as_ref()), &level)?;
+    }
+    Ok(())
+}
+
+/// logs 的 controller 发现：生效配置顶层 → 其 overlay（客户端 YAML 的 clash_api
+/// 只会在 overlay 里）→ 缺省回环口（与 config/trace 一致）。
+fn resolve_logs_controller(eff_value: Option<&serde_json::Value>) -> String {
+    eff_value
+        .and_then(clashapi::discover_controller)
+        .or_else(|| {
+            eff_value
+                .and_then(overlay_value)
+                .as_ref()
+                .and_then(clashapi::discover_controller)
+        })
+        .unwrap_or_else(|| "127.0.0.1:9090".to_string())
+}
+
+/// -f 跟踪 /logs 流，逐行打出 payload。
+fn follow_logs(controller: &str, level: &str) -> Result<(), String> {
+    use std::io::BufRead as _;
+    if !clashapi::reachable(controller) {
+        return Err(format!(
+            "clash api {controller} 不可达；请确认内核已启动，\
+             或检查 experimental.clash_api.external_controller 配置"
+        ));
+    }
+    println!("✓ 跟踪 {controller} /logs?level={level}（Ctrl-C 退出）");
+    let mut reader = clashapi::logs_stream(controller, level)?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                eprintln!("· /logs 流已关闭");
+                return Ok(());
+            }
+            Ok(_) => println!("{}", log_stream_payload(line.trim_end())),
+            Err(e) => return Err(format!("/logs 读取中断: {e}")),
+        }
+    }
+}
+
+/// /logs 每行是 {"payload":"...","type":"..."}；形状异常时原样输出便于排查。
+fn log_stream_payload(line: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|v| v["payload"].as_str().map(String::from))
+        .unwrap_or_else(|| line.to_string())
+}
+
+/// JSON 值里的 log.output 路径。
+fn log_output_from(value: &serde_json::Value) -> Option<String> {
+    value["log"]["output"].as_str().map(String::from)
+}
+
+/// 客户端 YAML 的 overlay 是原生 sing-box JSON 文本；解析失败按无处理。
+fn overlay_value(value: &serde_json::Value) -> Option<serde_json::Value> {
+    serde_json::from_str(value["overlay"].as_str()?).ok()
+}
+
+/// log.output 读取顺序写死: legacy singbox.json 优先，其次客户端 config 的 overlay。
+/// 客户端 YAML 顶层无 log 键（config.rs 的 ClientConfig 只有 subs/nodes/overlay/template_url）。
+fn pick_log_output(
+    legacy: Option<&serde_json::Value>,
+    eff: Option<&serde_json::Value>,
+) -> Option<String> {
+    if let Some(p) = legacy.and_then(log_output_from) {
+        return Some(p);
+    }
+    eff.and_then(overlay_value)
+        .as_ref()
+        .and_then(log_output_from)
+}
+
+/// 磁盘 IO 版: legacy singbox.json 现读，生效配置解析值由调用方传入。
+fn discover_log_output(eff_value: Option<&serde_json::Value>) -> Option<String> {
+    let legacy = std::fs::read_to_string(legacy_config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    pick_log_output(legacy.as_ref(), eff_value)
+}
+
+/// 读文件末 N 行。日志量级为万行，全量读入足够；日志轮转由内核或外部负责。
+fn tail_lines(path: &std::path::Path, n: usize) -> Result<Vec<String>, String> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("读取 {}: {e}", path.display()))?;
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(n);
+    Ok(lines[start..].iter().map(|s| (*s).to_string()).collect())
+}
+
 fn cmd_server(rest: &[String]) -> Result<(), String> {
     let port: u16 = match rest {
         [p] if p == "--port" || p == "-p" => return Err("server: --port 需要一个数字参数".into()),
@@ -406,6 +555,7 @@ mod tests {
         assert!(u.contains("keygen"));
         assert!(u.contains("check"));
         assert!(u.contains("sbtools config [--path"));
+        assert!(u.contains("sbtools logs [-f] [-n N]"));
         assert!(!u.contains("doctor"));
         assert!(!u.contains("sbtools sync"));
         assert!(u.contains("encode -s <server>"));
@@ -483,5 +633,81 @@ mod tests {
         .expect("应解析成功");
         assert_eq!(server, "https://second.example");
         assert_eq!(cfg.as_deref(), Some(std::path::Path::new("/tmp/b.yaml")));
+    }
+
+    #[test]
+    fn logs_rejects_unknown_level_and_bad_tail() {
+        // 级别白名单之外必须拒绝（透传值会在 URL 里发往内核）
+        assert!(cmd_logs(&args(&["--level", "verbose"])).is_err());
+        assert!(cmd_logs(&args(&["-n", "abc"])).is_err());
+        assert!(cmd_logs(&args(&["-n"])).is_err());
+        assert!(cmd_logs(&args(&["--level"])).is_err());
+        assert!(cmd_logs(&args(&["-x"])).is_err());
+    }
+
+    /// log.output 读取顺序写死: legacy singbox.json 优先，其次 overlay。
+    /// 客户端 YAML 顶层无 log 键，log.output 只可能来自这两处。
+    #[test]
+    fn log_output_prefers_legacy_then_overlay() {
+        let legacy = serde_json::json!({"log": {"output": "/tmp/legacy.log"}});
+        let eff = serde_json::json!({"overlay": r#"{"log":{"output":"/tmp/overlay.log"}}"#});
+        assert_eq!(
+            pick_log_output(Some(&legacy), Some(&eff)).as_deref(),
+            Some("/tmp/legacy.log")
+        );
+        // legacy 存在但无 log.output 时落到 overlay
+        assert_eq!(
+            pick_log_output(Some(&serde_json::json!({})), Some(&eff)).as_deref(),
+            Some("/tmp/overlay.log")
+        );
+        // 两处均无 → 退化 -f 的判定输入
+        assert_eq!(
+            pick_log_output(Some(&serde_json::json!({})), Some(&serde_json::json!({}))),
+            None
+        );
+        assert_eq!(pick_log_output(None, None), None);
+        // overlay 不是合法 JSON 时按无处理
+        let bad = serde_json::json!({"overlay": "not-json"});
+        assert_eq!(pick_log_output(None, Some(&bad)), None);
+    }
+
+    #[test]
+    fn tail_lines_returns_last_n_lines() {
+        let path = std::env::temp_dir().join(format!("sbtools-tail-{}.log", std::process::id()));
+        let content = (1..=30)
+            .map(|i| format!("line-{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, content).unwrap();
+        let last20 = tail_lines(&path, 20).unwrap();
+        assert_eq!(last20.len(), 20);
+        assert_eq!(last20[0], "line-11");
+        assert_eq!(last20[19], "line-30");
+        // N 超过总行数时全量返回，不 panic
+        assert_eq!(tail_lines(&path, 100).unwrap().len(), 30);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn log_stream_line_yields_payload() {
+        assert_eq!(
+            log_stream_payload(r#"{"payload":"dns: exchanged A demo.test","type":"log"}"#),
+            "dns: exchanged A demo.test"
+        );
+        // 形状异常时原样输出，便于排查
+        assert_eq!(log_stream_payload("plain text"), "plain text");
+    }
+
+    #[test]
+    fn logs_controller_falls_through_overlay_to_default() {
+        // 客户端 YAML 顶层无 experimental，controller 在 overlay 里
+        let eff = serde_json::json!({"overlay": r#"{"experimental":{"clash_api":{"external_controller":"127.0.0.1:19090"}}}"#});
+        assert_eq!(resolve_logs_controller(Some(&eff)), "127.0.0.1:19090");
+        // 均无时用缺省回环口（与 config/trace 一致）
+        assert_eq!(
+            resolve_logs_controller(Some(&serde_json::json!({}))),
+            "127.0.0.1:9090"
+        );
+        assert_eq!(resolve_logs_controller(None), "127.0.0.1:9090");
     }
 }
