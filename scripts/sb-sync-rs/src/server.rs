@@ -656,4 +656,48 @@ mod tests {
         assert_eq!(v2["log"]["level"], json!("debug"));
         assert!(v2["inbounds"].is_array(), "底模入站不应被 overlay 抹掉");
     }
+
+    /// 守 merge 的标量优先级契约：层名字典序在前的层，标量胜出。
+    ///
+    /// 这条依赖内核的实测行为（`server.rs` 里 LAYER_* 的注释所述），一旦内核
+    /// 改变语义，overlay 覆盖底模标量会静默失效。没有断言时只能靠线上现象发现。
+    #[test]
+    fn overlay_scalar_wins_over_base_after_merge() {
+        if let Some(reason) = kernel_unavailable_reason() {
+            eprintln!("skip: {reason}");
+            return;
+        }
+        let base = json!({
+            "log": {"level": "warn"},
+            "route": {"final": "proxy", "default_domain_resolver": {"server": "dns-direct-cn"}}
+        });
+        let overlay = json!({
+            "log": {"level": "debug"},
+            "route": {"default_domain_resolver": {"server": "dns-local-system"}}
+        });
+        let merged = merge_overlay(&base, Some(&overlay)).expect("合并应成功");
+        assert_eq!(
+            merged["log"]["level"],
+            json!("debug"),
+            "overlay 标量应压过底模"
+        );
+        // 内核 merge 会把 `{server: x}` 规范成裸字符串（实测），直接钉住生效值。
+        // 不写「对象或字符串都接受」的兜底：那等于把这条测试要守的优先级放宽成
+        // 两种形态之一，覆盖失效时也能通过。
+        assert_eq!(
+            merged["route"]["default_domain_resolver"],
+            json!("dns-local-system"),
+            "overlay 的 resolver 应胜出并规范成裸字符串"
+        );
+
+        // 无 overlay 时底模标量保留，且同样被规范化——这是上面断言的对照面：
+        // 若合并方向反了，这里会拿到 dns-direct-cn 而不是 dns-local-system
+        let merged_base = merge_overlay(&base, None).expect("无 overlay 合并应成功");
+        assert_eq!(merged_base["log"]["level"], json!("warn"));
+        assert_eq!(
+            merged_base["route"]["default_domain_resolver"],
+            json!("dns-direct-cn"),
+            "无 overlay 时应保留底模的 resolver"
+        );
+    }
 }
