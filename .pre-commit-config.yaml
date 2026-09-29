@@ -1,0 +1,13 @@
+# pre-commit 框架配置：提交边界全检，与 ci-sb-sync.yml 同口径。
+# 接线（每克隆一次）：pre-commit install
+# 临时跳过单次提交：git commit --no-verify
+# 沙箱网络行为测试（TUN/netns）不在这里跑：宿主机上会破坏在用的网络，
+# 走 just test-sandbox 在 VM 内执行。
+repos:
+  - repo: local
+    hooks:
+      - id: verify
+        name: just verify（fmt + clippy + cargo test + 模板测试）
+        entry: just verify
+        language: system
+        pass_filenames: false
