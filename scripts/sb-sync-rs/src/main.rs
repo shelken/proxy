@@ -37,6 +37,7 @@ fn main() {
         Some("encode") => cmd_encode(rest),
         Some("server") => cmd_server(rest),
         Some("trace") => cmd_trace(rest),
+        Some("check") => cmd_check(rest),
         Some("keygen") => {
             let (sk, pk) = config::keygen();
             println!("SERVER_PRIVATE_KEY={sk}");
@@ -64,6 +65,7 @@ fn usage() -> String {
         "",
         "  sb-sync encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
         "  sb-sync trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
+        "  sb-sync check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
         "  sb-sync keygen                                 生成服务端 X25519 公私钥对（Hex）",
         "  sb-sync version                                显示版本",
     ]
@@ -171,6 +173,102 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// check: 离线校验。读本机 YAML → 合并 overlay 到底模 → 内核 check → 打印生效摘要。
+///
+/// 补的是服务端才有的那一步：`sing-box check` 单独跑底模时，overlay 的 rule_set 引用
+/// 完全不在视野内（引用一个不存在的 rule-set，本地不报错，SFM 启动才 FATAL）。
+/// 这里在本地把 overlay 合并进去再 check，把那个 FATAL 提前到动手之前。
+fn cmd_check(rest: &[String]) -> Result<(), String> {
+    let usage_hint = "check 用法: sb-sync check [-c <config.yaml>]";
+    let mut config_path: Option<std::path::PathBuf> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-c" | "--config" => {
+                let p = it.next().ok_or("check: -c 需要一个配置文件路径")?;
+                config_path = Some(std::path::PathBuf::from(p));
+            }
+            other => return Err(format!("check: 未知参数 {other}（{usage_hint}）")),
+        }
+    }
+    let config_path = match config_path {
+        Some(p) => p,
+        None => paths::client_config_path()?,
+    };
+    let config = config::load_config(&config_path)?;
+    // 复用 encode 的同一套 YAML 校验（含 overlay 安全审查与 template_url 合法性），
+    // 但不做任何网络请求：check 的定位就是纯离线。
+    let payload = config::validate(&config)?;
+
+    let (base, source) = template::load_template(config.template_url.as_deref())?;
+    let overlay = match &payload["overlay"] {
+        serde_json::Value::Object(o) => Some(serde_json::Value::Object(o.clone())),
+        _ => None,
+    };
+    let merged = server::merge_overlay(&base, overlay.as_ref())?;
+    server::kernel_check(&merged)?;
+
+    println!("✓ 内核 check 通过（底模: {}）", source.as_str());
+    print!("{}", render_effective_summary(&merged));
+    Ok(())
+}
+
+/// 渲染合并后真正生效的关键项。改 overlay 后不重贴 SFM 就看这个确认改动生效。
+///
+/// 纯函数（返回字符串而非直写 stdout），以便单测覆盖 merge 规范化后的形态差异。
+fn render_effective_summary(merged: &serde_json::Value) -> String {
+    /// sing-box merge 会把单元素数组规范化成标量，故两种形态都要认。
+    fn as_list(v: &serde_json::Value) -> Option<String> {
+        if let Some(s) = v.as_str() {
+            return Some(s.to_string());
+        }
+        v.as_array().map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+    }
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let dns_rules = merged["dns"]["rules"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let _ = writeln!(out, "  dns.rules 条数: {}", dns_rules.len());
+    for (i, r) in dns_rules.iter().enumerate() {
+        let target = r["server"].as_str().unwrap_or("?");
+        let what = [
+            ("rule_set", "rule_set"),
+            ("domain_suffix", "domain_suffix"),
+            ("domain", "domain"),
+            ("query_type", "query_type"),
+            ("clash_mode", "clash_mode"),
+        ]
+        .iter()
+        .find_map(|(k, label)| as_list(&r[*k]).map(|v| format!("{label}={v}")))
+        .unwrap_or_else(|| "(其它匹配条件)".to_string());
+        let _ = writeln!(out, "    [{i}] {what} -> {target}");
+    }
+    // merge 会把 `{"server": x}` 规范化成裸字符串，两种形态都要认。
+    let resolver = merged["route"]["default_domain_resolver"]["server"]
+        .as_str()
+        .or_else(|| merged["route"]["default_domain_resolver"].as_str())
+        .unwrap_or("?");
+    let _ = writeln!(out, "  route.default_domain_resolver: {resolver}");
+    let _ = writeln!(
+        out,
+        "  route.final: {}",
+        merged["route"]["final"].as_str().unwrap_or("?")
+    );
+    let _ = writeln!(
+        out,
+        "  log.level: {}",
+        merged["log"]["level"].as_str().unwrap_or("?")
+    );
+    out
+}
+
 fn cmd_server(rest: &[String]) -> Result<(), String> {
     let port: u16 = match rest {
         [p] if p == "--port" || p == "-p" => return Err("server: --port 需要一个数字参数".into()),
@@ -196,9 +294,31 @@ mod tests {
         assert!(u.contains("encode"));
         assert!(u.contains("server"));
         assert!(u.contains("keygen"));
+        assert!(u.contains("check"));
         assert!(!u.contains("doctor"));
         assert!(!u.contains("sb-sync sync"));
         assert!(u.contains("encode -s <server>"));
+    }
+
+    /// check 的摘要必须能读出 merge 规范化后的两种形态：
+    /// 单元素数组 → 标量（`rule_set: ["Lan-dns"]` → `"Lan-dns"`）、
+    /// `{"server": x}` → 裸字符串。读不到就会把生效项打成 `?`，摘要失去意义。
+    #[test]
+    fn effective_summary_reads_normalized_shapes() {
+        let merged = serde_json::json!({
+            "log": {"level": "debug"},
+            "dns": {"rules": [
+                {"rule_set": "Lan-dns", "server": "dns-local-system"},
+                {"domain_suffix": ["ooooo.space"], "server": "dns-local-system"},
+                {"query_type": ["A", "AAAA"], "server": "dns-fakeip"}
+            ]},
+            "route": {"final": "proxy", "default_domain_resolver": "dns-local-system"}
+        });
+        let out = render_effective_summary(&merged);
+        assert!(out.contains("rule_set=Lan-dns"), "rule_set 未读出:\n{out}");
+        assert!(out.contains("domain_suffix=ooooo.space"), "实际:\n{out}");
+        assert!(out.contains("dns-local-system"), "实际:\n{out}");
+        assert!(!out.contains('?'), "有读不出的字段:\n{out}");
     }
 
     fn args(s: &[&str]) -> Vec<String> {

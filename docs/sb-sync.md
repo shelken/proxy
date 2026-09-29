@@ -8,7 +8,7 @@
 
 | | 客户端 | 服务端 |
 | :--- | :--- | :--- |
-| 子命令 | `encode`、`keygen`、`trace`（诊断） | `server` |
+| 子命令 | `encode`、`keygen`、`check`（离线校验）、`trace`（诊断） | `server` |
 | 运行位置 | 任意 arm Mac（mise 安装） | 容器（home-ops） |
 | 输入 | 本机 YAML 配置 | 加密 URL 查询参数 |
 | 输出 | 剪切板订阅 URL | sing-box 配置 JSON |
@@ -48,8 +48,16 @@ flowchart LR
 
 ```text
 sb-sync encode -s <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 加密 → 写剪切板
-sb-sync keygen                               # 生成服务端 X25519 密钥对（部署时一次）
+sb-sync check [-c <config.yaml>]                # 离线校验: 合并 overlay 到底模并跑内核 check
+sb-sync keygen                                  # 生成服务端 X25519 密钥对（部署时一次）
 ```
+
+`check` 是纯离线入口：读本机 YAML → 把 `overlay` 合并到底模（与服务端同一套层序）
+→ 跑内核 `check` → 打印生效摘要。它补的是 `sing-box check` 单独跑底模时看不到的那层：
+overlay 的 `rule_set` 引用不在视野内，引用一个不存在的 rule-set 本地不报错，SFM 启动才
+`FATAL ... rule-set not found`。改 overlay 后先跑 `check`，能在重贴 SFM 之前发现问题，
+并用摘要确认改动是否真的压过了底模（比如 `route.default_domain_resolver` 已切到
+`dns-local-system`）。
 
 `encode` 流程
 
