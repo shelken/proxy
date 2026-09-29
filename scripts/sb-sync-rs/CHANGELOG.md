@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.5](https://github.com/shelken/proxy/compare/v0.5.4...v0.5.5) - 2026-09-29
+
+### Fixed
+
+- *(template)* 保留 HTTPS 记录并经代理解析真实 DNS 兜底
+
+### Other
+
+- *(assemble)* 在真实装配产物上验证策略组可达性与 tailscale 移除
+- *(assemble)* 恢复策略组顺序断言并同步移除已删除的 tailscale 组
+- *(template)* 移除无法证明SSH修复的结构断言并记录验证失误
+
 ## [0.5.4](https://github.com/shelken/proxy/compare/v0.5.3...v0.5.4) - 2026-09-29
 
 ### Fixed
