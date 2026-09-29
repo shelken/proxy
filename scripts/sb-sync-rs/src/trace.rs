@@ -11,6 +11,7 @@
 //! 在真实网络环境下的表现；沙箱侧在 Lima VM 内用于**离线复现**配置裁决。两者被测
 //! 对象不同，各自维护日志解析；改任一侧只需与内核实际日志格式对齐，不必互相同步。
 
+use crate::template;
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
 use std::net::ToSocketAddrs;
@@ -98,7 +99,7 @@ pub fn egress_interface(ip: &str) -> Option<String> {
 }
 
 /// 内核决策捕获结果
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 struct KernelDecisions {
     dns_match: Option<String>,
     router_match: Option<String>,
@@ -123,23 +124,37 @@ fn absorb_line(
     wanted_ids: &mut Vec<String>,
     guard: &mut KernelDecisions,
 ) -> bool {
-    let Some(id) = request_id(payload) else {
+    // here-doc 这类多行载荷会整体命中域名与决策子串，被拼成一行收下。
+    // 真内核日志每条只有一行，换行即非内核日志。
+    if payload.contains('\n') {
         return false;
-    };
-    let id = id.to_string();
+    }
+    // Clash API `/dns/query` 触发的日志没有请求号：该端点用 context.Background()
+    // 起 Exchange，内核只在 ctx 带 ID 时才写 `[<id> <ms>]` 前缀。缺前缀的行只能
+    // 凭本行域名归属判断，丢不得。
+    let id = request_id(payload).map(str::to_string);
+    let matches_target = domain_in_line(payload).as_deref() == Some(target);
 
     // 嗅探行确立该请求号属于目标域名
     if payload.contains("router: sniffed protocol") {
-        if domain_in_line(payload).as_deref() == Some(target) && !wanted_ids.contains(&id) {
-            wanted_ids.push(id);
+        if let (Some(id), true) = (id.as_ref(), matches_target) {
+            if !wanted_ids.contains(id) {
+                wanted_ids.push(id.clone());
+            }
         }
         return false;
     }
-    // DNS/拨号行：带域名，做最后一道确认
-    if domain_in_line(payload).as_deref() == Some(target) && !wanted_ids.contains(&id) {
-        wanted_ids.push(id.clone());
-    }
-    if !wanted_ids.contains(&id) {
+    let owned = match id.as_ref() {
+        Some(id) => {
+            // DNS/拨号行：带域名，做最后一道确认
+            if matches_target && !wanted_ids.contains(id) {
+                wanted_ids.push(id.clone());
+            }
+            wanted_ids.contains(id)
+        }
+        None => matches_target,
+    };
+    if !owned {
         return false;
     }
 
@@ -171,7 +186,7 @@ fn absorb_line(
             }
         }
     }
-    guard.dns_match.is_some() && guard.router_match.is_some() && guard.dial_failure.is_some()
+    guard.router_match.is_some() && (guard.dns_match.is_some() || guard.dial_failure.is_some())
 }
 
 /// 从内核 debug 日志流实时捕获针对指定域名的 DNS 与路由决策。
@@ -235,11 +250,13 @@ fn capture_decisions(controller: &str, domain: &str) -> KernelDecisions {
             .call();
     });
 
-    // 等待决策捕获（最多等待 1.2 秒）
+    // 等待决策捕获。只等拨号解析的收尾行（成功或失败）：它是本工具要报的关键证据，
+    // 且晚于 match 行到达；等满 1.2s 即收工，不能只等两个 match 就停，否则会在
+    // 证据行落地前掐掉监听。
     let start = Instant::now();
     while start.elapsed() < Duration::from_millis(1200) {
         if let Ok(guard) = decisions.lock() {
-            if guard.dns_match.is_some() && guard.router_match.is_some() {
+            if guard.dial_failure.is_some() || guard.dial_success.is_some() {
                 break;
             }
         }
@@ -303,14 +320,73 @@ pub fn http_first_byte(url: &str) -> (bool, u128) {
     }
 }
 
-/// fakeip 池（与底模 `dns-fakeip` 的 inet4_range 一致）。落在这个段的 A 记录是假 IP，
+/// fakeip 池（从底模 `dns-fakeip` 的 inet4_range 读）。落在这个段的 A 记录是假 IP，
 /// 不是真实解析结果，拨号必然失败。
+struct FakeipRange {
+    net: std::net::Ipv4Addr,
+    prefix: u32,
+}
+
+impl FakeipRange {
+    /// 段来源于 `config/sing-box/template.json`；读不到就退回 `198.18.0.0/15`
+    /// （sing-box fakeip 的默认段），保证 trace 仍可用。
+    fn from_template() -> Self {
+        let fallback = || Self {
+            net: std::net::Ipv4Addr::new(198, 18, 0, 0),
+            prefix: 15,
+        };
+        let Ok((template, _)) = template::load_template(None) else {
+            return fallback();
+        };
+        let Some(spec) = template["dns"]["servers"]
+            .as_array()
+            .and_then(|servers| {
+                servers
+                    .iter()
+                    .find(|s| s["type"].as_str() == Some("fakeip"))
+            })
+            .and_then(|s| s["inet4_range"].as_str())
+        else {
+            return fallback();
+        };
+        parse_cidr4(spec).unwrap_or_else(fallback)
+    }
+}
+
+/// 解析 `198.18.0.0/15` 形态的 IPv4 CIDR。只有一个消费点，不值得引 ipnet。
+fn parse_cidr4(spec: &str) -> Option<FakeipRange> {
+    let (addr, prefix) = spec.split_once('/')?;
+    let prefix: u32 = prefix.trim().parse().ok()?;
+    if prefix > 32 {
+        return None;
+    }
+    let net: std::net::Ipv4Addr = addr.trim().parse().ok()?;
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    Some(FakeipRange {
+        net: std::net::Ipv4Addr::from(u32::from(net) & mask),
+        prefix,
+    })
+}
+
+/// 从底模读一次 fakeip 段，进程内复用。
+static FAKEIP_RANGE: std::sync::LazyLock<FakeipRange> =
+    std::sync::LazyLock::new(FakeipRange::from_template);
+
 fn is_fakeip(ip: &str) -> bool {
     let Ok(a) = ip.parse::<std::net::Ipv4Addr>() else {
         return false;
     };
-    let o = a.octets();
-    o[0] == 198 && (o[1] == 18 || o[1] == 19)
+    let range = &*FAKEIP_RANGE;
+    let mask = if range.prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - range.prefix)
+    };
+    u32::from(a) & mask == u32::from(range.net)
 }
 
 /// Clash API 是否可达（`/version` 探活）。控制面不通时后续阶段全无意义，必须显式报错。
@@ -336,6 +412,7 @@ pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
             println!(
                 "✗ 系统 resolver   A {ip}  ({ms}ms)  出口 {egress}  ← fakeip 假 IP, 非真实解析"
             );
+            fails += 1;
         } else {
             println!("✓ 系统 resolver   A {ip}  ({ms}ms)  出口 {egress}");
         }
@@ -603,5 +680,127 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("104.21.33.74"));
+    }
+
+    /// Clash API `/dns/query` 触发的日志没有请求号（该端点用 context.Background()
+    /// 起 Exchange）。这类行只能凭本行域名归属，不能因为取不到 id 就丢。
+    /// 回归：早先无条件要求 id，会把触发 1 产出的 dns: match 全部丢弃。
+    #[test]
+    fn absorb_line_accepts_id_less_lines_by_domain() {
+        let mut ids: Vec<String> = Vec::new();
+        let mut g = KernelDecisions::default();
+
+        absorb_line(
+            "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
+            "prometheus.ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        // 无 id 行不带域名，无从判断归属，不得收下（否则又是「第一条 match」污染）
+        assert!(g.dns_match.is_none(), "无域名的无 id 行不应被收下");
+
+        absorb_line(
+            "dns: exchanged A prometheus.ooooo.space. 600 IN A 198.18.0.2",
+            "prometheus.ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        assert_eq!(g.fakeip_answer.as_deref(), Some("198.18.0.2"));
+
+        // 别的域名的无 id 行仍须拒绝
+        let mut g2 = KernelDecisions::default();
+        absorb_line(
+            "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
+            "prometheus.ooooo.space",
+            &mut Vec::new(),
+            &mut g2,
+        );
+        absorb_line(
+            "dns: exchanged A ntp.ubuntu.com. 600 IN A 198.18.0.9",
+            "prometheus.ooooo.space",
+            &mut Vec::new(),
+            &mut g2,
+        );
+        assert!(
+            g2.fakeip_answer.is_none(),
+            "无 id 且域名不匹配的行不得被收下"
+        );
+    }
+
+    /// 多行载荷（here-doc 日志）会被拼成一行、整体命中域名与决策子串，
+    /// 误收成一次「决策」。真内核日志每条只有一行。
+    #[test]
+    fn absorb_line_rejects_multiline_payload() {
+        let mut ids: Vec<String> = vec!["7".to_string()];
+        let mut g = KernelDecisions::default();
+        absorb_line(
+            "[7 1ms] dns: exchanged A ooooo.space. 600 IN A 198.18.0.2\nlookup succeed for ooooo.space: 198.18.0.2",
+            "ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        // 整条载荷里同时命中域名与两类决策子串，未拦下则会被收成拨号成功
+        assert!(
+            g.dial_success.is_none() && g.fakeip_answer.is_none() && g.dial_lookup.is_none(),
+            "多行载荷不应被当成一条日志: {g:?}"
+        );
+    }
+
+    /// 收工条件：router match 到手后，只要有一条拨号结果行就可以停，
+    /// 不能因为等不到 dns: match（无 id 行未到达）而空等到超时。
+    #[test]
+    fn absorb_line_signals_done_on_dial_result() {
+        let mut ids: Vec<String> = vec!["8".to_string()];
+        let mut g = KernelDecisions::default();
+        absorb_line(
+            "[8 1ms] router: match[20] rule_set=[MyDirect] => route(direct)",
+            "ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        // 尚无拨号结果 → 未完成
+        assert!(!absorb_line(
+            "[8 2ms] dns: lookup domain ooooo.space",
+            "ooooo.space",
+            &mut ids,
+            &mut g
+        ));
+        // 拨号失败行到达 → 完成
+        assert!(absorb_line(
+            "[8 5ms] dns: lookup failed for ooooo.space: (exchange4: NXDOMAIN)",
+            "ooooo.space",
+            &mut ids,
+            &mut g
+        ));
+    }
+
+    /// fakeip 段从底模读取，与 `config/sing-box/template.json` 的 inet4_range 绑定；
+    /// 底模改了段而 trace 还写死 198.18/15 会静默误判。
+    #[test]
+    fn fakeip_range_matches_template() {
+        let (template, _) = template::load_template(None).expect("底模应可加载");
+        let spec = template["dns"]["servers"]
+            .as_array()
+            .and_then(|servers| {
+                servers
+                    .iter()
+                    .find(|s| s["type"].as_str() == Some("fakeip"))
+            })
+            .and_then(|s| s["inet4_range"].as_str())
+            .expect("底模应有 fakeip inet4_range");
+        let parsed = parse_cidr4(spec).expect("inet4_range 应是合法 CIDR");
+        assert_eq!(parsed.prefix, 15);
+        assert_eq!(parsed.net, std::net::Ipv4Addr::new(198, 18, 0, 0));
+        assert!(is_fakeip("198.18.0.13"));
+        assert!(is_fakeip("198.19.255.255"));
+        assert!(!is_fakeip("198.20.0.1"));
+    }
+
+    #[test]
+    fn parse_cidr4_rejects_malformed() {
+        assert!(parse_cidr4("198.18.0.0").is_none());
+        assert!(parse_cidr4("198.18.0.0/33").is_none());
+        assert!(parse_cidr4("not-an-ip/15").is_none());
+        assert_eq!(parse_cidr4("198.18.0.1/15").unwrap().net.octets()[1], 18);
     }
 }
