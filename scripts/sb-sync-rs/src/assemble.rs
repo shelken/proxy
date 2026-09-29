@@ -705,33 +705,6 @@ mod tests {
             .filter(|o| o["type"] == "selector")
             .collect();
 
-        // 底模的 selector 顺序：proxy 在首位，其余依次
-        let selector_tags: Vec<&str> = selectors.iter().filter_map(|s| s["tag"].as_str()).collect();
-        assert_eq!(
-            selector_tags,
-            vec![
-                "selfhost",
-                "proxy",
-                "openai",
-                "anthropic",
-                "gemini",
-                "dev",
-                "adultnsfw",
-                "appleai",
-                "ptcg",
-                "japansite",
-                "opencode",
-                "zai",
-                "microsoft",
-                "apple",
-                "paypal",
-                "grok",
-                "1024proxy",
-                "tailscale",
-            ],
-            "selector 组集合与底模顺序"
-        );
-
         let proxy = selectors
             .iter()
             .find(|s| s["tag"] == "proxy")

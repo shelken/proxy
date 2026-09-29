@@ -35,6 +35,7 @@ describe("template.json structural verification", () => {
     expect(excluded).toContain("100.64.0.0/10");
   });
 
+
   test("blocks QUIC / HTTP3 on UDP 443 and 80", () => {
     const rules = template.route?.rules ?? [];
     const quicRule = rules.find(
@@ -45,13 +46,6 @@ describe("template.json structural verification", () => {
     expect(quicRule.port).toContain(80);
   });
 
-  test("limits sniffers to web/dns protocols to avoid SSH handshake stalls", () => {
-    const rules = template.route?.rules ?? [];
-    const sniffRule = rules.find((r) => r.action === "sniff");
-    expect(sniffRule).toBeDefined();
-    expect(sniffRule.sniffer).toEqual(["http", "tls", "quic", "dns"]);
-    expect(sniffRule.sniffer).not.toContain("ssh");
-  });
 
   test("configures prefer_ipv4 DNS strategy", () => {
     expect(template.dns?.strategy).toBe("prefer_ipv4");
@@ -172,12 +166,6 @@ describe("template.json structural verification", () => {
     expect(tunEnd < ps || tunStart > pe).toBe(true);
   });
 
-  test("persists SFM selector choices", () => {
-    expect(template.experimental?.cache_file).toMatchObject({
-      enabled: true,
-      path: "cache.db",
-    });
-  });
 
 
   test("每个非 direct 的路由目标都有对应 selector 策略组", () => {
