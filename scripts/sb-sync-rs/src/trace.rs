@@ -113,6 +113,11 @@ struct KernelDecisions {
     /// 这行存在而整条链路无 dns: match，就是「拨号走 default_domain_resolver、
     /// 不经 dns.rules」的直接证据。
     dial_lookup: Option<String>,
+    /// 最近一条无 id DNS 行确立的域名。Clash API `/dns/query` 的日志不带请求号，
+    /// 而 `dns: match[N]` 行本身不带域名（只带 query_type / domain_suffix，
+    /// `domain_in_line` 认不出），只能回填上一条 exchange/exchanged 行确立的域名。
+    /// 无前缀查询并发交错时会误归属，是该兜底的已知上限。
+    recent_dns_domain: Option<String>,
 }
 
 /// 处理一行日志：确认它是否属于目标域名，是则把决策/证据写进 `guard`。
@@ -131,7 +136,7 @@ fn absorb_line(
     }
     // Clash API `/dns/query` 触发的日志没有请求号：该端点用 context.Background()
     // 起 Exchange，内核只在 ctx 带 ID 时才写 `[<id> <ms>]` 前缀。缺前缀的行只能
-    // 凭本行域名归属判断，丢不得。
+    // 凭域名归属判断，丢不得。
     let id = request_id(payload).map(str::to_string);
     let matches_target = domain_in_line(payload).as_deref() == Some(target);
 
@@ -144,15 +149,20 @@ fn absorb_line(
         }
         return false;
     }
-    let owned = match id.as_ref() {
-        Some(id) => {
-            // DNS/拨号行：带域名，做最后一道确认
-            if matches_target && !wanted_ids.contains(id) {
-                wanted_ids.push(id.clone());
-            }
-            wanted_ids.contains(id)
+    let owned = if let Some(id) = id.as_ref() {
+        // DNS/拨号行：带域名，做最后一道确认
+        if matches_target && !wanted_ids.contains(id) {
+            wanted_ids.push(id.clone());
         }
-        None => matches_target,
+        wanted_ids.contains(id)
+    } else {
+        // 无 id 的 DNS 行自带域名时记下归属。`dns: match[N]` 行本身不带域名
+        // （只带 query_type / domain_suffix，`domain_in_line` 认不出），靠上一条
+        // exchange/exchanged 行确立的域名回填；留一手的是同一查询的相邻行。
+        if let Some(d) = domain_in_line(payload) {
+            guard.recent_dns_domain = Some(d);
+        }
+        guard.recent_dns_domain.as_deref() == Some(target)
     };
     if !owned {
         return false;
@@ -322,12 +332,12 @@ pub fn http_first_byte(url: &str) -> (bool, u128) {
 
 /// fakeip 池（从底模 `dns-fakeip` 的 inet4_range 读）。落在这个段的 A 记录是假 IP，
 /// 不是真实解析结果，拨号必然失败。
-struct FakeipRange {
+struct Ipv4Cidr {
     net: std::net::Ipv4Addr,
     prefix: u32,
 }
 
-impl FakeipRange {
+impl Ipv4Cidr {
     /// 段来源于 `config/sing-box/template.json`；读不到就退回 `198.18.0.0/15`
     /// （sing-box fakeip 的默认段），保证 trace 仍可用。
     fn from_template() -> Self {
@@ -354,7 +364,7 @@ impl FakeipRange {
 }
 
 /// 解析 `198.18.0.0/15` 形态的 IPv4 CIDR。只有一个消费点，不值得引 ipnet。
-fn parse_cidr4(spec: &str) -> Option<FakeipRange> {
+fn parse_cidr4(spec: &str) -> Option<Ipv4Cidr> {
     let (addr, prefix) = spec.split_once('/')?;
     let prefix: u32 = prefix.trim().parse().ok()?;
     if prefix > 32 {
@@ -366,27 +376,63 @@ fn parse_cidr4(spec: &str) -> Option<FakeipRange> {
     } else {
         u32::MAX << (32 - prefix)
     };
-    Some(FakeipRange {
+    Some(Ipv4Cidr {
         net: std::net::Ipv4Addr::from(u32::from(net) & mask),
         prefix,
     })
 }
 
 /// 从底模读一次 fakeip 段，进程内复用。
-static FAKEIP_RANGE: std::sync::LazyLock<FakeipRange> =
-    std::sync::LazyLock::new(FakeipRange::from_template);
+static FAKEIP_RANGE: std::sync::LazyLock<Ipv4Cidr> =
+    std::sync::LazyLock::new(Ipv4Cidr::from_template);
+
+fn prefix_mask(prefix: u32) -> u32 {
+    if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    }
+}
+
+/// tun 入站的 `route_exclude_address`。目标落这些段时流量根本不进 TUN，内核
+/// 不会产生路由判定日志——这是「直连」而非「未捕获」，报告必须分得开。
+static EXCLUDE_ADDRESS: std::sync::LazyLock<Vec<Ipv4Cidr>> = std::sync::LazyLock::new(|| {
+    template::load_template(None)
+        .ok()
+        .and_then(|(t, _)| {
+            t["inbounds"].as_array().map(|inbounds| {
+                inbounds
+                    .iter()
+                    .filter(|ib| ib["type"].as_str() == Some("tun"))
+                    .flat_map(|ib| {
+                        ib["route_exclude_address"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|v| v.as_str())
+                    })
+                    .filter_map(parse_cidr4)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+});
+
+fn is_excluded(ip: &str) -> bool {
+    let Ok(a) = ip.parse::<std::net::Ipv4Addr>() else {
+        return false;
+    };
+    EXCLUDE_ADDRESS
+        .iter()
+        .any(|c| u32::from(a) & prefix_mask(c.prefix) == u32::from(c.net))
+}
 
 fn is_fakeip(ip: &str) -> bool {
     let Ok(a) = ip.parse::<std::net::Ipv4Addr>() else {
         return false;
     };
     let range = &*FAKEIP_RANGE;
-    let mask = if range.prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - range.prefix)
-    };
-    u32::from(a) & mask == u32::from(range.net)
+    u32::from(a) & prefix_mask(range.prefix) == u32::from(range.net)
 }
 
 /// Clash API 是否可达（`/version` 探活）。控制面不通时后续阶段全无意义，必须显式报错。
@@ -397,6 +443,70 @@ pub fn controller_reachable(controller: &str) -> bool {
         .is_ok()
 }
 
+/// 内核决策段的报告：DNS 判定 / 路由判定 / 拨号解析证据 / 出口链路。
+/// 返回本段新增的失败阶段数。
+fn report_kernel_decisions(ec: &str, domain: &str, resolved_ip: Option<&str>) -> u8 {
+    let decisions = capture_decisions(ec, domain);
+    let mut fails: u8 = 0;
+
+    match &decisions.dns_match {
+        Some(decision) => {
+            if decision.contains("dns-fakeip") {
+                println!("✓ 内核 DNS 判定   {decision}  ← 假 IP 路径, 拨号将失败");
+            } else {
+                println!("✓ 内核 DNS 判定   {decision}");
+            }
+        }
+        None => {
+            println!("⚠ 内核 DNS 判定   未捕获到匹配规则（可能命中缓存或 final）");
+        }
+    }
+
+    match &decisions.router_match {
+        Some(decision) => println!("✓ 内核路由判定   {decision}"),
+        None => {
+            // 目标在 route_exclude_address 内时内核本就不产生路由日志，
+            // 与「没抓到」是两回事，不能都打 ⚠
+            if resolved_ip.is_some_and(is_excluded) {
+                println!(
+                    "· 内核路由判定   目标 {} 在 route_exclude_address 内，不经路由判定（直连）",
+                    resolved_ip.unwrap_or("?")
+                );
+            } else {
+                println!("⚠ 内核路由判定   未捕获到路由规则（可能直连或默认策略）");
+            }
+        }
+    }
+
+    // 拨号解析证据行：诊断内网名失败的关键一行，缺失时旧版报告无从定位。
+    // 同时报出「拨号走哪个解析路径」：这行不经 dns.rules，只认
+    // route.default_domain_resolver，与入站查询是两条不同的解析路径。
+    if let Some(f) = &decisions.dial_failure {
+        println!("✗ 出站拨号解析   {f}  ← 不经 dns.rules，只认 route.default_domain_resolver");
+        fails += 1;
+    } else if let Some(s) = &decisions.dial_success {
+        println!("✓ 出站拨号解析   {s}");
+    } else if let Some(l) = &decisions.dial_lookup {
+        println!("· 出站拨号解析   {l}  (已发起，未观察到结果行)");
+    } else if let Some(ans) = &decisions.fakeip_answer.filter(|a| is_fakeip(a)) {
+        println!("⚠ 出站拨号解析   拿到 fakeip 答案 {ans}，未观察到失败行（可能连接未走到拨号）");
+    }
+
+    // 阶段 4: 出口代理链路
+    match clash_api_chain(domain, ec) {
+        Some(chain) => println!("✓ 实际出站链路   {chain}"),
+        None => {
+            // 若短连接已关闭，从路由判定的目标也能明确出口
+            if let Some(rd) = &decisions.router_match {
+                if let Some(target) = route_target(rd) {
+                    println!("✓ 规则分配目标   {target}");
+                }
+            }
+        }
+    }
+    fails
+}
+
 /// 执行全部阶段并打印报告；返回失败阶段数。
 pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
     println!("=== sb-sync trace — {domain} 全链路探测 ===\n");
@@ -405,7 +515,9 @@ pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
 
     // 阶段 1: 系统 resolver
     let mut resolved_fakeip = false;
+    let mut resolved_ip: Option<String> = None;
     if let Some((ip, ms)) = system_resolve(domain) {
+        resolved_ip = Some(ip.clone());
         let egress = egress_interface(&ip).unwrap_or_else(|| "?".into());
         if is_fakeip(&ip) {
             resolved_fakeip = true;
@@ -424,58 +536,7 @@ pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
     // 阶段 2 & 3: 监听内核决策流（DNS 规则 + 路由规则）
     match controller {
         Some(ec) if controller_reachable(ec) => {
-            let decisions = capture_decisions(ec, domain);
-
-            match &decisions.dns_match {
-                Some(decision) => {
-                    if decision.contains("dns-fakeip") {
-                        println!("✓ 内核 DNS 判定   {decision}  ← 假 IP 路径, 拨号将失败");
-                    } else {
-                        println!("✓ 内核 DNS 判定   {decision}");
-                    }
-                }
-                None => {
-                    println!("⚠ 内核 DNS 判定   未捕获到匹配规则（可能命中缓存或 final）");
-                }
-            }
-
-            match &decisions.router_match {
-                Some(decision) => println!("✓ 内核路由判定   {decision}"),
-                None => {
-                    println!("⚠ 内核路由判定   未捕获到路由规则（可能直连或默认策略）");
-                }
-            }
-
-            // 拨号解析证据行：诊断内网名失败的关键一行，缺失时旧版报告无从定位。
-            // 同时报出「拨号走哪个解析路径」：这行不经 dns.rules，只认
-            // route.default_domain_resolver，与入站查询是两条不同的解析路径。
-            if let Some(f) = &decisions.dial_failure {
-                println!(
-                    "✗ 出站拨号解析   {f}  ← 不经 dns.rules，只认 route.default_domain_resolver"
-                );
-                fails += 1;
-            } else if let Some(s) = &decisions.dial_success {
-                println!("✓ 出站拨号解析   {s}");
-            } else if let Some(l) = &decisions.dial_lookup {
-                println!("· 出站拨号解析   {l}  (已发起，未观察到结果行)");
-            } else if let Some(ans) = &decisions.fakeip_answer.filter(|a| is_fakeip(a)) {
-                println!(
-                    "⚠ 出站拨号解析   拿到 fakeip 答案 {ans}，未观察到失败行（可能连接未走到拨号）"
-                );
-            }
-
-            // 阶段 4: 出口代理链路
-            match clash_api_chain(domain, ec) {
-                Some(chain) => println!("✓ 实际出站链路   {chain}"),
-                None => {
-                    // 若短连接已关闭，从路由判定的目标也能明确出口
-                    if let Some(rd) = &decisions.router_match {
-                        if let Some(target) = route_target(rd) {
-                            println!("✓ 规则分配目标   {target}");
-                        }
-                    }
-                }
-            }
+            fails += report_kernel_decisions(ec, domain, resolved_ip.as_deref());
         }
         Some(ec) => {
             // 控制面不通时后面每个阶段都会「无数据」，与其打一串 ⚠ 不如直说
@@ -802,5 +863,72 @@ mod tests {
         assert!(parse_cidr4("198.18.0.0/33").is_none());
         assert!(parse_cidr4("not-an-ip/15").is_none());
         assert_eq!(parse_cidr4("198.18.0.1/15").unwrap().net.octets()[1], 18);
+    }
+
+    /// 无 id 前缀的 `dns: match[N]` 行不带域名（只带 query_type / domain_suffix），
+    /// 靠上一条 exchange/exchanged 行确立的域名回填。回归：只按本行域名归属时，
+    /// 这类行整条被丢，内核 DNS 判定阶段落空——正是实机抓到的样子。
+    #[test]
+    fn absorb_line_backfills_recent_dns_domain() {
+        // 与实机捕获一致的行序（example.com 走 fakeip）
+        let mut ids: Vec<String> = Vec::new();
+        let mut g = KernelDecisions::default();
+        for line in [
+            "dns: exchange example.com. IN A",
+            "dns: match[8] query_type=[A AAAA] => route(dns-fakeip)",
+        ] {
+            absorb_line(line, "example.com", &mut ids, &mut g);
+        }
+        assert!(
+            g.dns_match
+                .as_deref()
+                .unwrap_or("")
+                .contains("route(dns-fakeip)"),
+            "match 行应经最近域名回填被收下: {:?}",
+            g.dns_match
+        );
+
+        // 内网名走 predefined，返回真实 IP；match 行带 domain_suffix 也无 id
+        let mut g2 = KernelDecisions::default();
+        for line in [
+            "dns: exchange photo.int.ooooo.space. IN A",
+            "dns: match[0] query_type=A domain_suffix=.int.ooooo.space => predefined(NOERROR,*. 3600 IN A 192.168.69.46)",
+        ] {
+            absorb_line(line, "photo.int.ooooo.space", &mut ids, &mut g2);
+        }
+        assert!(
+            g2.dns_match
+                .as_deref()
+                .unwrap_or("")
+                .contains("=> predefined"),
+            "predefined 的 match 行应被收下: {:?}",
+            g2.dns_match
+        );
+
+        // 最近域名是别的查询时不得收下：回填只认目标域名
+        let mut g3 = KernelDecisions::default();
+        absorb_line(
+            "dns: exchange other.example.net. IN A",
+            "photo.int.ooooo.space",
+            &mut ids,
+            &mut g3,
+        );
+        absorb_line(
+            "dns: match[0] query_type=A => route(dns-fakeip)",
+            "photo.int.ooooo.space",
+            &mut ids,
+            &mut g3,
+        );
+        assert!(g3.dns_match.is_none(), "最近域名不属于目标时不应收下");
+    }
+
+    /// tun 入站的 route_exclude_address 决定「直连所以没有路由日志」；
+    /// 底模改了段而 trace 还写死会静默误判。
+    #[test]
+    fn exclude_address_matches_template() {
+        assert!(is_excluded("192.168.69.46"), "内网段应命中 exclude");
+        assert!(is_excluded("10.1.2.3"));
+        assert!(!is_excluded("8.8.8.8"));
+        assert!(!is_excluded("198.18.0.13"), "fakeip 段不在 exclude 内");
     }
 }
