@@ -89,9 +89,14 @@ test("真实内核保留HTTPS记录、代理DNS兜底、空应答与FakeIP跨重
     expect(dohQueries).toBe(2);
     expect(udpQueries).toBe(0);
     expect(relay.log()).toContain(`127.0.0.1:${doh.port}`);
-    const empty = await query("internal.int.ooooo.space", 28);
+    const beforeDoh = dohQueries, beforeUdp = udpQueries;
+    const empty = await query("internal.int.ooooo.space", 16);
     expect(empty.readUInt16BE(2) & 15).toBe(0);
     expect(empty.readUInt16BE(6)).toBe(0);
+    // predefined 空应答由内核本地裁决；删掉该规则会落到 dns-proxy 上游，
+    // 因此"无上游查询"才是区分点，光看 rcode/答案数无法区分
+    expect(dohQueries).toBe(beforeDoh);
+    expect(udpQueries).toBe(beforeUdp);
     const first = (await query("first.test", 1)).subarray(-4).toString("hex");
     await core.stop(); core = null;
     core = await start(config, dir);
