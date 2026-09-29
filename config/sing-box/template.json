@@ -14,7 +14,9 @@
         "192.168.0.0/16",
         "100.64.0.0/10",
         "169.254.0.0/16",
-        "224.0.0.0/4"
+        "224.0.0.0/4",
+        "127.0.0.0/8",
+        "255.255.255.255/32"
       ]
     },
     {
@@ -36,6 +38,16 @@
         "type": "udp",
         "tag": "dns-direct-cn",
         "server": "223.5.5.5"
+      },
+      {
+        "type": "https",
+        "tag": "dns-proxy",
+        "server": "1.1.1.1",
+        "detour": "hk",
+        "tls": {
+          "enabled": true,
+          "server_name": "cloudflare-dns.com"
+        }
       },
       {
         "type": "fakeip",
@@ -98,7 +110,7 @@
         "server": "dns-fakeip"
       }
     ],
-    "final": "dns-direct-cn"
+    "final": "dns-proxy"
   },
   "route": {
     "auto_detect_interface": true,
@@ -111,6 +123,14 @@
           "quic",
           "dns"
         ]
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "port": 53,
+        "action": "hijack-dns"
       },
       {
         "clash_mode": "direct",
@@ -783,17 +803,6 @@
       ],
       "default": "proxy",
       "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "tailscale",
-      "outbounds": [
-        "proxy",
-        "selfhost",
-        ".*"
-      ],
-      "default": "proxy",
-      "interrupt_exist_connections": true
     }
   ],
   "experimental": {
@@ -804,7 +813,8 @@
     },
     "cache_file": {
       "enabled": true,
-      "path": "cache.db"
+      "path": "cache.db",
+      "store_fakeip": true
     }
   }
 }

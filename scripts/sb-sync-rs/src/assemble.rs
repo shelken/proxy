@@ -336,6 +336,34 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
     outbounds.extend(nodes);
     outbounds.extend(selectors);
     template["outbounds"] = Value::Array(outbounds);
+
+    // 地区组可能因订阅无匹配节点被整组跳过；DNS detour 悬空会让内核 FATAL。
+    // 回退链：proxy → direct（direct 由装配必插入，兜底恒存在）。
+    let available: std::collections::HashSet<String> = template["outbounds"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|o| o["tag"].as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let fallback = if available.contains("proxy") {
+        "proxy"
+    } else {
+        "direct"
+    };
+    for server in template["dns"]["servers"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(detour) = server.get_mut("detour") {
+            if detour.as_str().is_some_and(|t| !available.contains(t)) {
+                *detour = Value::from(fallback);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -727,7 +755,6 @@ mod tests {
                 "paypal",
                 "grok",
                 "1024proxy",
-                "tailscale",
             ],
             "selector 组集合与底模顺序"
         );
@@ -744,6 +771,113 @@ mod tests {
             "proxy 池：组引用在前，节点按入池顺序在后"
         );
         assert_eq!(proxy["default"], json!("selfhost"));
+    }
+
+    /// 真实装配产物上的策略组可达性（第 4 项）与 tailscale 引用完整性（第 5 项）。
+    ///
+    /// 此前这两项的结论只来自对 template.json 的静态阅读；这里从内嵌底模走真实
+    /// `finalize`，在产物的策略组图上判定，而不是复述模板字段。
+    #[test]
+    fn assembled_groups_isolate_region_urltest_and_drop_tailscale() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@192.0.2.2:8388#hk-01|\
+             hy2://pass@192.0.2.3:8388#jp-01|hy2://pass@192.0.2.4:8388#us-01",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
+        let tag_of = |o: &Value| o["tag"].as_str().unwrap_or("").to_string();
+
+        // 第 5 项：tailscale selector 已从底模移除，产物中不得再出现
+        assert!(
+            !outbounds.iter().any(|o| tag_of(o) == "tailscale"),
+            "tailscale 组不应出现在装配产物中"
+        );
+
+        let urltest_tags: Vec<String> = outbounds
+            .iter()
+            .filter(|o| o["type"] == "urltest")
+            .map(&tag_of)
+            .collect();
+        assert!(
+            urltest_tags.iter().any(|t| t == "hk"),
+            "hk 测速组应有节点支撑，实际: {urltest_tags:?}"
+        );
+
+        // 第 4 项：业务 selector 的候选池不引用地区测速组
+        for group_tag in ["proxy", "openai", "anthropic", "gemini", "dev"] {
+            let Some(group) = outbounds
+                .iter()
+                .find(|o| o["type"] == "selector" && tag_of(o) == group_tag)
+            else {
+                continue;
+            };
+            let pool: Vec<String> = group["outbounds"]
+                .as_array()
+                .expect("候选池为数组")
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::to_string)
+                .collect();
+            let borrowed: Vec<&String> = pool
+                .iter()
+                .filter(|m| urltest_tags.iter().any(|u| u == *m))
+                .collect();
+            assert!(
+                borrowed.is_empty(),
+                "{group_tag} 候选池不应引用地区测速组，实际引用了 {borrowed:?}"
+            );
+        }
+    }
+
+    /// dns detour 引用的组被跳过时回退 proxy；组存在时保持原样（双向）。
+    #[test]
+    fn dns_detour_falls_back_when_group_skipped() {
+        let mutate = |tpl: &mut Value| {
+            tpl["dns"]["servers"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|s| s["tag"] == "dns-proxy")
+                .expect("dns-proxy 存在")["detour"] = json!("hk");
+        };
+        // hk 组消失（仅日本节点）：悬空引用必须被改写为 proxy
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        mutate(&mut tpl);
+        let input = input_with_fetcher("hy2://pass@192.0.2.1:8388#jp-osaka-01", "");
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+        let detour = tpl["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "dns-proxy")
+            .unwrap()["detour"]
+            .as_str()
+            .unwrap();
+        assert_eq!(detour, "proxy", "悬空 detour 应回退 proxy");
+
+        // hk 组存在：detour 保持 hk，不被误改
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        mutate(&mut tpl);
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#hk-01|hy2://pass@192.0.2.2:8388#jp-01",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+        let detour = tpl["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "dns-proxy")
+            .unwrap()["detour"]
+            .as_str()
+            .unwrap();
+        assert_eq!(detour, "hk", "组存在时不得误改 detour");
     }
 
     /// selector 与 urltest 组按模式命中对应节点。
