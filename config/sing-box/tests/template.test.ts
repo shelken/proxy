@@ -127,6 +127,17 @@ describe("template.json structural verification", () => {
     }
   });
 
+  test("出站拨号解析跟随系统 DNS，而非固定公网解析器", () => {
+    // 拨号解析（direct 出站的 lookup）不走 dns.rules，只认 default_domain_resolver。
+    // 实测：dns.rules 里给 test.internal 配了 dns-local-system 也拦不住拨号，
+    // 内核直接 lookup → NXDOMAIN。必须在这里指到 dns-local-system（type:local，
+    // 跟随 DHCP）：局域网内打路由器拿内网 IP，在外面打运营商 DNS。
+    expect(template.route?.default_domain_resolver?.server).toBe("dns-local-system");
+    // 指向的 server 必须在 dns.servers 里真实存在，否则内核启动 FATAL
+    const tags = (template.dns?.servers ?? []).map((s) => s.tag);
+    expect(tags).toContain(template.route.default_domain_resolver.server);
+  });
+
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
     const tunAddr = template.inbounds.find((i) => i.type === "tun").address[0];
     const [tunIp, tunBits] = tunAddr.split("/");
