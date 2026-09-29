@@ -341,11 +341,13 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
     // 回退链：proxy → direct（direct 由装配必插入，兜底恒存在）。
     let available: std::collections::HashSet<String> = template["outbounds"]
         .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|o| o["tag"].as_str())
-        .map(str::to_string)
-        .collect();
+        .map(|a| {
+            a.iter()
+                .filter_map(|o| o["tag"].as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let fallback = if available.contains("proxy") {
         "proxy"
     } else {
