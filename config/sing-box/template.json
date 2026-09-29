@@ -804,7 +804,8 @@
     },
     "cache_file": {
       "enabled": true,
-      "path": "cache.db"
+      "path": "cache.db",
+      "store_fakeip": true
     }
   }
 }
