@@ -88,6 +88,17 @@ rules-check:
     @bun scripts/rules-compile.ts check
 
 
+# --- 推前全检（pre-push 钩子调用，推前手动跑同样可以） ---
+# 与 ci-sb-sync.yml 同口径，另加宿主机安全的模板测试。
+# 沙箱网络行为测试（TUN/netns）不在这里跑：宿主机上会破坏在用的网络，
+# 走 just test-sandbox 在 VM 内执行。
+verify: check-singbox rules-check
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo test --workspace --locked
+    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts
+
+
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点
 # 用法: just trace google.com
 #       just trace api.openai.com
