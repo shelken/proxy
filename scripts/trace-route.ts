@@ -1,8 +1,16 @@
 /**
- * 全链路路由追踪器
+ * 全链路路由追踪器（沙箱侧）
  *
  * 配置来源是**服务端真实产物**：起临时服务端 → 经 encode + /sub 取回它实际响应的
  * 配置 → 驱动内核追踪。不再是本地等价实现（ADR-0003）。
+ *
+ * 与 `sb-sync trace`（宿主侧）的分工：
+ * - 本文件：在 Lima VM 内跑，用于**离线复现**某个规则/overlay 的裁决，可注入
+ *   overlay、可看策略组与节点链，不碰宿主网络。
+ * - `sb-sync trace`：跑在真机上，验证**当前部署**在真实网络环境下的表现。
+ * 两者是不同被测对象（离线配置 vs 线上部署），不共用解析代码是有意的：宿主侧
+ * 解析要跟着真机日志格式走，沙箱侧要能构造边界输入。改任一侧时只需保证与内核
+ * 实际日志格式一致，不必同步到另一侧。
  *
  * 特性：
  * 1. 零远程下载：规则集本地编译产物路径由引导重写，内核秒级就绪。
@@ -112,13 +120,19 @@ async function main(): Promise<void> {
   }
   const config = JSON.parse(configSync.out) as SingBoxConfig;
 
-  // 沙箱 DNS 隔离:Lima NAT 网关(192.168.5.2)的上游链会透传宿主 SFM fakeip(198.18/15)
-  // 并对部分私域返回 NXDOMAIN,type:local 在 VM 内不可信。改为明确公共 UDP 上游,
-  // 保证内核拨号解析(节点 server 域名)与 DNS 决策日志在沙箱内自洽。
-  config.dns = config.dns ?? {};
-  config.dns.servers = (config.dns.servers ?? []).map((s: Record<string, unknown>) =>
-    s.type === "local" ? { type: "udp", tag: s.tag, server: "223.5.5.5" } : s,
-  );
+  // 沙箱默认保留 type:local（跟随 VM 内系统解析器），不再替换成固定 UDP 上游。
+  // 上一版把 local 换成 223.5.5.5，恰好把「拨号走 local resolver」这条要测的路径
+  // 拆掉了：内网名故障正是发生在该路径上，替换后沙箱永远复现不出。Lima NAT 上游
+  // 的污染只影响结果值，不影响「走了哪条路径」这一被测事实。
+  // 需要隔离上游时用 TRACE_DNS_UDP=<ip> 显式降级，并在报告里标注已降级。
+  const forcedUdp = process.env.TRACE_DNS_UDP;
+  if (forcedUdp) {
+    config.dns = config.dns ?? {};
+    config.dns.servers = (config.dns.servers ?? []).map((s: Record<string, unknown>) =>
+      s.type === "local" ? { type: "udp", tag: s.tag, server: forcedUdp } : s,
+    );
+    console.log(`[TRACE] 注意: type:local 已按 TRACE_DNS_UDP 降级为 udp ${forcedUdp}`);
+  }
 
   // 3. 推回 VM 并校验
   const push = Bun.spawnSync(
