@@ -80,7 +80,7 @@ describe("chooseArtifact", () => {
       { databaseId: 200, headSha: "same" },
     ];
     // 只有 "same" 与被测代码等价
-    const diffOf = (from: string) => (from === "same" ? "" : "scripts/sb-sync-rs/x.rs");
+    const diffOf = (from: string) => (from === "same" ? "" : "scripts/sbtools-rs/x.rs");
     expect(chooseArtifact(runs, "head", diffOf)).toEqual({
       chosen: { databaseId: 200, headSha: "same" },
       exact: false,
@@ -89,7 +89,7 @@ describe("chooseArtifact", () => {
 
   test("候选里没有精确也没有等价时返回 null", () => {
     const runs = [{ databaseId: 300, headSha: "differs" }];
-    expect(chooseArtifact(runs, "head", () => "scripts/sb-sync-rs/x.rs")).toBeNull();
+    expect(chooseArtifact(runs, "head", () => "scripts/sbtools-rs/x.rs")).toBeNull();
   });
 
   test("空候选返回 null", () => {

@@ -4,11 +4,11 @@ use std::path::PathBuf;
 
 /// 默认客户端 YAML 配置：~/.config/sing-box/config.yaml
 pub fn client_config_path() -> Result<PathBuf, String> {
-    Ok(sb_sync_dir()?.join("config.yaml"))
+    Ok(sbtools_dir()?.join("config.yaml"))
 }
 
 /// HOME 缺失即报错：路径无处可推，继续执行只会读出错误的文件。
-fn sb_sync_dir() -> Result<PathBuf, String> {
+fn sbtools_dir() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())

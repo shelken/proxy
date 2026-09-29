@@ -1,4 +1,4 @@
-# 构建上下文瘦身：镜像只 COPY 预编译的 sb-sync 二进制与官方 sing-box，
+# 构建上下文瘦身：镜像只 COPY 预编译的 sbtools 二进制与官方 sing-box，
 # 不需要仓库其余内容（Rust 编译已由 CI 的独立步骤完成）。
 .git/
 .github/

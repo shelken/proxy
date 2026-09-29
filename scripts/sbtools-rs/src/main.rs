@@ -1,4 +1,4 @@
-//! sb-sync — 客户端加密编码 + 服务端原生合并，双形态单二进制。
+//! sbtools — 客户端加密编码 + 服务端原生合并，双形态单二进制。
 //!
 //! 客户端: encode（YAML → 加密 URL → 剪切板）；辅助: keygen。
 //! 服务端: server（解密 → 装配 → 官方 sing-box merge → 响应）。
@@ -45,7 +45,7 @@ fn main() {
             Ok(())
         }
         Some("version" | "--version" | "-V") => {
-            println!("sb-sync {}", env!("CARGO_PKG_VERSION"));
+            println!("sbtools {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         _ => {
@@ -61,13 +61,13 @@ fn main() {
 
 fn usage() -> String {
     [
-        "sb-sync — 客户端加密编码 + 服务端原生合并",
+        "sbtools — 客户端加密编码 + 服务端原生合并",
         "",
-        "  sb-sync encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
-        "  sb-sync trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
-        "  sb-sync check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
-        "  sb-sync keygen                                 生成服务端 X25519 公私钥对（Hex）",
-        "  sb-sync version                                显示版本",
+        "  sbtools encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
+        "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
+        "  sbtools check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
+        "  sbtools keygen                                 生成服务端 X25519 公私钥对（Hex）",
+        "  sbtools version                                显示版本",
     ]
     .join("\n")
 }
@@ -77,7 +77,7 @@ fn usage() -> String {
 /// 服务端是具名选项 `-s/--server` 而非位置参数：两个选项顺序无关，
 /// 未来新增选项时不会因位置变动而改调用方式。
 fn parse_encode_args(rest: &[String]) -> Result<(String, Option<std::path::PathBuf>), String> {
-    let usage_hint = "encode 用法: sb-sync encode -s <server> [-c <config.yaml>]";
+    let usage_hint = "encode 用法: sbtools encode -s <server> [-c <config.yaml>]";
     let mut server: Option<String> = None;
     let mut config_path: Option<std::path::PathBuf> = None;
 
@@ -142,7 +142,7 @@ fn legacy_config_path() -> std::path::PathBuf {
 
 /// trace: 真机全链路探测。--api 显式指定 Clash API,缺省读产物配置。
 fn cmd_trace(rest: &[String]) -> Result<(), String> {
-    let usage_hint = "trace 用法: sb-sync trace <domain> [--api <127.0.0.1:9090>]";
+    let usage_hint = "trace 用法: sbtools trace <domain> [--api <127.0.0.1:9090>]";
     let mut domain: Option<String> = None;
     let mut api: Option<String> = None;
     let mut it = rest.iter();
@@ -179,7 +179,7 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
 /// 完全不在视野内（引用一个不存在的 rule-set，本地不报错，SFM 启动才 FATAL）。
 /// 这里在本地把 overlay 合并进去再 check，把那个 FATAL 提前到动手之前。
 fn cmd_check(rest: &[String]) -> Result<(), String> {
-    let usage_hint = "check 用法: sb-sync check [-c <config.yaml>]";
+    let usage_hint = "check 用法: sbtools check [-c <config.yaml>]";
     let mut config_path: Option<std::path::PathBuf> = None;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
@@ -279,7 +279,7 @@ fn cmd_server(rest: &[String]) -> Result<(), String> {
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(8080),
-        _ => return Err("server 用法: sb-sync server [--port 8080]".into()),
+        _ => return Err("server 用法: sbtools server [--port 8080]".into()),
     };
     server::run(port)
 }
@@ -296,7 +296,7 @@ mod tests {
         assert!(u.contains("keygen"));
         assert!(u.contains("check"));
         assert!(!u.contains("doctor"));
-        assert!(!u.contains("sb-sync sync"));
+        assert!(!u.contains("sbtools sync"));
         assert!(u.contains("encode -s <server>"));
     }
 

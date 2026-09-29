@@ -1,6 +1,6 @@
 # 版本准备：main 上的改动推导出下一个版本，开一个 Release PR。
 #
-# 这里只做版本准备，不打 tag、不发 Release。tag 由 release-sb-sync.yml 在检测到
+# 这里只做版本准备，不打 tag、不发 Release。tag 由 release-sbtools.yml 在检测到
 # 清单版本变化时创建（同一次 run 内完成），所以全程只需要仓库自带的 GITHUB_TOKEN
 # ——用 GITHUB_TOKEN 创建的历史 tag 无法触发 on.push.tags 的工作流，把 tag 移出
 # 触发链路就不需要引入 PAT。
@@ -35,7 +35,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency:
-      group: sb-sync-release-plz
+      group: sbtools-release-plz
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
@@ -53,7 +53,7 @@ jobs:
         id: guard
         run: |
           set -euo pipefail
-          MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
+          MANIFEST=$(grep -m1 '^version' scripts/sbtools-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
           HIGHEST=$(git tag --list 'v*' | sed -E 's/^v//' \
             | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
           if [ -n "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$HIGHEST" "$MANIFEST" | sort -V | tail -1)" != "$MANIFEST" ]; then
@@ -83,7 +83,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
-      group: sb-sync-release-manual
+      group: sbtools-release-manual
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
@@ -113,15 +113,15 @@ jobs:
         with:
           base: main
           branch: manual-release
-          title: "chore: release sb-sync ${{ inputs.version }}"
-          commit-message: "chore: release sb-sync ${{ inputs.version }}"
+          title: "chore: release sbtools ${{ inputs.version }}"
+          commit-message: "chore: release sbtools ${{ inputs.version }}"
           add-paths: |
             Cargo.toml
             Cargo.lock
-            scripts/sb-sync-rs/Cargo.toml
-            scripts/sb-sync-rs/CHANGELOG.md
+            scripts/sbtools-rs/Cargo.toml
+            scripts/sbtools-rs/CHANGELOG.md
           body: |
             由 `release-plz` 工作流的 workflow_dispatch 准备。
 
-            合并后 main 上的清单版本变化会被 `release-sb-sync` 检测到，
+            合并后 main 上的清单版本变化会被 `release-sbtools` 检测到，
             由它创建 tag、构建三平台二进制与双架构镜像、公开 Release。

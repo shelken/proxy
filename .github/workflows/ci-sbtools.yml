@@ -1,12 +1,12 @@
-# sb-sync Rust 门禁：格式化、严格 lint、全量测试。所有编译校验都在这里做。
+# sbtools Rust 门禁：格式化、严格 lint、全量测试。所有编译校验都在这里做。
 # 严格规则同时写在 src/lib.rs 与 src/main.rs 的 cfg 属性里，本工作流只需 -D warnings。
-name: ci-sb-sync
+name: ci-sbtools
 
 on:
   push:
     branches: ["**"]
     paths:
-      - "scripts/sb-sync-rs/**"
+      - "scripts/sbtools-rs/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "config/sing-box/template.json"
@@ -15,8 +15,8 @@ on:
       - ".dockerignore"
       - "justfile"
       - "config/sing-box/lima.yaml"
-      - ".github/workflows/ci-sb-sync.yml"
-      - ".github/workflows/release-sb-sync.yml"
+      - ".github/workflows/ci-sbtools.yml"
+      - ".github/workflows/release-sbtools.yml"
   # pull_request 不按路径过滤：版本 PR 与只改构建文件的 PR 也要拿到确定终态，
   # 否则检查列表停在 Pending、无从判断。省算力交给上面的 push paths。
   pull_request:
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: scripts/sb-sync-rs
+        working-directory: scripts/sbtools-rs
     steps:
       - uses: actions/checkout@v5
 
@@ -50,8 +50,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ci-sb-sync-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-sb-sync-
+          key: ci-sbtools-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-sbtools-
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -100,17 +100,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ci-sb-sync-docker-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-sb-sync-docker-
+          key: ci-sbtools-docker-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ci-sbtools-docker-
 
       # 镜像已改为 COPY 预编译二进制，构建上下文里必须先有它。
       # 这里与 release 工作流同源同目标，避免「CI 绿但发版炸」。
       # workspace 化后 target 目录在仓库根，不在 crate 目录
       - name: Build binary
-        working-directory: scripts/sb-sync-rs
+        working-directory: scripts/sbtools-rs
         run: |
           cargo build --release --locked --target x86_64-unknown-linux-musl
-          cp ../../target/x86_64-unknown-linux-musl/release/sb-sync ../../sb-sync
+          cp ../../target/x86_64-unknown-linux-musl/release/sbtools ../../sbtools
 
       - uses: docker/setup-buildx-action@v3
 
@@ -137,13 +137,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           load: true
-          tags: sb-sync-server:ci
+          tags: sbtools-server:ci
 
       # 起容器验一次真实链路：/healthz 通、/pubkey 返回合法公钥
       - name: Smoke test image
         run: |
           SK=$(openssl rand -hex 32)
-          docker run -d --name sb-sync-ci -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sb-sync-server:ci
+          docker run -d --name sbtools-ci -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sbtools-server:ci
           # 与 release 工作流同因：容器接受连接却不响应时，无超时的 curl 会挂到
           # job 上限而非在 20 秒内失败，冒烟步骤就失去快速失败的意义。
           for _ in $(seq 1 20); do
@@ -156,4 +156,4 @@ jobs:
           # 与私钥推导出的公钥必须一致（长度 64 且为十六进制）
           test "${#PK}" -eq 64
           echo "$PK" | grep -qE '^[0-9a-f]{64}$'
-          docker rm -f sb-sync-ci
+          docker rm -f sbtools-ci

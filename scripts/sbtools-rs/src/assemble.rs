@@ -255,7 +255,7 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
             if kept.is_empty() {
                 // 空组(订阅无匹配节点)会让 sing-box FATAL,整体跳过;引用它的组已在上面被剪掉。
                 eprintln!(
-                    "[sb-sync] 策略组 '{tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)"
+                    "[sbtools] 策略组 '{tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)"
                 );
                 return None;
             }

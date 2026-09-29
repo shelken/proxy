@@ -509,7 +509,7 @@ fn report_kernel_decisions(ec: &str, domain: &str, resolved_ip: Option<&str>) ->
 
 /// 执行全部阶段并打印报告；返回失败阶段数。
 pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
-    println!("=== sb-sync trace — {domain} 全链路探测 ===\n");
+    println!("=== sbtools trace — {domain} 全链路探测 ===\n");
 
     let mut fails: u8 = 0;
 
