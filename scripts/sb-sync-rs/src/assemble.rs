@@ -705,7 +705,6 @@ mod tests {
             .filter(|o| o["type"] == "selector")
             .collect();
 
-
         let proxy = selectors
             .iter()
             .find(|s| s["tag"] == "proxy")
