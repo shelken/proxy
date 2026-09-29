@@ -6,3 +6,6 @@
 - [004 · tag 守卫内的步骤躲过 CI，首次执行即发版](./004-tag-guarded-step-bypasses-ci.md)
 - [005 · tag 作为发布触发点，迫使引入长期 PAT](./005-tag-trigger-forces-pat.md)
 - [006 · workspace 上移后 target 目录位置未同步，发版复制到过期二进制](./006-workspace-target-path-drift.md)
+- [007 · squash 合并后 git cherry 误报未合并](./007-squash-merge-cherry-false-unmerged.md)
+- [008 · release-plz 版本 PR 的 CI 卡在 action_required](./008-release-plz-pr-ci-action-required.md)
+- [009 · 手写样例测不出日志解析边界，需真实抓取序列回归](./009-log-parser-tests-need-real-capture.md)
