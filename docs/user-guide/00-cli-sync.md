@@ -1,11 +1,11 @@
-# sb-sync 客户端指南
+# sbtools 客户端指南
 
-面向使用任意 arm Mac 的用户。目标：装好 sb-sync，把本机配置加密成一条订阅 URL 交给 SFM。
+面向使用任意 arm Mac 的用户。目标：装好 sbtools，把本机配置加密成一条订阅 URL 交给 SFM。
 
 前置条件只有两个：macOS（Apple Silicon）与 [mise](https://mise.jdx.dev)。不需要本仓库源码。
 
-服务端形态（`sb-sync server`）由部署者维护，见 [sb-sync 架构](../sb-sync.md)。
-本机只需要使用 `encode`（与部署时用一次的 `keygen`）；连接异常时用 `sb-sync trace <域名>` 现场诊断。
+服务端形态（`sbtools server`）由部署者维护，见 [sbtools 架构](../sbtools.md)。
+本机只需要使用 `encode`（与部署时用一次的 `keygen`）；连接异常时用 `sbtools trace <域名>` 现场诊断。
 
 ## 安装
 
@@ -16,11 +16,11 @@ mise install github:shelken/proxy@latest
 安装后验证：
 
 ```bash
-sb-sync version
+sbtools version
 ```
 
 无 mise 的设备，从 [Releases](https://github.com/shelken/proxy/releases) 下载
-`sb-sync-aarch64-apple-darwin`，加执行权限后放入 PATH 即可。
+`sbtools-aarch64-apple-darwin`，加执行权限后放入 PATH 即可。
 
 ## 写配置
 
@@ -56,7 +56,7 @@ overlay: |
 ## 生成订阅 URL
 
 ```bash
-sb-sync encode -s https://sub.example.com
+sbtools encode -s https://sub.example.com
 ```
 
 服务端地址是 `-s/--server` 选项，不写进配置：同一份 YAML 可以指向不同服务端。
@@ -90,5 +90,5 @@ sb-sync encode -s https://sub.example.com
 | `template_url 不得指向内网地址` | 内网与云元数据地址被拒 |
 | `HTTP 请求失败 .../pubkey` | 服务端不可达或地址写错 |
 
-**升级 sb-sync**：`mise install github:shelken/proxy@latest`；新 release 有 24h 冷却期，
+**升级 sbtools**：`mise install github:shelken/proxy@latest`；新 release 有 24h 冷却期，
 追平用 `mise install github:shelken/proxy@<版本号> --minimum-release-age 0d`

@@ -4,18 +4,18 @@
 
 ```text
 proxy/
-├── Cargo.toml            # workspace 清单（crate 在 scripts/sb-sync-rs，版本真源在那边）
+├── Cargo.toml            # workspace 清单（crate 在 scripts/sbtools-rs，版本真源在那边）
 ├── Cargo.lock            # workspace 锁文件
 ├── release-plz.toml      # release-plz git_only 配置
 ├── scripts/
-│   └── sb-sync-rs/       # sb-sync 客户端编码 + 服务端装配（Rust 单二进制）
+│   └── sbtools-rs/       # sbtools 客户端编码 + 服务端装配（Rust 单二进制）
 ├── config/
 │   ├── rules/            # 分流规则源 (自定义 .list 与上游 index.yaml)
 │   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
-├── docs/                 # 架构 (ARCH / sb-sync) 与用户指南
-├── .github/workflows/    # CI：ci-sb-sync 门禁；release-plz 开版本 PR；release-sb-sync 发布二进制与镜像
-├── Dockerfile            # 服务端镜像（sing-box CLI + sb-sync）
+├── docs/                 # 架构 (ARCH / sbtools) 与用户指南
+├── .github/workflows/    # CI：ci-sbtools 门禁；release-plz 开版本 PR；release-sbtools 发布二进制与镜像
+├── Dockerfile            # 服务端镜像（sing-box CLI + sbtools）
 └── justfile              # 统一测试与运维指令入口
 ```
 
@@ -28,13 +28,13 @@ flowchart TD
         GHA --> R_BIN["各端产物\n(singbox 66 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
     end
 
-    subgraph S2 ["2. 客户端编码 (sb-sync encode)"]
+    subgraph S2 ["2. 客户端编码 (sbtools encode)"]
         YAML["config.yaml\nsubs / nodes / overlay / template_url"] --> ENC["校验 + 加密\nX25519 + HKDF + AES-256-GCM"]
         PK["服务端公钥\nGET /pubkey 自动获取"] --> ENC
         ENC --> URL["订阅 URL\n/sub?d=&lt;密文&gt;"]
     end
 
-    subgraph S3 ["3. 服务端装配 (sb-sync server)"]
+    subgraph S3 ["3. 服务端装配 (sbtools server)"]
         URL --> SRV["解密 + 装配节点\n反回环直连规则置顶"]
         SRV --> MG["官方 sing-box merge\n(不自研合并)"]
         R_BIN -.->|rule_set 远程引用| SRV
@@ -53,7 +53,7 @@ flowchart TD
 - **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
 - **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct` / `01-overlay` / `02-base` 命名，路径字典序决定优先级（标量取先者、数组按序拼接）
 - **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态
-- 细节见 [sb-sync 架构](./sb-sync.md)
+- 细节见 [sbtools 架构](./sbtools.md)
 
 ## 3. 链路二：运行时流量决策链路 (Runtime Traffic Pipeline)
 
@@ -84,13 +84,13 @@ DNS 查询先匹配本地与国内规则，未匹配的 A/AAAA 使用 FakeIP，�
 ```mermaid
 sequenceDiagram
     participant Dev as 开发与配置调整
-    participant CI as CI (release-sb-sync)
-    participant ASM as 装配引擎 (服务端 sb-sync)
+    participant CI as CI (release-sbtools)
+    participant ASM as 装配引擎 (服务端 sbtools)
     participant VM as Lima VM 沙箱 (proxy-test)
     participant Probe as 探针 (just trace)
 
     Dev->>CI: 推分支，取 HEAD 的 Linux 产物
-    CI-->>Dev: sb-sync-aarch64-unknown-linux-musl
+    CI-->>Dev: sbtools-aarch64-unknown-linux-musl
     Dev->>VM: 拷入二进制与规则产物
     Dev->>ASM: VM 内起服务端 (客户端 encode 生成订阅 URL)
     ASM-->>Dev: /sub 返回真实装配产物 (解密 -> 装配 -> 官方 CLI 合并)
@@ -103,18 +103,18 @@ sequenceDiagram
 
 ## 5. 发布与门禁链路
 
-发布操作规范见根目录 `RELEASE.md`。版本真源是 `scripts/sb-sync-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新（含根 `Cargo.lock` 与 `CHANGELOG.md`）。
+发布操作规范见根目录 `RELEASE.md`。版本真源是 `scripts/sbtools-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新（含根 `Cargo.lock` 与 `CHANGELOG.md`）。
 
 仓库根 `Cargo.toml` 是 workspace 清单（不含版本），必须留在根：release-plz 的 `git_only` 模式在清单所在目录打开 Git 仓库且不向上层搜索 `.git`，放回 crate 子目录会让版本推导直接失败。cargo 的 `target/` 同样属于 workspace 根。
 
 ```text
-每次改动 (scripts/sb-sync-rs/**、根 Cargo.toml/Cargo.lock 或 template.json) → ci-sb-sync.yml
+每次改动 (scripts/sbtools-rs/**、根 Cargo.toml/Cargo.lock 或 template.json) → ci-sbtools.yml
   → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
   → mise 装 .mise.toml 里的 sing-box → cargo test → cargo build --release
   → cargo build --release → docker build（--build-arg 内核版本，不推送）
     + 起容器验 /healthz 与 /pubkey
 
-合并 Release PR → main 的清单版本变化被 release-sb-sync.yml 检测到
+合并 Release PR → main 的清单版本变化被 release-sbtools.yml 检测到
   → prepare 校验 tag ↔ 清单 ↔ 锁文件，创建 tag（GITHUB_TOKEN，同一次 run 内）
   三平台各自在原生 runner 上 cargo test --release → cargo build --release
     aarch64-apple-darwin      (macos-15)          客户端

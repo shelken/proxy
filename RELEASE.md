@@ -1,6 +1,6 @@
 # 发布操作
 
-`sb-sync` 的版本真源是 `scripts/sb-sync-rs/Cargo.toml`；仓库根的 `Cargo.toml` 只是把该 crate 纳入 workspace 的清单，不含版本。合并一个 Release PR 后，CI 自动产出三平台二进制、双架构镜像和带资产的 GitHub Release。
+`sbtools` 的版本真源是 `scripts/sbtools-rs/Cargo.toml`；仓库根的 `Cargo.toml` 只是把该 crate 纳入 workspace 的清单，不含版本。合并一个 Release PR 后，CI 自动产出三平台二进制、双架构镜像和带资产的 GitHub Release。
 
 全流程只用仓库自带的 `GITHUB_TOKEN`，不需要任何个人访问令牌或 GitHub App。
 
@@ -9,7 +9,7 @@
 1. 功能 PR 合并到 `main`
 2. `release-plz` 工作流自动开一个版本 PR（版本按 conventional commits 推导，更新 `Cargo.toml`、`Cargo.lock`、`CHANGELOG.md`）
 3. 核对版本号、CHANGELOG 说明与 CI 结果，Merge
-4. 合并后 `release-sb-sync` 检测到清单版本变化，创建 tag、构建产物、公开 Release
+4. 合并后 `release-sbtools` 检测到清单版本变化，创建 tag、构建产物、公开 Release
 
 不要手工推 tag，也不要手改 `Cargo.toml` 版本。
 
@@ -32,7 +32,7 @@ gh workflow run release-plz.yml --ref main -f version=0.6.0 -f notes='底模路�
 只想验证构建链路（不发版、不建 tag、不动 `latest`）：
 
 ```sh
-gh workflow run release-sb-sync.yml --ref <分支或 tag>
+gh workflow run release-sbtools.yml --ref <分支或 tag>
 ```
 
 产物是 `snapshot-<sha>` 一次性镜像 tag 与 run artifact。包是公开包，GHCR 对公开包不计量存储，这些快照不需要定期回收。

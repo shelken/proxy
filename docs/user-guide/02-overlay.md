@@ -74,8 +74,8 @@ overlay: |
 # 直接问 SFM 内核（198.51.100.2 是 TUN 网段里的内核 DNS 地址）
 dig @198.51.100.2 photo.int.ooooo.space A
 
-# 用 sb-sync trace 看判定链路
-sb-sync trace photo.int.ooooo.space
+# 用 sbtools trace 看判定链路
+sbtools trace photo.int.ooooo.space
 ```
 
 ## 限制

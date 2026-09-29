@@ -6,14 +6,14 @@
 
 - **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.yaml` 统一声明，编译为 sing-box `.srs`、Clash yaml 等产物并由 CI 发布到 `sing-box-rules` 分支供远程引用
 - **标准化 sing-box 底模**：双入站、FakeIP DNS、分流策略组与内网穿透的完整骨架，策略组清单见底模自身
-- **设备侧订阅交付（sb-sync）**：本机订阅与节点加密成一条 URL，服务端装配后由 SFM 按间隔自动拉取，凭据零外泄
+- **设备侧订阅交付（sbtools）**：本机订阅与节点加密成一条 URL，服务端装配后由 SFM 按间隔自动拉取，凭据零外泄
 - **Loon 插件**：移动端与 macOS 端插件（去广告、自动化签到等），独立开关与幂等保证
 
 ## 快速上手
 
 ### 用户：在设备上接入（Mac + SFM）
 
-装 sb-sync（依赖 [mise](https://mise.jdx.dev)，无需本仓库源码）：
+装 sbtools（依赖 [mise](https://mise.jdx.dev)，无需本仓库源码）：
 
 ```bash
 mise install github:shelken/proxy@latest
@@ -31,7 +31,7 @@ nodes:
 生成订阅 URL（自动写剪切板，公钥从服务端实时获取）：
 
 ```bash
-sb-sync encode -s https://sub.example.com
+sbtools encode -s https://sub.example.com
 ```
 
 把 URL 粘进 SFM 的 Remote Profile，之后由 SFM 按间隔自动拉取
@@ -59,7 +59,7 @@ Apple-AI: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/
 
 ## 核心策略组
 
-策略组定义在底模 `config/sing-box/template.json`，组名、默认出口与候选池以该文件为准（底模结构说明见 [docs/sb-sync.md](./docs/sb-sync.md)，面板端的切换操作见[用户指南](./docs/user-guide/01-mac-sfm.md)）
+策略组定义在底模 `config/sing-box/template.json`，组名、默认出口与候选池以该文件为准（底模结构说明见 [docs/sbtools.md](./docs/sbtools.md)，面板端的切换操作见[用户指南](./docs/user-guide/01-mac-sfm.md)）
 
 需要当前值时直接查：
 
@@ -72,9 +72,9 @@ jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) �
 - `config/rules/`：分流规则源（`index.yaml` + `custom/`）与编译器 `scripts/rules-compile.ts`，详见其 [README](./config/rules/README.md)
 - `config/sing-box/`：sing-box 标准底模与沙箱闭环套件
 - `config/loon/`：Loon 配置文件与插件
-- `scripts/sb-sync-rs/`：sb-sync Rust 源码（客户端编码 + 服务端装配）
+- `scripts/sbtools-rs/`：sbtools Rust 源码（客户端编码 + 服务端装配）
 - `docs/ARCH.md`：系统顶层架构
-- `docs/sb-sync.md`：sb-sync 客户端与服务端架构、加密协议、配置说明
+- `docs/sbtools.md`：sbtools 客户端与服务端架构、加密协议、配置说明
 - `docs/user-guide/`：[用户指南](./docs/user-guide/README.md)
 - `postmortems/`：疑难问题的排查记录
 
@@ -98,7 +98,7 @@ just rules-build    # 全量编译各端产物
 
 规则集装载与路由裁决的断言在 `config/sing-box/tests/loop.test.ts`，会创建 TUN、改写路由表，
 **不在宿主机运行**，入口与沙箱 VM 生命周期见 justfile 的 `vm-*` / `test-sandbox` 系列命令
-改动 `scripts/sb-sync-rs/` 后的编译校验由 CI 承担（`.github/workflows/ci-sb-sync.yml`）
+改动 `scripts/sbtools-rs/` 后的编译校验由 CI 承担（`.github/workflows/ci-sbtools.yml`）
 
 ## 许可证
 

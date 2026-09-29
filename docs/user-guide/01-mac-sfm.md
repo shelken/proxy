@@ -1,16 +1,16 @@
 # Mac + SFM 使用指南
 
-在 macOS 上用 [SFM](https://sing-box.sagernet.org/clients/apple/)（sing-box for Mac）承载 sb-sync
-服务端产出的配置。前置：已按 [00-cli-sync.md](./00-cli-sync.md) 完成 sb-sync 安装与订阅 URL 生成。
+在 macOS 上用 [SFM](https://sing-box.sagernet.org/clients/apple/)（sing-box for Mac）承载 sbtools
+服务端产出的配置。前置：已按 [00-cli-sync.md](./00-cli-sync.md) 完成 sbtools 安装与订阅 URL 生成。
 
-架构与加密细节见 [sb-sync 架构](../sb-sync.md)。
+架构与加密细节见 [sbtools 架构](../sbtools.md)。
 
 ## 一次性导入
 
 本机只需要贴一次 URL，之后由 SFM 自行拉取：
 
 1. 打开 SFM → `Profiles` → `New Profile` → 类型选 `Remote`
-2. 名称随意（如 `singbox`），URL 填 `sb-sync encode` 产出的订阅 URL
+2. 名称随意（如 `singbox`），URL 填 `sbtools encode` 产出的订阅 URL
 3. 保存后 SFM 立即拉取一次；主界面选中该 profile → 开关 OFF→ON 启动
 
 `Remote` 类型的 profile 内容由 URL 管理，SFM 会按间隔自动重新拉取，因此配置变更不需要再手动导入
@@ -22,7 +22,7 @@
 **改了本机 YAML（`subs` / `nodes` / `overlay` / `template_url`）** — 重新生成 URL 并覆盖 SFM 里的旧值：
 
 ```bash
-sb-sync encode -s <server>
+sbtools encode -s <server>
 ```
 
 密文载荷就是这份配置本身，每次 `encode` 都用新的临时密钥与随机 nonce，所以 URL 必然变化。
@@ -31,7 +31,7 @@ sb-sync encode -s <server>
 改完先跑一次离线校验，在重贴 SFM 之前确认 overlay 合法且真的生效：
 
 ```bash
-sb-sync check -c ~/.config/sing-box/config.yaml
+sbtools check -c ~/.config/sing-box/config.yaml
 ```
 
 它把 overlay 合到底模上跑内核 `check` 并打印生效摘要（`dns.rules` 逐条、`route.default_domain_resolver`、
@@ -80,7 +80,7 @@ curl -s -o /tmp/sub.json -w '%{http_code}\n' '<订阅 URL>'
 
 | 现象 | 原因 |
 | :--- | :--- |
-| 403 | 密文损坏或用了错误公钥加密（服务端轮换过密钥），重新 `sb-sync encode` |
+| 403 | 密文损坏或用了错误公钥加密（服务端轮换过密钥），重新 `sbtools encode` |
 | 400 | 载荷结构非法、订阅抓取失败，或 `sing-box merge` 报错（响应体会带 sing-box 的报错摘要） |
 | 404 | 路径不对，`/sub` 之外一律 404 |
 | 拉取超时 | 服务端拉机场订阅慢（单次上限 10s） |

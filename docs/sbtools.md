@@ -1,4 +1,4 @@
-# sb-sync 架构
+# sbtools 架构
 
 客户端加密编码 + 服务端原生合并的双形态单二进制。客户端只持有服务端公钥，服务端只持有自身私钥，订阅凭据全程不经第三方
 
@@ -47,9 +47,9 @@ flowchart LR
 ## 3. 客户端
 
 ```text
-sb-sync encode -s <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 加密 → 写剪切板
-sb-sync check [-c <config.yaml>]                # 离线校验: 合并 overlay 到底模并跑内核 check
-sb-sync keygen                                  # 生成服务端 X25519 密钥对（部署时一次）
+sbtools encode -s <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 加密 → 写剪切板
+sbtools check [-c <config.yaml>]                # 离线校验: 合并 overlay 到底模并跑内核 check
+sbtools keygen                                  # 生成服务端 X25519 密钥对（部署时一次）
 ```
 
 `check` 是纯离线入口：读本机 YAML → 把 `overlay` 合并到底模（与服务端同一套层序）
@@ -91,7 +91,7 @@ ECIES（X25519 + HKDF-SHA256 + AES-256-GCM），每次 `encode` 都用新的临�
 派生：HKDF-SHA256(salt="sb-sync-v1", info="aes-256-gcm", ikm=DH(eph_sk, server_pk))
 ```
 
-服务端解密失败一律 403，且日志不回显密文。协议常量在 `scripts/sb-sync-rs/src/crypto.rs` 顶部
+服务端解密失败一律 403，且日志不回显密文。协议常量在 `scripts/sbtools-rs/src/crypto.rs` 顶部
 
 ## 5. 服务端
 
@@ -139,7 +139,7 @@ sequenceDiagram
 日志只输出方法与路径，**不含 query string**，因此密文与明文都不落盘
 
 ```text
-[sb-sync server] GET /sub -> 200 (1258ms, 底模: remote)
+[sbtools server] GET /sub -> 200 (1258ms, 底模: remote)
 ```
 
 ### 反回环直连规则
@@ -218,7 +218,7 @@ overlay: |
 ```
 
 ```bash
-sb-sync encode -s https://sub.example.com
+sbtools encode -s https://sub.example.com
 ```
 
 ### 7.2 overlay 的安全边界
@@ -232,7 +232,7 @@ private_key_path
 config_path
 ```
 
-需要证书时改为内联内容（如 `certificate`）。实现见 `scripts/sb-sync-rs/src/config.rs::reject_path_fields`
+需要证书时改为内联内容（如 `certificate`）。实现见 `scripts/sbtools-rs/src/config.rs::reject_path_fields`
 
 ### 7.3 服务端环境变量
 
@@ -273,7 +273,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     TAG["合并 Release PR<br/>main 清单版本变化"] --> BIN["GitHub Actions: 三平台各自原生<br/>cargo test → build<br/>上传 darwin + 两种 Linux musl 二进制"]
-    TAG --> IMG["GitHub Actions: docker build<br/>用 CI 预编译的二进制<br/>推送 GHCR sb-sync-server"]
+    TAG --> IMG["GitHub Actions: docker build<br/>用 CI 预编译的二进制<br/>推送 GHCR sbtools-server"]
     BIN --> MISE["mise 安装到客户端 Mac<br/>（仅取 darwin 产物）"]
     BIN --> BOX["沙箱 VM 与服务端容器<br/>（取 Linux 产物）"]
     IMG --> VPS["home-ops: VPS Docker Compose<br/>Azure Key Vault 注入私钥"]
@@ -283,11 +283,11 @@ flowchart TD
 发布操作规范见 `RELEASE.md`。镜像不再在容器内编译 Rust：二进制由 CI 在原生 runner 上编好后经 artifact 传入构建上下文，Dockerfile 只 `COPY` 它并补可执行位（artifact 不保留权限位，见 `postmortems/003`）。上游 sing-box 镜像只提供内核 CLI，其版本由 `--build-arg SING_BOX_VERSION` 传入，取值来自 `.mise.toml`。
 
 ```text
-Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 sb-sync）
-.github/workflows/             release-plz 准备版本，release-sb-sync 发布二进制与镜像
-发布资产                       sb-sync-aarch64-apple-darwin          客户端
-                              sb-sync-aarch64-unknown-linux-musl    沙箱 VM / arm64 节点
-                              sb-sync-x86_64-unknown-linux-musl     amd64 节点
+Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 sbtools）
+.github/workflows/             release-plz 准备版本，release-sbtools 发布二进制与镜像
+发布资产                       sbtools-aarch64-apple-darwin          客户端
+                              sbtools-aarch64-unknown-linux-musl    沙箱 VM / arm64 节点
+                              sbtools-x86_64-unknown-linux-musl     amd64 节点
                               SHA256SUMS                            三份产物的校验和
 ```
 
@@ -302,15 +302,15 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | 文件 | 职责 |
 | :--- | :--- |
 | `Cargo.toml` / `Cargo.lock` | 仓库根 workspace 清单与锁文件（release-plz 版本推导要求清单与 `.git` 同目录） |
-| `scripts/sb-sync-rs/Cargo.toml` | crate 清单，版本真源 |
-| `scripts/sb-sync-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `keygen` / `version` 分派 |
-| `scripts/sb-sync-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装 |
-| `scripts/sb-sync-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |
-| `scripts/sb-sync-rs/src/server.rs` | HTTP 路由、载荷解析、CLI 合并调用、临时目录 RAII |
-| `scripts/sb-sync-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
-| `scripts/sb-sync-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
-| `scripts/sb-sync-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
-| `scripts/sb-sync-rs/src/trace.rs` | 真机全链路探测：内核 debug 日志流 → DNS/路由决策与出口链路 |
-| `scripts/sb-sync-rs/src/paths.rs` | 客户端 YAML 配置路径解析（`~/.config/sing-box/config.yaml`） |
-| `scripts/sb-sync-rs/src/lib.rs` | 模块声明与 crate 级 lint 门禁（`forbid(unsafe_code)`、`deny(warnings, clippy::all, pedantic)`、生产代码禁 panic） |
+| `scripts/sbtools-rs/Cargo.toml` | crate 清单，版本真源 |
+| `scripts/sbtools-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `keygen` / `version` 分派 |
+| `scripts/sbtools-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装 |
+| `scripts/sbtools-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |
+| `scripts/sbtools-rs/src/server.rs` | HTTP 路由、载荷解析、CLI 合并调用、临时目录 RAII |
+| `scripts/sbtools-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
+| `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
+| `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
+| `scripts/sbtools-rs/src/trace.rs` | 真机全链路探测：内核 debug 日志流 → DNS/路由决策与出口链路 |
+| `scripts/sbtools-rs/src/paths.rs` | 客户端 YAML 配置路径解析（`~/.config/sing-box/config.yaml`） |
+| `scripts/sbtools-rs/src/lib.rs` | 模块声明与 crate 级 lint 门禁（`forbid(unsafe_code)`、`deny(warnings, clippy::all, pedantic)`、生产代码禁 panic） |
 | `config/sing-box/template.json` | 生产底模（策略组与路由骨架） |
