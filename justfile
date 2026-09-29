@@ -88,7 +88,7 @@ rules-check:
     @bun scripts/rules-compile.ts check
 
 
-# --- 推前全检（pre-push 钩子调用，推前手动跑同样可以） ---
+# --- 提交全检（pre-commit 钩子调用，手动跑同样可以） ---
 # 与 ci-sb-sync.yml 同口径，另加宿主机安全的模板测试。
 # 沙箱网络行为测试（TUN/netns）不在这里跑：宿主机上会破坏在用的网络，
 # 走 just test-sandbox 在 VM 内执行。
