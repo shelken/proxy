@@ -104,7 +104,13 @@
     "auto_detect_interface": true,
     "rules": [
       {
-        "action": "sniff"
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic",
+          "dns"
+        ]
       },
       {
         "clash_mode": "direct",
