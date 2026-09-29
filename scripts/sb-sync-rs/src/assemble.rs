@@ -336,6 +336,32 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
     outbounds.extend(nodes);
     outbounds.extend(selectors);
     template["outbounds"] = Value::Array(outbounds);
+
+    // 地区组可能因订阅无匹配节点被整组跳过；DNS detour 悬空会让内核 FATAL。
+    // 回退链：proxy → direct（direct 由装配必插入，兜底恒存在）。
+    let available: std::collections::HashSet<String> = template["outbounds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|o| o["tag"].as_str())
+        .map(str::to_string)
+        .collect();
+    let fallback = if available.contains("proxy") {
+        "proxy"
+    } else {
+        "direct"
+    };
+    for server in template["dns"]["servers"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(detour) = server.get_mut("detour") {
+            if detour.as_str().is_some_and(|t| !available.contains(t)) {
+                *detour = Value::from(fallback);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -803,6 +829,53 @@ mod tests {
                 "{group_tag} 候选池不应引用地区测速组，实际引用了 {borrowed:?}"
             );
         }
+    }
+
+    /// dns detour 引用的组被跳过时回退 proxy；组存在时保持原样（双向）。
+    #[test]
+    fn dns_detour_falls_back_when_group_skipped() {
+        let mutate = |tpl: &mut Value| {
+            tpl["dns"]["servers"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|s| s["tag"] == "dns-proxy")
+                .expect("dns-proxy 存在")["detour"] = json!("hk");
+        };
+        // hk 组消失（仅日本节点）：悬空引用必须被改写为 proxy
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        mutate(&mut tpl);
+        let input = input_with_fetcher("hy2://pass@192.0.2.1:8388#jp-osaka-01", "");
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+        let detour = tpl["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "dns-proxy")
+            .unwrap()["detour"]
+            .as_str()
+            .unwrap();
+        assert_eq!(detour, "proxy", "悬空 detour 应回退 proxy");
+
+        // hk 组存在：detour 保持 hk，不被误改
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        mutate(&mut tpl);
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#hk-01|hy2://pass@192.0.2.2:8388#jp-01",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+        let detour = tpl["dns"]["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["tag"] == "dns-proxy")
+            .unwrap()["detour"]
+            .as_str()
+            .unwrap();
+        assert_eq!(detour, "hk", "组存在时不得误改 detour");
     }
 
     /// selector 与 urltest 组按模式命中对应节点。
