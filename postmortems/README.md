@@ -9,3 +9,4 @@
 - [007 · squash 合并后 git cherry 误报未合并](./007-squash-merge-cherry-false-unmerged.md)
 - [008 · release-plz 版本 PR 的 CI 卡在 action_required](./008-release-plz-pr-ci-action-required.md)
 - [009 · 手写样例测不出日志解析边界，需真实抓取序列回归](./009-log-parser-tests-need-real-capture.md)
+- [010 · 静态检查冒充复现，空 direct detour 引入启动错误](./010-template-audit-evidence.md)
