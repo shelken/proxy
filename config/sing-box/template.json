@@ -792,17 +792,6 @@
       ],
       "default": "proxy",
       "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "tailscale",
-      "outbounds": [
-        "proxy",
-        "selfhost",
-        ".*"
-      ],
-      "default": "proxy",
-      "interrupt_exist_connections": true
     }
   ],
   "experimental": {
