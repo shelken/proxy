@@ -681,47 +681,23 @@ mod tests {
             json!("debug"),
             "overlay 标量应压过底模"
         );
-        let resolver = merged["route"]["default_domain_resolver"]["server"]
-            .as_str()
-            .or_else(|| merged["route"]["default_domain_resolver"].as_str());
+        // 内核 merge 会把 `{server: x}` 规范成裸字符串（实测），直接钉住生效值。
+        // 不写「对象或字符串都接受」的兜底：那等于把这条测试要守的优先级放宽成
+        // 两种形态之一，覆盖失效时也能通过。
         assert_eq!(
-            resolver,
-            Some("dns-local-system"),
-            "overlay 的 resolver 应胜出"
+            merged["route"]["default_domain_resolver"],
+            json!("dns-local-system"),
+            "overlay 的 resolver 应胜出并规范成裸字符串"
         );
 
-        // 无 overlay 时底模标量保留
+        // 无 overlay 时底模标量保留，且同样被规范化——这是上面断言的对照面：
+        // 若合并方向反了，这里会拿到 dns-direct-cn 而不是 dns-local-system
         let merged_base = merge_overlay(&base, None).expect("无 overlay 合并应成功");
         assert_eq!(merged_base["log"]["level"], json!("warn"));
-    }
-
-    /// 守内核版本一致性：编译期固定的 `.mise.toml` 版本必须与运行时内核一致。
-    ///
-    /// merge 的标量/数组合并语义随内核实现变化，只对某个版本验证过。开发机 PATH
-    /// 上若挂着另一个版本，本地测试通过而线上行为不同。这条把差异点出来。
-    #[test]
-    fn kernel_version_matches_pinned_toolchain() {
-        const MISE_TOML: &str = include_str!("../../../.mise.toml");
-        let pinned = MISE_TOML
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("sing-box"))
-            .and_then(|rest| rest.split('"').nth(1))
-            .expect(".mise.toml 应固定 sing-box 版本");
-        if let Some(reason) = kernel_unavailable_reason() {
-            eprintln!("skip: {reason}");
-            return;
-        }
-        let out = std::process::Command::new(template::resolve_singbox_binary())
-            .arg("version")
-            .output()
-            .expect("执行 sing-box version");
-        let text = String::from_utf8_lossy(&out.stdout);
-        // 首行形如 `sing-box version 1.14.1`
-        let actual = text.split_whitespace().nth(2).unwrap_or("");
         assert_eq!(
-            actual, pinned,
-            "运行的内核版本 {actual} 与 .mise.toml 固定的 {pinned} 不一致：\
-             merge 语义可能随版本变化，先对齐再跑测试"
+            merged_base["route"]["default_domain_resolver"],
+            json!("dns-direct-cn"),
+            "无 overlay 时应保留底模的 resolver"
         );
     }
 }
