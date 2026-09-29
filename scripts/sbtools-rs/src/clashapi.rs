@@ -20,6 +20,15 @@ pub fn discover_controller(cfg: &Value) -> Option<String> {
     }
 }
 
+/// 配置里的 controller 原始值（不做回环守卫）。与 `discover_controller` 配合，
+/// 把「配置源没有 controller」与「有但非回环被拒」区分开，后者必须显式报错，
+/// 不能静默回退到缺省口——那会连上缺省口上无关的内核。
+pub fn configured_controller(cfg: &Value) -> Option<String> {
+    cfg["experimental"]["clash_api"]["external_controller"]
+        .as_str()
+        .map(String::from)
+}
+
 /// endpoint URL 组装（controller 形如 `127.0.0.1:9090`）。
 pub fn endpoint(controller: &str, path: &str) -> String {
     format!("http://{controller}{path}")

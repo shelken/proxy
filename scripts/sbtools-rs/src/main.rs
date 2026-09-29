@@ -435,23 +435,36 @@ fn cmd_logs(rest: &[String]) -> Result<(), String> {
         }
     }
     if follow {
-        follow_logs(&resolve_logs_controller(eff_value.as_ref()), &level)?;
+        follow_logs(&resolve_logs_controller(eff_value.as_ref())?, &level)?;
     }
     Ok(())
 }
 
 /// logs 的 controller 发现：生效配置顶层 → 其 overlay（客户端 YAML 的 clash_api
 /// 只会在 overlay 里）→ 缺省回环口（与 config/trace 一致）。
-fn resolve_logs_controller(eff_value: Option<&serde_json::Value>) -> String {
-    eff_value
-        .and_then(clashapi::discover_controller)
-        .or_else(|| {
-            eff_value
-                .and_then(overlay_value)
-                .as_ref()
-                .and_then(clashapi::discover_controller)
-        })
-        .unwrap_or_else(|| "127.0.0.1:9090".to_string())
+/// 配置里写了 controller 但未过回环守卫时显式报错，不静默回退——回退会连上
+/// 缺省口上无关的内核（如真机 SFM），数据张冠李戴且有隐私暴露面。
+fn resolve_logs_controller(eff_value: Option<&serde_json::Value>) -> Result<String, String> {
+    fn rejected(addr: &str) -> String {
+        format!("controller {addr} 非回环地址，已拒绝；clash_api 仅允许 127.0.0.1")
+    }
+    if let Some(v) = eff_value {
+        if let Some(c) = clashapi::discover_controller(v) {
+            return Ok(c);
+        }
+        if let Some(raw) = clashapi::configured_controller(v) {
+            return Err(rejected(&raw));
+        }
+        if let Some(o) = overlay_value(v) {
+            if let Some(c) = clashapi::discover_controller(&o) {
+                return Ok(c);
+            }
+            if let Some(raw) = clashapi::configured_controller(&o) {
+                return Err(rejected(&raw));
+            }
+        }
+    }
+    Ok("127.0.0.1:9090".to_string())
 }
 
 /// -f 跟踪 /logs 流，逐行打出 payload。
@@ -699,15 +712,36 @@ mod tests {
     }
 
     #[test]
-    fn logs_controller_falls_through_overlay_to_default() {
+    fn logs_controller_rejects_non_loopback_instead_of_fallback() {
         // 客户端 YAML 顶层无 experimental，controller 在 overlay 里
         let eff = serde_json::json!({"overlay": r#"{"experimental":{"clash_api":{"external_controller":"127.0.0.1:19090"}}}"#});
-        assert_eq!(resolve_logs_controller(Some(&eff)), "127.0.0.1:19090");
-        // 均无时用缺省回环口（与 config/trace 一致）
         assert_eq!(
-            resolve_logs_controller(Some(&serde_json::json!({}))),
+            resolve_logs_controller(Some(&eff)).unwrap(),
+            "127.0.0.1:19090"
+        );
+        // 无任何 controller 时才回退缺省回环口（与 config/trace 一致）
+        assert_eq!(
+            resolve_logs_controller(Some(&serde_json::json!({}))).unwrap(),
             "127.0.0.1:9090"
         );
-        assert_eq!(resolve_logs_controller(None), "127.0.0.1:9090");
+        assert_eq!(resolve_logs_controller(None).unwrap(), "127.0.0.1:9090");
+        // 配置了非回环 controller 必须显式拒绝，不能静默回退连上缺省口的无关内核
+        let err = resolve_logs_controller(Some(&serde_json::json!(
+            {"experimental": {"clash_api": {"external_controller": "192.0.2.5:19090"}}}
+        )))
+        .unwrap_err();
+        assert!(
+            err.contains("192.0.2.5:19090") && err.contains("拒绝"),
+            "实际: {err}"
+        );
+        // 顶层无、overlay 有非回环：同样拒绝
+        let err = resolve_logs_controller(Some(&serde_json::json!(
+            {"overlay": r#"{"experimental":{"clash_api":{"external_controller":"127.0.0.2:19090"}}}"#}
+        )))
+        .unwrap_err();
+        assert!(
+            err.contains("127.0.0.2:19090") && err.contains("拒绝"),
+            "实际: {err}"
+        );
     }
 }
