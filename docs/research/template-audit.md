@@ -46,6 +46,42 @@ limactl shell --workdir /work proxy-test sudo -n unshare --net sh -c \
   "ip link set lo up && /opt/proxy-test/bin/bun test '$GUEST_REPO/config/sing-box/tests/dns-behavior.test.js'"
 ```
 
+## 断言有效性（反向验证）
+
+每条断言都先证明它会在被测行为缺失时失败，否则「通过」不构成证据。
+
+| 序号 | 反向操作 | 结果 |
+| --- | --- | --- |
+| 1 | 删去 `dns-proxy`、`final` 改回 `dns-direct-cn` | `dohQueries` 期望 2 实收 0，测试失败 |
+| 4 | 把 `hk` 加进 `proxy` 候选池 | 报「proxy 候选池不应引用地区测速组，实际引用了 ["hk"]」 |
+| 5 | 把 `tailscale` selector 加回 `outbounds` | 报「tailscale 组不应出现在装配产物中」 |
+
+三条都先在缺失状态下失败，再在修复后通过。
+
+## 逐项验证证据
+
+| 序号 | 验证方式 | 证据 |
+| --- | --- | --- |
+| 1 | VM 独立网络命名空间，真实内核 + 本地 TLS DoH | `dns-behavior.test.js` 通过，含反向验证 |
+| 2 | 同上，正常重启前后对照 | 无持久化时两域名同址；有持久化时首域名保持原址 |
+| 3 | 剥离实验的 TUN 对照与路由观测 | 默认 DNS 地址自动处理；其他目的地址 53 需额外劫持 |
+| 4 | 真实 `finalize` 装配产物 + 反向验证 | `assembled_groups_isolate_region_urltest_and_drop_tailscale` 通过 |
+| 5 | 同上 | 产物中无 `tailscale`；Rust 全量 159 项通过 |
+| 6 | 真实内核 predefined 响应 | RCODE 0，答案数 0 |
+| 7 | 剥离实验的路由表观测 | 255.255.255.255 排除后改走上联网卡 |
+| 8 | 真实内核启动 | 带空 direct detour 的配置启动即 FATAL |
+
+命令：
+
+```sh
+cargo test --workspace                                    # 159 项
+just check-singbox && just rules-check
+SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts
+GUEST_REPO="/host-home${PWD#$HOME}"
+limactl shell --workdir /work proxy-test sudo -n unshare --net sh -c \
+  "ip link set lo up && /opt/proxy-test/bin/bun test '$GUEST_REPO/config/sing-box/tests'"
+```
+
 完整 TUN 对照实验的配置、脚本与日志随审查工件提供；Linux 隔离实验不能替代 SFM 真机验证
 
 ## 第 4 项：测速组的作用与代价
