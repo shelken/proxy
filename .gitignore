@@ -20,3 +20,4 @@ config/sing-box/local.json
 
 # 沙箱闭环用的 CI 产物与生成的客户端配置（每次引导重建）
 .sandbox-artifacts/
+dns-observe-report.json
