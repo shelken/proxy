@@ -110,3 +110,8 @@ verify: check-singbox rules-check
 #       just trace foo.ooooo.space
 trace domain="google.com":
     @bun run scripts/trace-route.ts {{domain}}
+
+# 在沙箱中对真实数据 DNS 拓扑做系统性观测（成功率/延迟/路径判别/出口区域）
+# 用法: just dns-observe（报告落 dns-observe-report.json，不入库）
+dns-observe:
+    @bun run scripts/dns-observe.ts
