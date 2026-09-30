@@ -333,22 +333,15 @@ fn parse_conn_match(v: &Value, domain: &str) -> Option<ConnMatch> {
 /// 拉取 /connections 并解析。live 归属段的轮询与既有出站链路段共用这一套读取，
 /// 不另写第二套。
 fn conn_match(domain: &str, controller: &str) -> Option<ConnMatch> {
-    let res = ureq::get(&format!("http://{controller}/connections"))
-        .timeout(Duration::from_secs(2))
-        .call()
-        .ok()?;
-    let mut body = String::new();
-    std::io::Read::read_to_string(&mut res.into_reader(), &mut body).ok()?;
-    parse_conn_match(&serde_json::from_str(&body).ok()?, domain)
+    let v = crate::clashapi::get_connections(controller).ok()?;
+    parse_conn_match(&v, domain)
 }
 
-/// 读取生效配置（PR2 发现链 → 按扩展名解析；客户端 YAML 的原生配置在 overlay 里）。
+/// 读取生效配置（统一 load_effective：客户端 YAML 的原生配置在 overlay 里）。
 /// SFM 等磁盘不可达场景返回 None，调用方明示跳过，不算失败。
 fn effective_config() -> Option<Value> {
-    let eff = crate::paths::discover_effective(None).ok()?;
-    let text = std::fs::read_to_string(&eff.path).ok()?;
-    let value = crate::parse_config_text(&text, &eff.path).ok()?;
-    Some(crate::overlay_value(&value).unwrap_or(value))
+    let eff = crate::config::load_effective(None).ok()?;
+    Some(eff.overlay.unwrap_or(eff.root))
 }
 
 /// dns.rules 按序推演的结论。
@@ -590,7 +583,7 @@ fn report_live_attribution(ec: &str, domain: &str) {
 
 /// 静态规则段：GET /rules 列表原样呈现，内核视角即真相。
 fn report_rules(ec: &str) {
-    match crate::clashapi::get_json(ec, "/rules") {
+    match crate::clashapi::get_rules(ec) {
         Ok(v) => {
             let rules = v["rules"].as_array().cloned().unwrap_or_default();
             println!("✓ 静态规则       GET /rules 共 {} 条", rules.len());
@@ -722,10 +715,7 @@ fn is_fakeip(ip: &str) -> bool {
 
 /// Clash API 是否可达（`/version` 探活）。控制面不通时后续阶段全无意义，必须显式报错。
 pub fn controller_reachable(controller: &str) -> bool {
-    ureq::get(&format!("http://{controller}/version"))
-        .timeout(Duration::from_secs(2))
-        .call()
-        .is_ok()
+    crate::clashapi::reachable(controller)
 }
 
 /// 内核决策段的报告：DNS 判定 / 路由判定 / 拨号解析证据 / 出口链路。

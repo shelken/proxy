@@ -20,9 +20,12 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod assemble;
+pub mod clashapi;
 pub mod config;
 pub mod crypto;
 pub mod node;
 pub mod paths;
+pub mod redact;
 pub mod server;
 pub mod template;
+pub mod trace;

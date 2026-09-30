@@ -8,25 +8,13 @@ use serde_json::Value;
 use std::io::{BufRead, Read};
 use std::time::Duration;
 
-/// 从生效配置读取 `experimental.clash_api.external_controller`。
-///
-/// 仅放行 127.0.0.1 回环：后续要把本机观测数据拉回来，不该发往非回环地址。
-pub fn discover_controller(cfg: &Value) -> Option<String> {
-    let ec = cfg["experimental"]["clash_api"]["external_controller"].as_str()?;
-    if is_loopback(ec) {
-        Some(ec.to_string())
-    } else {
-        None
-    }
-}
-
-/// controller 是否回环。`discover_controller` 守卫与 config 的拒绝判定共用，
+/// controller 是否回环。统一解析器与 config 的拒绝判定共用，
 /// 语义就是「以 127.0.0.1 开头」，与 sing-box 常见的 `127.0.0.1:9090` 写法对齐。
 pub fn is_loopback(addr: &str) -> bool {
     addr.starts_with("127.0.0.1")
 }
 
-/// 配置里的 controller 原始值（不做回环守卫）。与 `discover_controller` 配合，
+/// 配置里的 controller 原始值（不做回环守卫）。供 `resolve_controller` 判定，
 /// 把「配置源没有 controller」与「有但非回环被拒」区分开，后者必须显式报错，
 /// 不能静默回退到缺省口——那会连上缺省口上无关的内核。
 pub fn configured_controller(cfg: &Value) -> Option<String> {
@@ -61,6 +49,68 @@ pub fn get_json(controller: &str, path: &str) -> Result<Value, String> {
     serde_json::from_str(&body).map_err(|e| format!("{path} 响应不是合法 JSON: {e}"))
 }
 
+/// Controller 解析结果（强类型枚举）：杜绝把“配置了非法地址”与“未配置”混淆。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControllerResolution {
+    /// 合法回环 Controller（如 127.0.0.1:9090）
+    Loopback(String),
+    /// 配置了非回环 Controller，显式拒绝并保留被拒地址与原因
+    ExplicitReject { address: String, reason: String },
+    /// 未找到任何 Controller 配置，采用缺省口 127.0.0.1:9090
+    Default(String),
+}
+
+/// 统一 Controller 解析与回环安全守卫。
+/// 优先级：CLI 显式指定 -> 已加载配置的 root -> overlay -> 缺省 127.0.0.1:9090。
+/// 配置了非回环地址时返回 ExplicitReject，绝不静默回退（防连真机内核事故）。
+pub fn resolve_controller(
+    cfg: Option<&crate::config::EffectiveConfig>,
+    explicit_cli: Option<&str>,
+) -> ControllerResolution {
+    if let Some(cli) = explicit_cli {
+        if is_loopback(cli) {
+            return ControllerResolution::Loopback(cli.to_string());
+        }
+        return ControllerResolution::ExplicitReject {
+            address: cli.to_string(),
+            reason: "非回环地址".to_string(),
+        };
+    }
+    if let Some(c) = cfg {
+        if let Some(raw) = configured_controller(&c.root) {
+            if is_loopback(&raw) {
+                return ControllerResolution::Loopback(raw);
+            }
+            return ControllerResolution::ExplicitReject {
+                address: raw,
+                reason: "非回环地址，拒绝连接".to_string(),
+            };
+        }
+        if let Some(o) = &c.overlay {
+            if let Some(raw) = configured_controller(o) {
+                if is_loopback(&raw) {
+                    return ControllerResolution::Loopback(raw);
+                }
+                return ControllerResolution::ExplicitReject {
+                    address: raw,
+                    reason: "非回环地址，拒绝连接".to_string(),
+                };
+            }
+        }
+    }
+    ControllerResolution::Default("127.0.0.1:9090".to_string())
+}
+
+/// GET /connections 端点读取。
+pub fn get_connections(controller: &str) -> Result<Value, String> {
+    get_json(controller, "/connections")
+}
+
+/// GET /rules 端点读取。
+pub fn get_rules(controller: &str) -> Result<Value, String> {
+    get_json(controller, "/rules")
+}
+
 /// /logs 流式读取（连接建立后只吐新行，无回放）。返回逐行 `BufRead`。
 ///
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
@@ -79,22 +129,8 @@ pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead, String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use std::io::Write;
     use std::net::TcpListener;
-
-    #[test]
-    fn controller_discovery_requires_loopback() {
-        let cfg = json!({"experimental": {"clash_api": {"external_controller": "127.0.0.1:9090"}}});
-        assert_eq!(discover_controller(&cfg).as_deref(), Some("127.0.0.1:9090"));
-        // 非回环地址必须拒绝
-        let cfg = json!({"experimental": {"clash_api": {"external_controller": "0.0.0.0:9090"}}});
-        assert_eq!(discover_controller(&cfg), None);
-        let cfg = json!({"experimental": {"clash_api": {"external_controller": "192.0.2.5:9090"}}});
-        assert_eq!(discover_controller(&cfg), None);
-        // 客户端 YAML 无 clash_api 键
-        assert_eq!(discover_controller(&json!({})), None);
-    }
 
     #[test]
     fn endpoint_assembles_base_url() {

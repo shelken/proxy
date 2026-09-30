@@ -268,6 +268,22 @@ flowchart LR
 
 前三条在客户端 `encode` 阶段也会先跑一遍，配置写错时本地立刻报错，不浪费一次网络往返
 
+### 7.5 本地观测命令的配置来源
+
+`config`、`logs` 与 `trace` 共用 `config::load_effective` 加载配置，路径发现顺序为显式 `config --path`、`~/.config/sing-box/config.yaml`、`~/.config/sing-box/singbox.json`
+
+- controller 决议由 `clashapi::resolve_controller` 统一处理，顺序为 `trace --api`、已加载配置顶层、overlay、缺省 `127.0.0.1:9090`
+- 非回环 controller 被拒绝时，`trace` 与 `logs -f` 报错退出，`config` 保留脱敏输出并跳过运行时摘要；`trace --api` 也受同一守卫约束
+- `logs -n N` 只查询已加载配置的 `log.output`，顶层优先于 overlay；YAML 存在时不再额外读取旧 JSON 的日志路径
+- 缺配置仍可连接缺省 9090；`trace`、`logs` 的配置加载错误与 overlay 解析错误仍可能被当作无配置处理，因此只替换 `HOME` 不构成网络隔离
+
+共享 controller 决议的回归检查：
+
+```sh
+cargo test -p sbtools controller_resolution_rejects_non_loopback_instead_of_fallback
+```
+
+
 ## 8. 部署
 
 ```mermaid
@@ -304,13 +320,14 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | `Cargo.toml` / `Cargo.lock` | 仓库根 workspace 清单与锁文件（release-plz 版本推导要求清单与 `.git` 同目录） |
 | `scripts/sbtools-rs/Cargo.toml` | crate 清单，版本真源 |
 | `scripts/sbtools-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `keygen` / `version` 分派 |
-| `scripts/sbtools-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装 |
+| `scripts/sbtools-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装与本地观测配置加载 |
 | `scripts/sbtools-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |
 | `scripts/sbtools-rs/src/server.rs` | HTTP 路由、载荷解析、CLI 合并调用、临时目录 RAII |
 | `scripts/sbtools-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
 | `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
 | `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
 | `scripts/sbtools-rs/src/trace.rs` | 真机全链路探测：内核 debug 日志流 → DNS/路由决策与出口链路 |
-| `scripts/sbtools-rs/src/paths.rs` | 客户端 YAML 配置路径解析（`~/.config/sing-box/config.yaml`） |
+| `scripts/sbtools-rs/src/clashapi.rs` | controller 统一决议与 Clash API 请求 |
+| `scripts/sbtools-rs/src/paths.rs` | 本地观测配置路径发现，YAML 优先于旧 JSON |
 | `scripts/sbtools-rs/src/lib.rs` | 模块声明与 crate 级 lint 门禁（`forbid(unsafe_code)`、`deny(warnings, clippy::all, pedantic)`、生产代码禁 panic） |
 | `config/sing-box/template.json` | 生产底模（策略组与路由骨架） |
