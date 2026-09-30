@@ -18,10 +18,12 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod assemble;
+mod clashapi;
 mod config;
 mod crypto;
 mod node;
 mod paths;
+mod redact;
 mod server;
 mod template;
 mod trace;
@@ -38,6 +40,7 @@ fn main() {
         Some("server") => cmd_server(rest),
         Some("trace") => cmd_trace(rest),
         Some("check") => cmd_check(rest),
+        Some("config") => cmd_config(rest),
         Some("keygen") => {
             let (sk, pk) = config::keygen();
             println!("SERVER_PRIVATE_KEY={sk}");
@@ -66,6 +69,7 @@ fn usage() -> String {
         "  sbtools encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
         "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
         "  sbtools check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
+        "  sbtools config [--path <config.yaml|singbox.json>]  打印生效配置(隐私脱敏); SFM 可达时附 /configs 运行时摘要",
         "  sbtools keygen                                 生成服务端 X25519 公私钥对（Hex）",
         "  sbtools version                                显示版本",
     ]
@@ -269,6 +273,112 @@ fn render_effective_summary(merged: &serde_json::Value) -> String {
     out
 }
 
+/// config: 打印生效配置（隐私脱敏）。SFM 场景 profile 在组容器内、磁盘直读受限，
+/// clash api 可达时补 /configs 运行时摘要，运行时观测指向 logs 与 trace。
+fn cmd_config(rest: &[String]) -> Result<(), String> {
+    let usage_hint = "config 用法: sbtools config [--path <config.yaml|singbox.json>]";
+    let mut path: Option<std::path::PathBuf> = None;
+    let mut it = rest.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--path" => {
+                let p = it.next().ok_or("config: --path 需要一个配置文件路径")?;
+                path = Some(std::path::PathBuf::from(p));
+            }
+            other => return Err(format!("config: 未知参数 {other}（{usage_hint}）")),
+        }
+    }
+
+    // 磁盘读不到不立即报错：SFM 运行时可能仅有 clash api 可达（发现链降级）
+    let disk = paths::discover_effective(path.as_deref());
+    let disk_controller = match disk {
+        Ok(eff) => {
+            let outcome = load_and_print_redacted(&eff);
+            match outcome {
+                Ok(c) => c,
+                // --path 是用户显式意图，读不到必须报错；发现链结果不可读才降级
+                Err(e) if eff.explicit => return Err(e),
+                Err(e) => {
+                    println!("· 磁盘配置不可读: {e}");
+                    None
+                }
+            }
+        }
+        Err(e) if path.is_some() => return Err(e),
+        Err(e) => {
+            println!("· 磁盘未找到生效配置: {e}");
+            None
+        }
+    };
+
+    // SFM 分支：磁盘读不到 profile 时运行时真相只在 clash api；缺省回环口与 trace 一致
+    let disk_found = disk_controller.is_some();
+    let controller = disk_controller.unwrap_or_else(|| "127.0.0.1:9090".to_string());
+    if clashapi::reachable(&controller) {
+        print_runtime_summary(&controller);
+    } else if !disk_found {
+        return Err(format!(
+            "未找到生效配置，且 clash api {controller} 不可达；可用 --path 指定配置文件"
+        ));
+    }
+    Ok(())
+}
+
+/// 读取磁盘配置、打印脱敏 JSON，返回其中的 clash api controller（若有）。
+fn load_and_print_redacted(eff: &paths::EffectiveConfig) -> Result<Option<String>, String> {
+    let text = std::fs::read_to_string(&eff.path)
+        .map_err(|e| format!("读取 {}: {e}", eff.path.display()))?;
+    let value = parse_config_text(&text, &eff.path)?;
+    println!("✓ 生效配置: {}", eff.path.display());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&redact::redact(&value))
+            .map_err(|e| format!("序列化失败: {e}"))?
+    );
+    Ok(clashapi::discover_controller(&value))
+}
+
+/// 按扩展名解析 YAML 或 JSON（legacy singbox.json 走严格 JSON，报错更准）。
+fn parse_config_text(text: &str, path: &std::path::Path) -> Result<serde_json::Value, String> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+    {
+        serde_json::from_str(text).map_err(|e| format!("JSON 解析失败（{}）: {e}", path.display()))
+    } else {
+        serde_yaml::from_str(text).map_err(|e| format!("YAML 解析失败（{}）: {e}", path.display()))
+    }
+}
+
+/// SFM 运行时摘要。/configs 顶层键集经实测锚定: mode、mixed-port、tun、log-level。
+fn print_runtime_summary(controller: &str) {
+    match clashapi::get_json(controller, "/configs") {
+        Ok(v) => {
+            println!("✓ SFM 运行时 (clash api {controller}):");
+            // SFM 实测 /configs 的 tun 可能为 null(未启用)，与键缺失(未上报)区分
+            let tun = if v.get("tun").is_some_and(serde_json::Value::is_null) {
+                Some("未启用".to_string())
+            } else {
+                v["tun"]["enable"].as_bool().map(|b| b.to_string())
+            };
+            let keys = [
+                ("mode", v["mode"].as_str().map(String::from)),
+                (
+                    "mixed-port",
+                    v["mixed-port"].as_u64().map(|n| n.to_string()),
+                ),
+                ("tun", tun),
+                ("log-level", v["log-level"].as_str().map(String::from)),
+            ];
+            for (k, val) in keys {
+                println!("  {k}: {}", val.as_deref().unwrap_or("未上报"));
+            }
+            println!("· SFM profile 磁盘直读受限，运行时观测请用 sbtools logs 与 sbtools trace");
+        }
+        Err(e) => println!("· clash api 可达但 /configs 读取失败: {e}"),
+    }
+}
+
 fn cmd_server(rest: &[String]) -> Result<(), String> {
     let port: u16 = match rest {
         [p] if p == "--port" || p == "-p" => return Err("server: --port 需要一个数字参数".into()),
@@ -295,6 +405,7 @@ mod tests {
         assert!(u.contains("server"));
         assert!(u.contains("keygen"));
         assert!(u.contains("check"));
+        assert!(u.contains("sbtools config [--path"));
         assert!(!u.contains("doctor"));
         assert!(!u.contains("sbtools sync"));
         assert!(u.contains("encode -s <server>"));
