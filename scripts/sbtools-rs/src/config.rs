@@ -189,6 +189,20 @@ pub fn load_effective(explicit: Option<&Path>) -> Result<EffectiveConfig, String
     })
 }
 
+/// 宽松加载：配置不存在返回 `Ok(None)`（SFM 等磁盘读不到是常态）；配置存在但读取/
+/// 解析失败返回 Err。「坏了」与「没有」必须分开——坏配置当成没配置，跳过提示会把
+/// 故障原因说成别的。
+pub fn load_effective_lenient(explicit: Option<&Path>) -> Result<Option<EffectiveConfig>, String> {
+    let Ok(eff_path) = crate::paths::discover_effective(explicit) else {
+        return Ok(None);
+    };
+    // 显式路径但文件不存在同样是「没有配置」；存在但读不了/解析不了才是「坏了」
+    if !eff_path.is_file() {
+        return Ok(None);
+    }
+    load_effective(Some(&eff_path)).map(Some)
+}
+
 /// 按扩展名解析 YAML 或 JSON（legacy singbox.json 走严格 JSON，报错更准）。
 pub fn parse_config_text(text: &str, path: &Path) -> Result<Value, String> {
     if path
@@ -204,6 +218,33 @@ pub fn parse_config_text(text: &str, path: &Path) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：「配置损坏」与「配置不存在」必须分开——坏配置不能当成没配置。
+    #[test]
+    fn lenient_loader_distinguishes_missing_from_broken() {
+        // 不存在 → Ok(None)（SFM 等磁盘读不到是常态，不算错误）
+        let missing = load_effective_lenient(Some(Path::new("/nonexistent/sbtools-nope.yaml")))
+            .expect("不存在不应 Err");
+        assert!(missing.is_none());
+
+        // 存在但损坏 → Err
+        let dir = std::env::temp_dir().join(format!("sbtools-lenient-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("broken.yaml");
+        std::fs::write(&p, "{{{ 不是合法 YAML").unwrap();
+        assert!(load_effective_lenient(Some(&p)).is_err(), "坏配置必须 Err");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // 合法 → Some
+        let p = dir.join("ok.yaml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&p, valid_yaml()).unwrap();
+        let ok = load_effective_lenient(Some(&p))
+            .expect("合法配置不应 Err")
+            .expect("合法配置应 Some");
+        assert_eq!(ok.path, p);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     const NODE: &str = "hy2://pass@192.0.2.1:8388?sni=example.com#selfhost";
 

@@ -616,9 +616,15 @@ struct Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
-    /// 段来源于 `config/sing-box/template.json`；读不到就退回 `198.18.0.0/15`
-    /// （sing-box fakeip 的默认段），保证 trace 仍可用。
-    fn from_template() -> Self {
+    /// fakeip 段优先读生效配置（overlay 可改 inet4_range，内核实际跑的是合并后的段）；
+    /// 磁盘不可得（SFM）再退回内嵌底模；都没有才用 sing-box 默认段。
+    /// 只读底模的旧写法在用户改段后会静默误判假 IP。
+    fn resolve() -> Self {
+        if let Some(cfg) = effective_config() {
+            if let Some(spec) = fakeip_range_from(&cfg) {
+                return spec;
+            }
+        }
         let fallback = || Self {
             net: std::net::Ipv4Addr::new(198, 18, 0, 0),
             prefix: 15,
@@ -626,19 +632,15 @@ impl Ipv4Cidr {
         let Ok((template, _)) = template::load_template(None) else {
             return fallback();
         };
-        let Some(spec) = template["dns"]["servers"]
-            .as_array()
-            .and_then(|servers| {
-                servers
-                    .iter()
-                    .find(|s| s["type"].as_str() == Some("fakeip"))
-            })
-            .and_then(|s| s["inet4_range"].as_str())
-        else {
-            return fallback();
-        };
-        parse_cidr4(spec).unwrap_or_else(fallback)
+        template::fakeip_range_in(&template)
+            .and_then(parse_cidr4)
+            .unwrap_or_else(fallback)
     }
+}
+
+/// 从（合并后的）配置树读 fakeip inet4_range。无 fakeip server 时 None。
+fn fakeip_range_from(cfg: &Value) -> Option<Ipv4Cidr> {
+    template::fakeip_range_in(cfg).and_then(parse_cidr4)
 }
 
 /// 解析 `198.18.0.0/15` 形态的 IPv4 CIDR。只有一个消费点，不值得引 ipnet。
@@ -660,9 +662,8 @@ fn parse_cidr4(spec: &str) -> Option<Ipv4Cidr> {
     })
 }
 
-/// 从底模读一次 fakeip 段，进程内复用。
-static FAKEIP_RANGE: std::sync::LazyLock<Ipv4Cidr> =
-    std::sync::LazyLock::new(Ipv4Cidr::from_template);
+/// 读一次 fakeip 段（生效配置优先，底模兜底），进程内复用。
+static FAKEIP_RANGE: std::sync::LazyLock<Ipv4Cidr> = std::sync::LazyLock::new(Ipv4Cidr::resolve);
 
 fn prefix_mask(prefix: u32) -> u32 {
     if prefix == 0 {
@@ -674,11 +675,12 @@ fn prefix_mask(prefix: u32) -> u32 {
 
 /// tun 入站的 `route_exclude_address`。目标落这些段时流量根本不进 TUN，内核
 /// 不会产生路由判定日志——这是「直连」而非「未捕获」，报告必须分得开。
+/// 段优先读生效配置（overlay 可改），退回内嵌底模；与 fakeip 段同一纪律。
 static EXCLUDE_ADDRESS: std::sync::LazyLock<Vec<Ipv4Cidr>> = std::sync::LazyLock::new(|| {
-    template::load_template(None)
-        .ok()
-        .and_then(|(t, _)| {
-            t["inbounds"].as_array().map(|inbounds| {
+    fn collect(root: &Value) -> Vec<Ipv4Cidr> {
+        root["inbounds"]
+            .as_array()
+            .map(|inbounds| {
                 inbounds
                     .iter()
                     .filter(|ib| ib["type"].as_str() == Some("tun"))
@@ -692,7 +694,17 @@ static EXCLUDE_ADDRESS: std::sync::LazyLock<Vec<Ipv4Cidr>> = std::sync::LazyLock
                     .filter_map(parse_cidr4)
                     .collect()
             })
-        })
+            .unwrap_or_default()
+    }
+    if let Some(cfg) = effective_config() {
+        let from_cfg = collect(&cfg);
+        if !from_cfg.is_empty() {
+            return from_cfg;
+        }
+    }
+    template::load_template(None)
+        .ok()
+        .map(|(t, _)| collect(&t))
         .unwrap_or_default()
 });
 
@@ -1120,21 +1132,26 @@ mod tests {
     #[test]
     fn fakeip_range_matches_template() {
         let (template, _) = template::load_template(None).expect("底模应可加载");
-        let spec = template["dns"]["servers"]
-            .as_array()
-            .and_then(|servers| {
-                servers
-                    .iter()
-                    .find(|s| s["type"].as_str() == Some("fakeip"))
-            })
-            .and_then(|s| s["inet4_range"].as_str())
-            .expect("底模应有 fakeip inet4_range");
+        let spec = template::fakeip_range_in(&template).expect("底模应有 fakeip inet4_range");
         let parsed = parse_cidr4(spec).expect("inet4_range 应是合法 CIDR");
         assert_eq!(parsed.prefix, 15);
         assert_eq!(parsed.net, std::net::Ipv4Addr::new(198, 18, 0, 0));
         assert!(is_fakeip("198.18.0.13"));
         assert!(is_fakeip("198.19.255.255"));
         assert!(!is_fakeip("198.20.0.1"));
+    }
+
+    /// fakeip 段优先读生效配置：overlay 改了段，判断必须跟着配置走。
+    #[test]
+    fn fakeip_range_prefers_effective_config() {
+        let cfg = serde_json::json!({
+            "dns": {"servers": [{"type": "fakeip", "inet4_range": "10.111.0.0/16"}]}
+        });
+        let range = fakeip_range_from(&cfg).expect("应读出配置里的段");
+        assert_eq!(range.net, std::net::Ipv4Addr::new(10, 111, 0, 0));
+        assert_eq!(range.prefix, 16);
+        // 无 fakeip server → None，调用方回落底模
+        assert!(fakeip_range_from(&serde_json::json!({})).is_none());
     }
 
     #[test]

@@ -157,14 +157,16 @@ fn doh_resolve_a(domain: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 正则字符串 → regex（TS 版 (?i) 前缀语义对齐）。非法正则返回 None（该项跳过，不 fail）。
-fn compile_pattern(item: &str) -> Option<regex::Regex> {
+/// 正则字符串 → regex（TS 版 (?i) 前缀语义对齐）。非法正则必须报错：
+/// 静默跳过会让过滤条件悄悄失效，策略组混进本该被滤掉的节点。
+fn compile_pattern(item: &str) -> Result<regex::Regex, String> {
     // strip 后必须重新拼回 (?i)：直接用剥掉前缀的 pat 编译会变成大小写敏感，
     // 节点名的小写国家后缀（hk-01 等）全部漏匹配。
     match item.strip_prefix("(?i)") {
-        Some(rest) => regex::Regex::new(&format!("(?i){rest}")).ok(),
-        None => regex::Regex::new(item).ok(),
+        Some(rest) => regex::Regex::new(&format!("(?i){rest}")),
+        None => regex::Regex::new(item),
     }
+    .map_err(|e| format!("策略组过滤模式 '{item}' 不是合法正则: {e}"))
 }
 
 /// 策略组填充：底模声明 selector/urltest 的 outbounds 占位项展开为真实节点标签。
@@ -175,7 +177,7 @@ fn compile_pattern(item: &str) -> Option<regex::Regex> {
 ///
 /// 判活是「能否传递地落到具体节点」：只有直接含节点 / direct，或引用到已判活的组，才算活。
 /// 迭代到不再变化（最小不动点），保证剔除空组后不留悬空引用。
-fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
+fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, String> {
     let declared: Vec<&Value> = template["outbounds"]
         .as_array()
         .map(|a| {
@@ -192,7 +194,7 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
     // 展开候选池：节点/direct 直接落地；对其它组的引用保留 tag；模式就地展开成节点。
     let pools: Vec<(String, Vec<String>)> = declared
         .iter()
-        .map(|sel| {
+        .map(|sel| -> Result<(String, Vec<String>), String> {
             let mut expanded: Vec<String> = Vec::new();
             for item in sel["outbounds"]
                 .as_array()
@@ -206,16 +208,15 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
                     expanded.push(item_str.to_string());
                     continue;
                 }
-                if let Some(re) = compile_pattern(item_str) {
-                    expanded.extend(tags.iter().filter(|t| re.is_match(t)).cloned());
-                }
+                let re = compile_pattern(item_str)?;
+                expanded.extend(tags.iter().filter(|t| re.is_match(t)).cloned());
             }
             // 去重 + 排除自身
             let mut seen = std::collections::HashSet::new();
             expanded.retain(|t| t != sel["tag"].as_str().unwrap_or("") && seen.insert(t.clone()));
-            (sel["tag"].as_str().unwrap_or("").to_string(), expanded)
+            Ok((sel["tag"].as_str().unwrap_or("").to_string(), expanded))
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
 
     // 判活：某组只要能落到 具体节点 / direct / 已判活的组，就算活。迭代求最小不动点。
     let mut alive: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -238,7 +239,7 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
         }
     }
 
-    declared
+    let declared_result: Vec<Value> = declared
         .iter()
         .filter_map(|sel| {
             let tag = sel["tag"].as_str().unwrap_or("");
@@ -274,7 +275,8 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Vec<Value> {
             }
             Some(out)
         })
-        .collect::<Vec<Value>>()
+        .collect::<Vec<Value>>();
+    Ok(declared_result)
 }
 
 /// 订阅抓取函数类型。抽成别名以免在结构体字段里内联复杂类型。
@@ -330,7 +332,7 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
         .map(str::to_string)
         .collect();
 
-    let selectors = populate_selectors(template, &tags);
+    let selectors = populate_selectors(template, &tags)?;
 
     let mut outbounds = vec![json!({"type": "direct", "tag": "direct"})];
     outbounds.extend(nodes);
@@ -358,8 +360,13 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
         .into_iter()
         .flatten()
     {
+        let tag = server["tag"].as_str().unwrap_or("?").to_string();
         if let Some(detour) = server.get_mut("detour") {
             if detour.as_str().is_some_and(|t| !available.contains(t)) {
+                let orig = detour.as_str().unwrap_or_default().to_string();
+                eprintln!(
+                    "[sbtools] dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
+                );
                 *detour = Value::from(fallback);
             }
         }
@@ -390,6 +397,25 @@ mod tests {
         let re3 = compile_pattern("HK").unwrap();
         assert!(re3.is_match("HK-01"));
         assert!(!re3.is_match("hk-02"));
+    }
+
+    /// 回归：非法正则必须让装配失败，静默跳过会让过滤条件悄悄失效。
+    #[test]
+    fn invalid_pattern_fails_the_assembly() {
+        let err = compile_pattern("([unclosed").expect_err("非法正则必须 Err");
+        assert!(err.contains("不是合法正则"), "实际: {err}");
+        // 模板里挂着非法过滤模式的组，整条 finalize 必须报错而不是悄悄少过滤
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        tpl["outbounds"]
+            .as_array_mut()
+            .expect("outbounds 为数组")
+            .push(json!({
+                "type": "selector",
+                "tag": "broken-filter",
+                "outbounds": ["([unclosed", "direct"]
+            }));
+        let err = finalize(&mut tpl, Vec::new()).expect_err("非法过滤模式必须失败");
+        assert!(err.contains("不是合法正则"), "实际: {err}");
     }
 
     /// 回归:订阅无匹配节点时空 urltest 组会被 sing-box 拒绝(missing tags),

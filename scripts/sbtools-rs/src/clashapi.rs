@@ -98,6 +98,9 @@ pub fn resolve_controller(
             }
         }
     }
+    // 缺省口是 SFM 场景磁盘读不到配置时的唯一可辩护猜测，但必须喊出来：
+    // 让调用方知道连的是「猜的 9090」，不是配置指定的内核。
+    eprintln!("· 未在配置中发现 clash api controller，使用缺省 127.0.0.1:9090（--api 可显式指定）");
     ControllerResolution::Default("127.0.0.1:9090".to_string())
 }
 
