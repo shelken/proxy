@@ -43,7 +43,7 @@
         "type": "https",
         "tag": "dns-proxy",
         "server": "1.1.1.1",
-        "detour": "hk",
+        "detour": "dns-auto",
         "tls": {
           "enabled": true,
           "server_name": "cloudflare-dns.com"
@@ -67,14 +67,11 @@
         "action": "predefined"
       },
       {
-        "clash_mode": "direct",
-        "server": "dns-local-system"
-      },
-      {
         "rule_set": [
           "Lan-dns"
         ],
-        "server": "dns-local-system"
+        "server": "dns-local-system",
+        "disable_optimistic_cache": true
       },
       {
         "domain_suffix": [
@@ -82,6 +79,11 @@
           "lan",
           "home.arpa"
         ],
+        "server": "dns-local-system",
+        "disable_optimistic_cache": true
+      },
+      {
+        "clash_mode": "direct",
         "server": "dns-local-system"
       },
       {
@@ -555,6 +557,20 @@
       "tag": "direct"
     },
     {
+      "type": "urltest",
+      "tag": "dns-auto",
+      "outbounds": [
+        "(?i)(vps|hy2|selfhost)",
+        "(?i)(港|HK|Hong)",
+        "(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)",
+        "(?i)(新加坡|坡|狮城|SG|Singapore)"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "1m",
+      "tolerance": 50,
+      "interrupt_exist_connections": true
+    },
+    {
       "type": "selector",
       "tag": "selfhost",
       "outbounds": [
@@ -814,7 +830,8 @@
     "cache_file": {
       "enabled": true,
       "path": "cache.db",
-      "store_fakeip": true
+      "store_fakeip": true,
+      "store_dns": true
     }
   }
 }
