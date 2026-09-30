@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0](https://github.com/shelken/proxy/compare/v0.6.1...v0.7.0) - 2026-09-30
+
+### Other
+
+- 统一 sbtools 配置加载与 controller 决议
+
 ## [0.6.1](https://github.com/shelken/proxy/compare/v0.6.0...v0.6.1) - 2026-09-30
 
 ### Fixed
