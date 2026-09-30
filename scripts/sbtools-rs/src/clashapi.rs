@@ -13,11 +13,17 @@ use std::time::Duration;
 /// 仅放行 127.0.0.1 回环：后续要把本机观测数据拉回来，不该发往非回环地址。
 pub fn discover_controller(cfg: &Value) -> Option<String> {
     let ec = cfg["experimental"]["clash_api"]["external_controller"].as_str()?;
-    if ec.starts_with("127.0.0.1") {
+    if is_loopback(ec) {
         Some(ec.to_string())
     } else {
         None
     }
+}
+
+/// controller 是否回环。`discover_controller` 守卫与 config 的拒绝判定共用，
+/// 语义就是「以 127.0.0.1 开头」，与 sing-box 常见的 `127.0.0.1:9090` 写法对齐。
+pub fn is_loopback(addr: &str) -> bool {
+    addr.starts_with("127.0.0.1")
 }
 
 /// 配置里的 controller 原始值（不做回环守卫）。与 `discover_controller` 配合，
