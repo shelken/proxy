@@ -176,3 +176,17 @@ test("HK 全断仍可通过其他地区解析，运行中所选节点断开后�
   expect((await state()).now).not.toBe(selected);
   console.log(JSON.stringify({ scenario: "dns-region-and-live-failover", recovery_ms: Date.now() - before }));
 }), 90000);
+
+test("普通 DNS 缓存正常重启后在 DoH 不可用时仍可恢复", () => withDNS(async f => {
+  let core = await f.startCore();
+  const first = await query("persisted-response.test", 65);
+  expect(first.readUInt16BE(2) & 15).toBe(0);
+  expect(first.readUInt16BE(6)).toBe(1);
+  await core.stop();
+  f.doh.stop(true);
+  core = await f.startCore();
+  const restored = await query("persisted-response.test", 65);
+  expect(restored.readUInt16BE(2) & 15).toBe(0);
+  expect(restored.readUInt16BE(6)).toBe(1);
+  expect(restored.subarray(-10)).toEqual(first.subarray(-10));
+}), 15000);

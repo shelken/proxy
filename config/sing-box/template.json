@@ -828,7 +828,8 @@
     "cache_file": {
       "enabled": true,
       "path": "cache.db",
-      "store_fakeip": true
+      "store_fakeip": true,
+      "store_dns": true
     }
   }
 }
