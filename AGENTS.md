@@ -2,14 +2,14 @@
 
 个人自维护的代理软件配置/插件/脚本集合
 
-## 目录
+## 布局
 
 - `config/loon/`: Loon 配置与插件（移动端 + macOS 桌面端），含 `plugins/` 插件目录与各端 `.conf` 配置
 - `config/clash/`、`config/surge/`: 备用客户端配置
 - `scripts/`: 构建等脚本
-- `scripts/sb-sync-rs/`: sb-sync源码(`docs/sb-sync.md`文档介绍)
+- `scripts/sbtools-rs/`: sbtools源码(`docs/sbtools.md`文档介绍)
 - `docs/adr/`: 架构决策记录（编号递增，一个决策一篇）
-- `docs/`: 架构与使用文档（`ARCH.md` 全局架构、`sb-sync.md` 实现细节、`user-guide/` 用户指南）
+- `docs/`: 架构与使用文档（`ARCH.md` 全局架构、`sbtools.md` 实现细节、`user-guide/` 用户指南）
 - `postmortems/`: 事故与踩坑记录（编号递增，索引见 `postmortems/README.md`）
 - `.github/workflows/`: CI 工作流
 - `RELEASE.md`: 发布说明
@@ -36,6 +36,10 @@
 ## Loon
 
 - mac下的loon配置在`~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf`; 读取时必须过滤掉`[Proxy]`,`[Remote Proxy]`,`[Mitm]` 三个敏感的配置块
+
+## sing-box
+
+- template.json 的变更, 必须使用沙盒使用真实数据进行测试; 重点检查当前用户实际节点和规则的 出口/速度/延迟/变化
 
 ## 参考项目
 
