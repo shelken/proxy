@@ -67,14 +67,11 @@
         "action": "predefined"
       },
       {
-        "clash_mode": "direct",
-        "server": "dns-local-system"
-      },
-      {
         "rule_set": [
           "Lan-dns"
         ],
-        "server": "dns-local-system"
+        "server": "dns-local-system",
+        "disable_optimistic_cache": true
       },
       {
         "domain_suffix": [
@@ -82,6 +79,11 @@
           "lan",
           "home.arpa"
         ],
+        "server": "dns-local-system",
+        "disable_optimistic_cache": true
+      },
+      {
+        "clash_mode": "direct",
         "server": "dns-local-system"
       },
       {

@@ -190,3 +190,43 @@ test("普通 DNS 缓存正常重启后在 DoH 不可用时仍可恢复", () => w
   expect(restored.readUInt16BE(6)).toBe(1);
   expect(restored.subarray(-10)).toEqual(first.subarray(-10));
 }), 15000);
+
+test("LAN 域名 TTL 过期后返回上游新地址而非过期缓存", () => withDNS(async f => {
+  const lan = createSocket("udp4");
+  let address = "192.0.2.10";
+  try {
+    const aRecord = (packet, ip) => {
+      let end = 12;
+      while (packet[end]) end += packet[end] + 1;
+      end++;
+      const header = Buffer.from(packet.subarray(0, 12));
+      header.writeUInt16BE(0x8180, 2);
+      header.writeUInt16BE(1, 6);
+      const rr = Buffer.alloc(16);
+      rr.writeUInt16BE(0xc00c); rr.writeUInt16BE(1, 2); rr.writeUInt16BE(1, 4);
+      rr.writeUInt32BE(1, 6); rr.writeUInt16BE(4, 10);
+      Buffer.from(ip.split(".").map(Number)).copy(rr, 12);
+      return Buffer.concat([header, packet.subarray(12, end + 4), rr]);
+    };
+    lan.on("message", (packet, peer) => lan.send(aRecord(packet, address), peer.port, peer.address));
+    await new Promise(resolve => lan.bind(15357, "127.0.0.1", resolve));
+    // dns-local-system(type local) 跟随 VM 系统解析器，答案不可控；
+    // 换成可控 UDP 上游后，LAN 规则本身的路由行为不变
+    f.config.dns.servers = f.config.dns.servers.map(server =>
+      server.tag === "dns-local-system"
+        ? { type: "udp", tag: "dns-local-system", server: "127.0.0.1", server_port: 15357 }
+        : server);
+    const core = await f.startCore();
+    const initial = await query("nas.lan", 1);
+    expect(initial.readUInt16BE(2) & 15).toBe(0);
+    expect(initial.subarray(-4).join(".")).toBe("192.0.2.10");
+    await Bun.sleep(1200);
+    address = "192.0.2.20";
+    const fresh = await query("nas.lan", 1);
+    expect(fresh.readUInt16BE(2) & 15).toBe(0);
+    expect(fresh.subarray(-4).join(".")).toBe("192.0.2.20");
+    await core.stop();
+  } finally {
+    lan.close();
+  }
+}), 15000);
