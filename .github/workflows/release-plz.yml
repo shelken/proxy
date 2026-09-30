@@ -38,7 +38,7 @@ jobs:
       group: sbtools-release-plz
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -46,9 +46,10 @@ jobs:
       # release-plz 内部要读 cargo metadata
       - uses: dtolnay/rust-toolchain@stable
 
-      # 清单版本是版本真源。历史漂移（清单 0.3.0 而最高 tag v0.5.0）时，
-      # release-plz 以 tag commit 内的清单为基线，会提出低于已发布版本的版本号——
-      # 那种 PR 合并后会静默丢掉版本号。这里直接跳过，并要求先用下面的表单迁移。
+      # 清单版本是版本真源。历史漂移（清单 0.3.0 而最高 tag v0.5.0）或跨包更名（最高
+      # tag 内尚无 scripts/sbtools-rs）时，release-plz 以 tag commit 为基线，前者会
+      # 提出倒退版本，后者会在临时 worktree 中抛出 "cannot find package sbtools in workspace"。
+      # 两种情况均在此处跳过，由手动版本表单或合并新包首个版本完成基线校准。
       - name: Check version is not behind released tags
         id: guard
         run: |
@@ -59,6 +60,9 @@ jobs:
           if [ -n "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$HIGHEST" "$MANIFEST" | sort -V | tail -1)" != "$MANIFEST" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::warning::清单版本 $MANIFEST 低于最高稳定 tag v$HIGHEST；已跳过，请先用手动版本表单迁移"
+          elif [ -n "$HIGHEST" ] && ! git cat-file -e "v${HIGHEST}:scripts/sbtools-rs/Cargo.toml" 2>/dev/null; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::最高稳定 tag v$HIGHEST 不含 scripts/sbtools-rs（改名前历史 tag），release-plz 无法跨更名推导；已跳过，请先合并或发布首个 sbtools 版本"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -86,7 +90,7 @@ jobs:
       group: sbtools-release-manual
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -109,7 +113,7 @@ jobs:
 
       - name: Create version PR
         id: pr
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           base: main
           branch: manual-release

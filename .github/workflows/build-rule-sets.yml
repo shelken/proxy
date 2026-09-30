@@ -49,7 +49,7 @@ jobs:
       # sing-box 版本由 .mise.toml 固定（1.14.1）：编译 .srs 的行为随版本变化，
       # 跟着 mise 走可保证本地与 CI 编出同一份二进制。
       # 只装 sing-box 一个工具，缓存没有可命中的内容，关掉省一次无用往返。
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           cache: false
 
