@@ -26,13 +26,21 @@ describe("template.json structural verification", () => {
     expect(mixed.listen_port).toBe(2080);
   });
 
-  test("excludes private LAN and Tailscale CGNAT from tun", () => {
+  test("excludes private physical LAN from tun to avoid route hijacking on macOS", () => {
     const tun = template.inbounds.find((i) => i.type === "tun");
     const excluded = tun.route_exclude_address ?? [];
     expect(excluded).toContain("10.0.0.0/8");
     expect(excluded).toContain("172.16.0.0/12");
     expect(excluded).toContain("192.168.0.0/16");
-    expect(excluded).toContain("100.64.0.0/10");
+    expect(excluded).not.toContain("100.64.0.0/10");
+  });
+
+  test("routes private IP addresses to direct outbound", () => {
+    const rules = template.route?.rules ?? [];
+    const privateRule = rules.find(
+      (r) => r.ip_is_private === true && r.action === "route" && r.outbound === "direct",
+    );
+    expect(privateRule).toBeDefined();
   });
 
 
