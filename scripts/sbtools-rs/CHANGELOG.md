@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.6.0] - 2026-09-30
+
+全仓改名 sb-sync → sbtools:二进制、镜像(ghcr.io/shelken/proxy/sbtools-server)与 CLI 名称同步更名。新增三个子命令:config(隐私化查看生效配置)、logs(实时日志跟踪)、trace(全链路探测,新增 live 归属/静态规则/dns 推演段)。mise(ubi/vmg 后端)用户需重装:二进制名已从 sb-sync 变为 sbtools,旧安装不会自动迁移。
+
 ## [0.5.5](https://github.com/shelken/proxy/compare/v0.5.4...v0.5.5) - 2026-09-29
 
 ### Added
