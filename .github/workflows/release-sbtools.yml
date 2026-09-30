@@ -57,11 +57,11 @@ jobs:
       kernel_version: ${{ steps.kernel.outputs.version }}
     steps:
       # prepare 只读清单与锁文件、查 Release，不读 git 历史，浅克隆即可
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # 内核版本只写在 .mise.toml。这里解析一次，docker 的两个架构 job 复用，
       # 不必各自再装一遍 mise
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           cache: false
           install: false
@@ -132,7 +132,7 @@ jobs:
             runner: ubuntu-latest
             artifact: sbtools-x86_64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -153,7 +153,7 @@ jobs:
       # 缓存键必须含 target：三平台并行跑，共享键会让不同架构的
       # 构建产物互相覆盖（cargo 会因架构不符而重编或直接报错）
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -165,7 +165,7 @@ jobs:
       # e2e 测试要真跑一次内核合并（server::tests::node_direct_rule_*），
       # 内核不在 PATH 时它们以「启动内核失败（sing-box）: os error 2」失败。
       # 版本由 .mise.toml 固定，与本地和 ci-sbtools 同源，此处不另写版本号。
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           cache: false
 
@@ -211,7 +211,7 @@ jobs:
           echo "$FILE_OUT" | grep -qE 'statically linked|static-pie linked'
 
       # overwrite: 重跑失败 job 时同名 artifact 已存在，不覆盖会直接报错
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -230,12 +230,12 @@ jobs:
     if: needs.prepare.outputs.mode == 'release'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # 只取二进制 artifact。不带 pattern 时 merge-multiple 会把同 run 内**全部**
       # artifact 拍平进 dist/（包括 docker job 上传的 digests-*），随后会把
       # 那些十六进制命名的空文件当作发布资产推上去。
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: sbtools-*
           path: dist
@@ -261,7 +261,7 @@ jobs:
           grep -q '[^[:space:]]' RELEASE_NOTES.md || {
             echo "CHANGELOG 缺少 $VERSION 的 release 段"; exit 1; }
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
           body_path: RELEASE_NOTES.md
@@ -299,10 +299,10 @@ jobs:
             runner: ubuntu-latest
             artifact: sbtools-x86_64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # 镜像构建上下文要求 ./sbtools，用本平台那份二进制填上
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.artifact }}
           path: image-context
@@ -310,9 +310,9 @@ jobs:
       - name: Stage binary into context
         run: mv image-context/${{ matrix.artifact }} sbtools
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -322,7 +322,7 @@ jobs:
       # 只 push by digest 的话只能验「构建成功」，验不了「启动后 /healthz 与 /pubkey 可用」，
       # 而镜像里装的是另一份二进制——架构错或入口坏都只会在拉取时才暴露。
       - name: Build image for smoke test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -356,7 +356,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -374,7 +374,7 @@ jobs:
 
       # overwrite + 7 天：重跑失败 job 时旧 digest 必须还在，否则 merge job
       # 会拉到不完整的平台集合
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digests-${{ strategy.job-index }}
           path: ${{ runner.temp }}/digests/*
@@ -392,15 +392,15 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
