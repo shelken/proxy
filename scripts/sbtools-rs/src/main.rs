@@ -139,14 +139,7 @@ fn cmd_encode(rest: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// 新架构无本地产物;SFM 场景产物在 SFM 组容器 configs/ 下。
-/// 兼容旧路径 ~/.config/sing-box/singbox.json(存在则读其 clash_api 配置)。
-fn legacy_config_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join(".config/sing-box/singbox.json")
-}
-
-/// trace: 真机全链路探测。--api 显式指定 Clash API,缺省读产物配置。
+/// trace: 真机全链路探测。--api 显式指定 Clash API,缺省读生效配置。
 fn cmd_trace(rest: &[String]) -> Result<(), String> {
     let usage_hint = "trace 用法: sbtools trace <domain> [--api <127.0.0.1:9090>]";
     let mut domain: Option<String> = None;
@@ -164,34 +157,21 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
         }
     }
     let domain = domain.ok_or(usage_hint)?;
-    let legacy = std::fs::read_to_string(legacy_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    let controller = resolve_trace_controller(api, legacy.as_ref())?;
-    let fails = trace::trace(&domain, controller.as_deref());
+    let eff = config::load_effective(None).ok();
+    let controller = match clashapi::resolve_controller(eff.as_ref(), api.as_deref()) {
+        clashapi::ControllerResolution::Loopback(c)
+        | clashapi::ControllerResolution::Default(c) => c,
+        clashapi::ControllerResolution::ExplicitReject { address, .. } => {
+            return Err(format!(
+                "trace: 配置的 clash api {address} 非回环地址，拒绝连接（回退缺省口会连上无关内核）；可用 --api 显式指定回环地址"
+            ));
+        }
+    };
+    let fails = trace::trace(&domain, Some(&controller));
     if fails > 0 {
         return Err(format!("{fails} 个阶段失败"));
     }
     Ok(())
-}
-
-/// trace 的 controller 解析。--api 显式指定总是放行；legacy 配置里有 controller 时
-/// 回环放行、非回环显式拒绝（与 logs 同口径：回退缺省口会连上无关内核，如真机 SFM）；
-/// 没有配置源才用缺省口。
-fn resolve_trace_controller(
-    api: Option<String>,
-    legacy: Option<&serde_json::Value>,
-) -> Result<Option<String>, String> {
-    if let Some(a) = api {
-        return Ok(Some(a));
-    }
-    match legacy.and_then(clashapi::configured_controller) {
-        Some(c) if c.starts_with("127.0.0.1") => Ok(Some(c)),
-        Some(c) => Err(format!(
-            "trace: 配置的 clash api {c} 非回环地址，拒绝连接（回退缺省口会连上无关内核）；可用 --api 显式指定回环地址"
-        )),
-        None => Ok(Some("127.0.0.1:9090".to_string())),
-    }
 }
 
 /// check: 离线校验。读本机 YAML → 合并 overlay 到底模 → 内核 check → 打印生效摘要。
@@ -306,39 +286,33 @@ fn cmd_config(rest: &[String]) -> Result<(), String> {
         }
     }
 
-    // 磁盘读不到不立即报错：SFM 运行时可能仅有 clash api 可达（发现链降级）
-    let disk = paths::discover_effective(path.as_deref());
-    let disk_controller = match disk {
-        Ok(eff) => {
-            let outcome = load_and_print_redacted(&eff);
-            match outcome {
-                // controller 发现顺序与 logs 一致：顶层 → overlay，拿到的是原始值
-                Ok(v) => v.as_ref().and_then(|v| {
-                    clashapi::configured_controller(v).or_else(|| {
-                        overlay_value(v).and_then(|o| clashapi::configured_controller(&o))
-                    })
-                }),
-                // --path 是用户显式意图，读不到必须报错；发现链结果不可读才降级
-                Err(e) if eff.explicit => return Err(e),
-                Err(e) => {
-                    println!("· 磁盘配置不可读: {e}");
-                    None
-                }
-            }
+    let load_res = config::load_effective(path.as_deref());
+    let (eff, disk_found) = match load_res {
+        Ok(cfg) => {
+            println!("✓ 生效配置: {}", cfg.path.display());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&cfg.redacted())
+                    .map_err(|e| format!("序列化失败: {e}"))?
+            );
+            (Some(cfg), true)
         }
         Err(e) if path.is_some() => return Err(e),
         Err(e) => {
             println!("· 磁盘未找到生效配置: {e}");
+            (None, false)
+        }
+    };
+
+    let controller = match clashapi::resolve_controller(eff.as_ref(), None) {
+        clashapi::ControllerResolution::Loopback(c)
+        | clashapi::ControllerResolution::Default(c) => Some(c),
+        clashapi::ControllerResolution::ExplicitReject { address, .. } => {
+            println!("· controller {address} 非回环地址，已拒绝；跳过运行时摘要（clash_api 仅允许 127.0.0.1）");
             None
         }
     };
 
-    // SFM 分支：磁盘读不到 profile 时运行时真相只在 clash api；缺省回环口与 trace 一致。
-    // 配置了非回环 controller 时显式拒绝并跳过摘要，不静默回退缺省口——那会把
-    // 缺省口上无关内核的 /configs 摘要张冠李戴（logs/trace 对此是硬报错，config
-    // 的主功能是本地脱敏查看，拒绝探测即可，不挡主输出）。
-    let disk_found = disk_controller.is_some();
-    let controller = config_runtime_controller(disk_controller.as_deref());
     if let Some(controller) = &controller {
         if clashapi::reachable(controller) {
             print_runtime_summary(controller);
@@ -350,55 +324,11 @@ fn cmd_config(rest: &[String]) -> Result<(), String> {
     }
     Ok(())
 }
-
-/// config 的运行时摘要 controller：配置的 controller 非回环时拒绝（None）并提示，
-/// 没配才用缺省回环口。
-fn config_runtime_controller(raw: Option<&str>) -> Option<String> {
-    match raw {
-        Some(addr) if clashapi::is_loopback(addr) => Some(addr.to_string()),
-        Some(addr) => {
-            println!("· controller {addr} 非回环地址，已拒绝；跳过运行时摘要（clash_api 仅允许 127.0.0.1）");
-            None
-        }
-        None => Some("127.0.0.1:9090".to_string()),
-    }
-}
-
-/// 读取磁盘配置、打印脱敏 JSON，返回解析后的完整配置值。controller 的发现
-/// （顶层 → overlay）与回环裁决都在调用方，与 logs 的解析顺序一致。
-fn load_and_print_redacted(
-    eff: &paths::EffectiveConfig,
-) -> Result<Option<serde_json::Value>, String> {
-    let text = std::fs::read_to_string(&eff.path)
-        .map_err(|e| format!("读取 {}: {e}", eff.path.display()))?;
-    let value = parse_config_text(&text, &eff.path)?;
-    println!("✓ 生效配置: {}", eff.path.display());
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&redact::redact(&value))
-            .map_err(|e| format!("序列化失败: {e}"))?
-    );
-    Ok(Some(value))
-}
-
-/// 按扩展名解析 YAML 或 JSON（legacy singbox.json 走严格 JSON，报错更准）。
-fn parse_config_text(text: &str, path: &std::path::Path) -> Result<serde_json::Value, String> {
-    if path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-    {
-        serde_json::from_str(text).map_err(|e| format!("JSON 解析失败（{}）: {e}", path.display()))
-    } else {
-        serde_yaml::from_str(text).map_err(|e| format!("YAML 解析失败（{}）: {e}", path.display()))
-    }
-}
-
 /// SFM 运行时摘要。/configs 顶层键集经实测锚定: mode、mixed-port、tun、log-level。
 fn print_runtime_summary(controller: &str) {
     match clashapi::get_json(controller, "/configs") {
         Ok(v) => {
             println!("✓ SFM 运行时 (clash api {controller}):");
-            // SFM 实测 /configs 的 tun 可能为 null(未启用)，与键缺失(未上报)区分
             let tun = if v.get("tun").is_some_and(serde_json::Value::is_null) {
                 Some("未启用".to_string())
             } else {
@@ -452,18 +382,16 @@ fn cmd_logs(rest: &[String]) -> Result<(), String> {
         ));
     }
 
-    // 生效配置解析一次：controller 与 overlay 的 log.output 都从这来。
-    // 磁盘读不到不报错（SFM 场景降级走缺省回环口），与 cmd_config 一致。
-    let eff = paths::discover_effective(None).ok();
-    let eff_value = eff.as_ref().and_then(|e| {
-        std::fs::read_to_string(&e.path)
-            .ok()
-            .and_then(|t| parse_config_text(&t, &e.path).ok())
-    });
+    // 生效配置统一从 config 模块加载（涵盖发现、读取与 overlay 预解析）
+    let eff = config::load_effective(None).ok();
 
     let mut follow = follow || tail.is_none();
     if let Some(n) = tail {
-        if let Some(path) = discover_log_output(eff_value.as_ref()).map(std::path::PathBuf::from) {
+        if let Some(path) = eff
+            .as_ref()
+            .and_then(config::EffectiveConfig::log_output)
+            .map(std::path::PathBuf::from)
+        {
             println!("✓ log.output: {}", path.display());
             for line in tail_lines(&path, n)? {
                 println!("{line}");
@@ -476,36 +404,18 @@ fn cmd_logs(rest: &[String]) -> Result<(), String> {
         }
     }
     if follow {
-        follow_logs(&resolve_logs_controller(eff_value.as_ref())?, &level)?;
+        let controller = match clashapi::resolve_controller(eff.as_ref(), None) {
+            clashapi::ControllerResolution::Loopback(c)
+            | clashapi::ControllerResolution::Default(c) => c,
+            clashapi::ControllerResolution::ExplicitReject { address, .. } => {
+                return Err(format!(
+                    "controller {address} 非回环地址，已拒绝；clash_api 仅允许 127.0.0.1"
+                ));
+            }
+        };
+        follow_logs(&controller, &level)?;
     }
     Ok(())
-}
-
-/// logs 的 controller 发现：生效配置顶层 → 其 overlay（客户端 YAML 的 clash_api
-/// 只会在 overlay 里）→ 缺省回环口（与 config/trace 一致）。
-/// 配置里写了 controller 但未过回环守卫时显式报错，不静默回退——回退会连上
-/// 缺省口上无关的内核（如真机 SFM），数据张冠李戴且有隐私暴露面。
-fn resolve_logs_controller(eff_value: Option<&serde_json::Value>) -> Result<String, String> {
-    fn rejected(addr: &str) -> String {
-        format!("controller {addr} 非回环地址，已拒绝；clash_api 仅允许 127.0.0.1")
-    }
-    if let Some(v) = eff_value {
-        if let Some(c) = clashapi::discover_controller(v) {
-            return Ok(c);
-        }
-        if let Some(raw) = clashapi::configured_controller(v) {
-            return Err(rejected(&raw));
-        }
-        if let Some(o) = overlay_value(v) {
-            if let Some(c) = clashapi::discover_controller(&o) {
-                return Ok(c);
-            }
-            if let Some(raw) = clashapi::configured_controller(&o) {
-                return Err(rejected(&raw));
-            }
-        }
-    }
-    Ok("127.0.0.1:9090".to_string())
 }
 
 /// -f 跟踪 /logs 流，逐行打出 payload。
@@ -539,38 +449,6 @@ fn log_stream_payload(line: &str) -> String {
         .ok()
         .and_then(|v| v["payload"].as_str().map(String::from))
         .unwrap_or_else(|| line.to_string())
-}
-
-/// JSON 值里的 log.output 路径。
-fn log_output_from(value: &serde_json::Value) -> Option<String> {
-    value["log"]["output"].as_str().map(String::from)
-}
-
-/// 客户端 YAML 的 overlay 是原生 sing-box JSON 文本；解析失败按无处理。
-fn overlay_value(value: &serde_json::Value) -> Option<serde_json::Value> {
-    serde_json::from_str(value["overlay"].as_str()?).ok()
-}
-
-/// log.output 读取顺序写死: legacy singbox.json 优先，其次客户端 config 的 overlay。
-/// 客户端 YAML 顶层无 log 键（config.rs 的 ClientConfig 只有 subs/nodes/overlay/template_url）。
-fn pick_log_output(
-    legacy: Option<&serde_json::Value>,
-    eff: Option<&serde_json::Value>,
-) -> Option<String> {
-    if let Some(p) = legacy.and_then(log_output_from) {
-        return Some(p);
-    }
-    eff.and_then(overlay_value)
-        .as_ref()
-        .and_then(log_output_from)
-}
-
-/// 磁盘 IO 版: legacy singbox.json 现读，生效配置解析值由调用方传入。
-fn discover_log_output(eff_value: Option<&serde_json::Value>) -> Option<String> {
-    let legacy = std::fs::read_to_string(legacy_config_path())
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    pick_log_output(legacy.as_ref(), eff_value)
 }
 
 /// 读文件末 N 行。日志量级为万行，全量读入足够；日志轮转由内核或外部负责。
@@ -700,30 +578,29 @@ mod tests {
         assert!(cmd_logs(&args(&["-x"])).is_err());
     }
 
-    /// log.output 读取顺序写死: legacy singbox.json 优先，其次 overlay。
-    /// 客户端 YAML 顶层无 log 键，log.output 只可能来自这两处。
     #[test]
-    fn log_output_prefers_legacy_then_overlay() {
-        let legacy = serde_json::json!({"log": {"output": "/tmp/legacy.log"}});
-        let eff = serde_json::json!({"overlay": r#"{"log":{"output":"/tmp/overlay.log"}}"#});
+    fn log_output_prefers_root_then_overlay() {
+        let eff = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/config.yaml"),
+            root: serde_json::json!({"log": {"output": "/tmp/root.log"}}),
+            overlay: Some(serde_json::json!({"log":{"output":"/tmp/overlay.log"}})),
+        };
+        assert_eq!(eff.log_output().as_deref(), Some("/tmp/root.log"));
+        let eff_overlay = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/config.yaml"),
+            root: serde_json::json!({}),
+            overlay: Some(serde_json::json!({"log":{"output":"/tmp/overlay.log"}})),
+        };
         assert_eq!(
-            pick_log_output(Some(&legacy), Some(&eff)).as_deref(),
-            Some("/tmp/legacy.log")
-        );
-        // legacy 存在但无 log.output 时落到 overlay
-        assert_eq!(
-            pick_log_output(Some(&serde_json::json!({})), Some(&eff)).as_deref(),
+            eff_overlay.log_output().as_deref(),
             Some("/tmp/overlay.log")
         );
-        // 两处均无 → 退化 -f 的判定输入
-        assert_eq!(
-            pick_log_output(Some(&serde_json::json!({})), Some(&serde_json::json!({}))),
-            None
-        );
-        assert_eq!(pick_log_output(None, None), None);
-        // overlay 不是合法 JSON 时按无处理
-        let bad = serde_json::json!({"overlay": "not-json"});
-        assert_eq!(pick_log_output(None, Some(&bad)), None);
+        let eff_none = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/config.yaml"),
+            root: serde_json::json!({}),
+            overlay: None,
+        };
+        assert_eq!(eff_none.log_output(), None);
     }
 
     #[test]
@@ -754,84 +631,69 @@ mod tests {
     }
 
     #[test]
-    fn logs_controller_rejects_non_loopback_instead_of_fallback() {
-        // 客户端 YAML 顶层无 experimental，controller 在 overlay 里
-        let eff = serde_json::json!({"overlay": r#"{"experimental":{"clash_api":{"external_controller":"127.0.0.1:19090"}}}"#});
+    fn controller_resolution_rejects_non_loopback_instead_of_fallback() {
+        let eff = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/config.yaml"),
+            root: serde_json::json!({}),
+            overlay: Some(
+                serde_json::json!({"experimental":{"clash_api":{"external_controller":"127.0.0.1:19090"}}}),
+            ),
+        };
         assert_eq!(
-            resolve_logs_controller(Some(&eff)).unwrap(),
-            "127.0.0.1:19090"
+            clashapi::resolve_controller(Some(&eff), None),
+            clashapi::ControllerResolution::Loopback("127.0.0.1:19090".into())
         );
-        // 无任何 controller 时才回退缺省回环口（与 config/trace 一致）
+        // 无任何 controller 时才回退缺省回环口
+        let empty_eff = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/config.yaml"),
+            root: serde_json::json!({}),
+            overlay: None,
+        };
         assert_eq!(
-            resolve_logs_controller(Some(&serde_json::json!({}))).unwrap(),
-            "127.0.0.1:9090"
-        );
-        assert_eq!(resolve_logs_controller(None).unwrap(), "127.0.0.1:9090");
-        // 配置了非回环 controller 必须显式拒绝，不能静默回退连上缺省口的无关内核
-        let err = resolve_logs_controller(Some(&serde_json::json!(
-            {"experimental": {"clash_api": {"external_controller": "192.0.2.5:19090"}}}
-        )))
-        .unwrap_err();
-        assert!(
-            err.contains("192.0.2.5:19090") && err.contains("拒绝"),
-            "实际: {err}"
-        );
-        // 顶层无、overlay 有非回环：同样拒绝
-        let err = resolve_logs_controller(Some(&serde_json::json!(
-            {"overlay": r#"{"experimental":{"clash_api":{"external_controller":"127.0.0.2:19090"}}}"#}
-        )))
-        .unwrap_err();
-        assert!(
-            err.contains("127.0.0.2:19090") && err.contains("拒绝"),
-            "实际: {err}"
-        );
-    }
-
-    /// trace 的 controller 解析与 logs 同口径：配置了非回环地址必须显式报错，
-    /// 不得静默回退缺省口（会连上缺省口上无关内核）。
-    #[test]
-    fn trace_controller_rejects_non_loopback_instead_of_fallback() {
-        // --api 显式指定总是放行
-        assert_eq!(
-            resolve_trace_controller(Some("127.0.0.1:19090".into()), None)
-                .unwrap()
-                .as_deref(),
-            Some("127.0.0.1:19090")
-        );
-        // legacy 配置有回环 controller → 采用
-        let cfg = serde_json::json!({"experimental":{"clash_api":{"external_controller":"127.0.0.1:19090"}}});
-        assert_eq!(
-            resolve_trace_controller(None, Some(&cfg))
-                .unwrap()
-                .as_deref(),
-            Some("127.0.0.1:19090")
-        );
-        // 非回环 → 显式报错且含被拒地址
-        let cfg = serde_json::json!({"experimental":{"clash_api":{"external_controller":"192.0.2.5:9090"}}});
-        let err = resolve_trace_controller(None, Some(&cfg)).unwrap_err();
-        assert!(
-            err.contains("192.0.2.5:9090") && err.contains("拒绝"),
-            "实际: {err}"
-        );
-        // 无配置源 → 缺省口
-        assert_eq!(
-            resolve_trace_controller(None, None).unwrap().as_deref(),
-            Some("127.0.0.1:9090")
-        );
-    }
-
-    /// config 的运行时摘要 controller 与 logs/trace 同口径：配置了非回环地址
-    /// 必须显式拒绝并跳过摘要，不能静默回退缺省口连上无关内核；没配才用缺省。
-    #[test]
-    fn config_runtime_controller_拒绝非回环不回退缺省() {
-        assert!(config_runtime_controller(Some("192.0.2.5:19090")).is_none());
-        assert_eq!(
-            config_runtime_controller(Some("127.0.0.1:19090")).as_deref(),
-            Some("127.0.0.1:19090")
+            clashapi::resolve_controller(Some(&empty_eff), None),
+            clashapi::ControllerResolution::Default("127.0.0.1:9090".into())
         );
         assert_eq!(
-            config_runtime_controller(None).as_deref(),
-            Some("127.0.0.1:9090")
+            clashapi::resolve_controller(None, None),
+            clashapi::ControllerResolution::Default("127.0.0.1:9090".into())
         );
+        // 顶层配置了非回环 controller 必须显式拒绝
+        let bad_top = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/singbox.json"),
+            root: serde_json::json!({"experimental": {"clash_api": {"external_controller": "192.0.2.5:19090"}}}),
+            overlay: None,
+        };
+        assert_eq!(
+            clashapi::resolve_controller(Some(&bad_top), None),
+            clashapi::ControllerResolution::ExplicitReject {
+                address: "192.0.2.5:19090".into(),
+                reason: "非回环地址，拒绝连接".into(),
+            }
+        );
+        // overlay 配置了非回环 controller 同样拒绝
+        let bad_overlay = config::EffectiveConfig {
+            path: std::path::PathBuf::from("/fake/config.yaml"),
+            root: serde_json::json!({}),
+            overlay: Some(
+                serde_json::json!({"experimental":{"clash_api":{"external_controller":"127.0.0.2:19090"}}}),
+            ),
+        };
+        assert_eq!(
+            clashapi::resolve_controller(Some(&bad_overlay), None),
+            clashapi::ControllerResolution::ExplicitReject {
+                address: "127.0.0.2:19090".into(),
+                reason: "非回环地址，拒绝连接".into(),
+            }
+        );
+        // CLI --api 显式指定总是放行回环地址
+        assert_eq!(
+            clashapi::resolve_controller(None, Some("127.0.0.1:19090")),
+            clashapi::ControllerResolution::Loopback("127.0.0.1:19090".into())
+        );
+        // CLI --api 显式指定非回环地址必须拒绝
+        assert!(matches!(
+            clashapi::resolve_controller(None, Some("192.0.2.5:9090")),
+            clashapi::ControllerResolution::ExplicitReject { .. }
+        ));
     }
 }

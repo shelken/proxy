@@ -145,6 +145,62 @@ pub fn keygen() -> (String, String) {
     crypto::generate_keypair_hex()
 }
 
+/// 运行时生效配置（领域模型）：封装磁盘路径、完整配置 JSON 以及预解析的 overlay。
+#[derive(Debug, Clone)]
+pub struct EffectiveConfig {
+    pub path: std::path::PathBuf,
+    pub root: Value,
+    pub overlay: Option<Value>,
+}
+
+impl EffectiveConfig {
+    /// 提取已加载配置的 log.output 路径，root 优先于 overlay，不再读取其他文件。
+    pub fn log_output(&self) -> Option<String> {
+        if let Some(p) = self.root["log"]["output"].as_str() {
+            return Some(p.to_string());
+        }
+        if let Some(o) = &self.overlay {
+            if let Some(p) = o["log"]["output"].as_str() {
+                return Some(p.to_string());
+            }
+        }
+        None
+    }
+
+    /// 隐私脱敏后的配置树。
+    pub fn redacted(&self) -> Value {
+        crate::redact::redact(&self.root)
+    }
+}
+
+/// 统一加载生效配置：处理路径发现、文件读取、JSON/YAML 格式解析与 overlay 预解析。
+pub fn load_effective(explicit: Option<&Path>) -> Result<EffectiveConfig, String> {
+    let eff_path = crate::paths::discover_effective(explicit)?;
+    let text = std::fs::read_to_string(&eff_path)
+        .map_err(|e| format!("读取 {}: {e}", eff_path.display()))?;
+    let root = parse_config_text(&text, &eff_path)?;
+    let overlay = root["overlay"]
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+    Ok(EffectiveConfig {
+        path: eff_path,
+        root,
+        overlay,
+    })
+}
+
+/// 按扩展名解析 YAML 或 JSON（legacy singbox.json 走严格 JSON，报错更准）。
+pub fn parse_config_text(text: &str, path: &Path) -> Result<Value, String> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+    {
+        serde_json::from_str(text).map_err(|e| format!("JSON 解析失败（{}）: {e}", path.display()))
+    } else {
+        serde_yaml::from_str(text).map_err(|e| format!("YAML 解析失败（{}）: {e}", path.display()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
