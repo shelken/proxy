@@ -233,7 +233,7 @@ mod tests {
     fn singbox_env_path_is_actually_executed() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("sb-sync-fakebox-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sbtools-fakebox-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("fake-sing-box");
         std::fs::write(&fake, "#!/bin/sh\necho FAKE_KERNEL_MARKER \"$@\"\n").unwrap();

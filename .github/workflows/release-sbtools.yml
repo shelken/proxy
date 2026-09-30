@@ -1,4 +1,4 @@
-# sb-sync 单二进制发布：main 上的清单版本变化后，编译三平台产物并上传 GitHub Release。
+# sbtools 单二进制发布：main 上的清单版本变化后，编译三平台产物并上传 GitHub Release。
 #
 # 产物消费者：
 #   - macOS：mise [tools."github:shelken/proxy"]（客户端 encode/keygen）
@@ -14,7 +14,7 @@
 # 属于「被抑制的事件」，不会触发 on.push.tags 的工作流（要绕开只能引入 PAT）。
 # 这里把 tag 降级为同一次 run 内的产物——先校验版本、打 tag，再构建、发布，
 # 全程一个 token、一次 run，不依赖任何跨工作流触发。
-name: release-sb-sync
+name: release-sbtools
 
 on:
   push:
@@ -32,7 +32,7 @@ env:
 # 并发 push 时串行执行：第二个 run 的 prepare 会看到 Release 已存在而自行跳过，
 # 不会重复发布。不取消进行中的 run，否则会留下「tag 已建、产物未发」的中间态。
 concurrency:
-  group: sb-sync-release
+  group: sbtools-release
   cancel-in-progress: false
 
 jobs:
@@ -79,8 +79,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          MANIFEST=$(grep -m1 '^version' scripts/sb-sync-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
-          LOCKED=$(awk '/^name = "sb-sync"$/{getline; print}' Cargo.lock | sed -E 's/^version *= *"(.*)"/\1/')
+          MANIFEST=$(grep -m1 '^version' scripts/sbtools-rs/Cargo.toml | sed -E 's/^version *= *"(.*)"/\1/')
+          LOCKED=$(awk '/^name = "sbtools"$/{getline; print}' Cargo.lock | sed -E 's/^version *= *"(.*)"/\1/')
           test -n "$MANIFEST" || { echo "无法从 Cargo.toml 读取版本"; exit 1; }
           test "$MANIFEST" = "$LOCKED" || {
             echo "Cargo.toml ($MANIFEST) 与 Cargo.lock ($LOCKED) 版本不一致"; exit 1; }
@@ -124,13 +124,13 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             runner: macos-15
-            artifact: sb-sync-aarch64-apple-darwin
+            artifact: sbtools-aarch64-apple-darwin
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
-            artifact: sb-sync-aarch64-unknown-linux-musl
+            artifact: sbtools-aarch64-unknown-linux-musl
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
-            artifact: sb-sync-x86_64-unknown-linux-musl
+            artifact: sbtools-x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
 
@@ -159,26 +159,26 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: sb-sync-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: sb-sync-${{ matrix.target }}-
+          key: sbtools-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sbtools-${{ matrix.target }}-
 
       # e2e 测试要真跑一次内核合并（server::tests::node_direct_rule_*），
       # 内核不在 PATH 时它们以「启动内核失败（sing-box）: os error 2」失败。
-      # 版本由 .mise.toml 固定，与本地和 ci-sb-sync 同源，此处不另写版本号。
+      # 版本由 .mise.toml 固定，与本地和 ci-sbtools 同源，此处不另写版本号。
       - uses: jdx/mise-action@v4
         with:
           cache: false
 
       - name: Test
-        working-directory: scripts/sb-sync-rs
+        working-directory: scripts/sbtools-rs
         run: cargo test --release --locked --target ${{ matrix.target }}
 
       # workspace 化后 target 目录在仓库根，不在 crate 目录
       - name: Build
-        working-directory: scripts/sb-sync-rs
+        working-directory: scripts/sbtools-rs
         run: |
           cargo build --release --locked --target ${{ matrix.target }}
-          cp "../../target/${{ matrix.target }}/release/sb-sync" "../../${{ matrix.artifact }}"
+          cp "../../target/${{ matrix.target }}/release/sbtools" "../../${{ matrix.artifact }}"
 
       # 架构错了或动态链接缺失都会在 file 这里暴露。
       # 版本用完整等式而非子串匹配：0.5.1 vs 0.5.10 用 grep 也能过。
@@ -187,7 +187,7 @@ jobs:
         run: |
           file "${{ matrix.artifact }}"
           ACTUAL=$(./${{ matrix.artifact }} version)
-          test "$ACTUAL" = "sb-sync ${{ needs.prepare.outputs.version }}" || {
+          test "$ACTUAL" = "sbtools ${{ needs.prepare.outputs.version }}" || {
             echo "二进制版本与清单不一致: $ACTUAL"; exit 1; }
 
       # Linux musl 产物必须是静态链接：沙箱 VM 与容器都不保证有 glibc 兼容层，
@@ -237,7 +237,7 @@ jobs:
       # 那些十六进制命名的空文件当作发布资产推上去。
       - uses: actions/download-artifact@v4
         with:
-          pattern: sb-sync-*
+          pattern: sbtools-*
           path: dist
           merge-multiple: true
 
@@ -245,9 +245,9 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum sb-sync-aarch64-apple-darwin \
-                    sb-sync-aarch64-unknown-linux-musl \
-                    sb-sync-x86_64-unknown-linux-musl > SHA256SUMS
+          sha256sum sbtools-aarch64-apple-darwin \
+                    sbtools-aarch64-unknown-linux-musl \
+                    sbtools-x86_64-unknown-linux-musl > SHA256SUMS
 
       # 说明正文取版本 PR 写进 CHANGELOG 的那一段，不由 GitHub 按 PR 标题自动生成
       - name: Extract release notes
@@ -257,7 +257,7 @@ jobs:
           awk -v v="$VERSION" '
             /^## \[/ { if (in_sec) exit; if ($0 ~ "^## \\[" v "\\]") in_sec = 1 }
             in_sec { print }
-          ' scripts/sb-sync-rs/CHANGELOG.md > RELEASE_NOTES.md
+          ' scripts/sbtools-rs/CHANGELOG.md > RELEASE_NOTES.md
           grep -q '[^[:space:]]' RELEASE_NOTES.md || {
             echo "CHANGELOG 缺少 $VERSION 的 release 段"; exit 1; }
 
@@ -268,9 +268,9 @@ jobs:
           # 非默认值：缺资产时立刻失败，而不是发个空 Release
           fail_on_unmatched_files: true
           files: |
-            dist/sb-sync-aarch64-apple-darwin
-            dist/sb-sync-aarch64-unknown-linux-musl
-            dist/sb-sync-x86_64-unknown-linux-musl
+            dist/sbtools-aarch64-apple-darwin
+            dist/sbtools-aarch64-unknown-linux-musl
+            dist/sbtools-x86_64-unknown-linux-musl
             dist/SHA256SUMS
 
   # 每平台原生构建镜像并推送 digest，再由 merge job 组装 manifest list。
@@ -294,21 +294,21 @@ jobs:
         include:
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
-            artifact: sb-sync-aarch64-unknown-linux-musl
+            artifact: sbtools-aarch64-unknown-linux-musl
           - platform: linux/amd64
             runner: ubuntu-latest
-            artifact: sb-sync-x86_64-unknown-linux-musl
+            artifact: sbtools-x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
 
-      # 镜像构建上下文要求 ./sb-sync，用本平台那份二进制填上
+      # 镜像构建上下文要求 ./sbtools，用本平台那份二进制填上
       - uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: image-context
 
       - name: Stage binary into context
-        run: mv image-context/${{ matrix.artifact }} sb-sync
+        run: mv image-context/${{ matrix.artifact }} sbtools
 
       - uses: docker/setup-buildx-action@v3
 
@@ -328,14 +328,14 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: SING_BOX_VERSION=${{ needs.prepare.outputs.kernel_version }}
           load: true
-          tags: sb-sync-server:smoke
+          tags: sbtools-server:smoke
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke test image
         run: |
           SK=$(openssl rand -hex 32)
-          docker run -d --name sb-sync-smoke -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sb-sync-server:smoke
+          docker run -d --name sbtools-smoke -e SERVER_PRIVATE_KEY="$SK" -p 18080:8080 sbtools-server:smoke
           # --max-time 不可省：容器接受连接却不返回响应时（绑定成功但阻塞在初始化），
           # 无超时的 curl 会一直等，这个循环就失去「20 秒内失败」的意义，
           # 一路挂到 job 的 6 小时上限。这步存在的价值就是快速失败。
@@ -349,10 +349,10 @@ jobs:
           test "${#PK}" -eq 64
           echo "$PK" | grep -qE '^[0-9a-f]{64}$'
           # 镜像内二进制的架构必须与本平台一致，且版本与清单一致
-          ACTUAL=$(docker exec sb-sync-smoke /usr/local/bin/sb-sync version)
-          test "$ACTUAL" = "sb-sync ${{ needs.prepare.outputs.version }}" || {
+          ACTUAL=$(docker exec sbtools-smoke /usr/local/bin/sbtools version)
+          test "$ACTUAL" = "sbtools ${{ needs.prepare.outputs.version }}" || {
             echo "镜像内二进制版本与清单不一致: $ACTUAL"; exit 1; }
-          docker rm -f sb-sync-smoke
+          docker rm -f sbtools-smoke
 
       - name: Build and push by digest
         id: build
@@ -362,7 +362,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: SING_BOX_VERSION=${{ needs.prepare.outputs.kernel_version }}
           # 按 digest 推送：多平台各自出一个 manifest，最终合并成 list
-          outputs: type=image,name=ghcr.io/${{ github.repository }}/sb-sync-server,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/${{ github.repository }}/sbtools-server,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -417,7 +417,7 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
+          REPO="ghcr.io/${{ github.repository }}/sbtools-server"
           if [ "$MODE" = "release" ]; then
             echo "primary=${REPO}:latest" >> "$GITHUB_OUTPUT"
             echo "extra=-t ${REPO}:${TAG}" >> "$GITHUB_OUTPUT"
@@ -429,7 +429,7 @@ jobs:
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
         run: |
-          REPO="ghcr.io/${{ github.repository }}/sb-sync-server"
+          REPO="ghcr.io/${{ github.repository }}/sbtools-server"
           docker buildx imagetools create \
             -t "${{ steps.tags.outputs.primary }}" ${{ steps.tags.outputs.extra }} \
             $(printf "${REPO}@sha256:%s " *)

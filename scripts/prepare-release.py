@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""准备一次 sb-sync 版本发布所需的三个文件。
+"""准备一次 sbtools 版本发布所需的三个文件。
 
 用法（从仓库根执行）：
     python3 scripts/prepare-release.py --version 0.5.1 --notes "本次改动说明"
@@ -7,7 +7,7 @@
 只做三件事：校验版本、把说明写进 crate 的 CHANGELOG、调用 release-plz 同步
 Cargo.toml 与 Cargo.lock。不创建 PR、不打 tag、不推送——那些由工作流负责。
 
-版本真源是 scripts/sb-sync-rs/Cargo.toml；CHANGELOG 里的新段标题先写成当前
+版本真源是 scripts/sbtools-rs/Cargo.toml；CHANGELOG 里的新段标题先写成当前
 清单版本，再由 release-plz set-version 改写成目标版本（该命令只做标题字符串
 替换，所以顺序不能颠倒，且入口处必须先存在一个 release 段）。
 """
@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CRATE_DIR = REPO_ROOT / "scripts" / "sb-sync-rs"
+CRATE_DIR = REPO_ROOT / "scripts" / "sbtools-rs"
 MANIFEST = CRATE_DIR / "Cargo.toml"
 CHANGELOG = CRATE_DIR / "CHANGELOG.md"
 # set-version 必须指向根 workspace 清单与根配置：Cargo.lock 已上移到根，

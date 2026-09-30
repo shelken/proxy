@@ -1,4 +1,4 @@
-//! 服务端：`sb-sync server` — 解密客户端载荷、装配节点、调用官方 sing-box CLI 合并并响应。
+//! 服务端：`sbtools server` — 解密客户端载荷、装配节点、调用官方 sing-box CLI 合并并响应。
 
 use crate::assemble::{self, AssembleInput};
 use crate::crypto;
@@ -78,7 +78,7 @@ struct TempMergeDir {
 impl TempMergeDir {
     fn create() -> Result<Self, String> {
         let seq = REQUEST_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("sb-sync-merge-{}-{seq}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("sbtools-merge-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&path).map_err(|e| format!("创建临时目录失败: {e}"))?;
         Ok(Self { path })
     }
@@ -270,7 +270,7 @@ pub fn run(port: u16) -> Result<(), String> {
 
     let server =
         Server::http(format!("0.0.0.0:{port}")).map_err(|e| format!("监听 {port} 失败: {e}"))?;
-    eprintln!("[sb-sync server] listening on 0.0.0.0:{port}");
+    eprintln!("[sbtools server] listening on 0.0.0.0:{port}");
 
     for request in server.incoming_requests() {
         let started = Instant::now();
@@ -307,7 +307,7 @@ pub fn run(port: u16) -> Result<(), String> {
         };
         match tpl_src {
             Some(src) => eprintln!(
-                "[sb-sync server] {} {} -> {} ({}ms, 底模: {})",
+                "[sbtools server] {} {} -> {} ({}ms, 底模: {})",
                 method,
                 path,
                 status,
@@ -315,7 +315,7 @@ pub fn run(port: u16) -> Result<(), String> {
                 src
             ),
             None => eprintln!(
-                "[sb-sync server] {} {} -> {} ({}ms)",
+                "[sbtools server] {} {} -> {} ({}ms)",
                 method,
                 path,
                 status,
@@ -333,7 +333,7 @@ pub fn run(port: u16) -> Result<(), String> {
                 .map_err(|()| "构造 Content-Type 响应头失败".to_string())?,
             );
         if let Err(e) = request.respond(response) {
-            eprintln!("[sb-sync server] 响应失败: {e}");
+            eprintln!("[sbtools server] 响应失败: {e}");
         }
     }
     Ok(())
@@ -486,7 +486,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = TempMergeDir::create().unwrap();
         let script_dir =
-            std::env::temp_dir().join(format!("sb-sync-badbox-{}", std::process::id()));
+            std::env::temp_dir().join(format!("sbtools-badbox-{}", std::process::id()));
         std::fs::create_dir_all(&script_dir).unwrap();
         let bad = script_dir.join("bad-kernel");
         std::fs::write(

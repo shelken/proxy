@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["scripts/sb-sync-rs"]
+members = ["scripts/sbtools-rs"]
 
 [profile.release]
 opt-level = "z"

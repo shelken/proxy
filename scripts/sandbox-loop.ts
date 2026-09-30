@@ -15,13 +15,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join, resolve } from "node:path";
 
 const VM = "proxy-test";
-const ARTIFACT = "sb-sync-aarch64-unknown-linux-musl";
+const ARTIFACT = "sbtools-aarch64-unknown-linux-musl";
 const PORT = 18080;
 const SB = "/opt/proxy-test/bin/sing-box";
 
 const ARTIFACT_DIR = resolve(import.meta.dir, "../.sandbox-artifacts");
-const LOCAL_BINARY = resolve(ARTIFACT_DIR, "sb-sync");
-const GUEST_BINARY = "/work/sb-sync";
+const LOCAL_BINARY = resolve(ARTIFACT_DIR, "sbtools");
+const GUEST_BINARY = "/work/sbtools";
 const WORK = "/work/sing-box";
 const REPO_IN_GUEST = resolve(import.meta.dir, "..").replace(
   process.env.HOME ?? "",
@@ -92,14 +92,14 @@ function ensureBinary(): void {
     fail(
       "查找 CI 产物",
       `HEAD ${head.slice(0, 8)} 无对应产物，带产物的构建里也没有 Rust 源码/底模一致的。\n` +
-        `  先执行 gh workflow run release-sb-sync.yml --ref ${branch} 并等它跑完\n` +
+        `  先执行 gh workflow run release-sbtools.yml --ref ${branch} 并等它跑完\n` +
         `  差异: ${diff}`,
     );
   }
   if (!pick.exact) {
     console.log(
       `[引导] 警告：产物来自 ${pick.chosen.headSha.slice(0, 8)}（HEAD ${head.slice(0, 8)} 无构建）；\n` +
-        `         已确认 scripts/sb-sync-rs/** 与 template.json 无差异，二进制等价`,
+        `         已确认 scripts/sbtools-rs/** 与 template.json 无差异，二进制等价`,
     );
   }
   const chosen = pick.chosen;
@@ -176,15 +176,15 @@ function listArtifactRuns(): ArtifactRun[] {
 /**
  * 决定二进制内容的路径。判据不是「commit 相等」，而是「这些路径与产物构建时一致」。
  *
- * `release-sb-sync.yml` 也在列：它决定 toolchain、target 与 cargo 构建参数——
+ * `release-sbtools.yml` 也在列：它决定 toolchain、target 与 cargo 构建参数——
  * 改动它同样会改变产物（版本本身不在此列，它由 Cargo.toml 决定，见上面的路径）。
  */
 const BINARY_INPUTS = [
-  "scripts/sb-sync-rs",
+  "scripts/sbtools-rs",
   "Cargo.toml",
   "Cargo.lock",
   "config/sing-box/template.json",
-  ".github/workflows/release-sb-sync.yml",
+  ".github/workflows/release-sbtools.yml",
 ];
 
 /** 两个 commit 之间，影响二进制内容的路径差异（空串表示产物等价）。 */
@@ -237,7 +237,7 @@ function pushToGuest(): void {
   verifyLocalArtifacts();
   const r = guest(`
     mkdir -p /work
-    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sb-sync ${GUEST_BINARY}
+    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}
     chmod +x ${GUEST_BINARY}
     rm -rf ${WORK}
     mkdir -p ${WORK}/rules ${WORK}/tests
@@ -271,15 +271,15 @@ function startServer(): void {
     SK=$(${GUEST_BINARY} keygen | sed -n 's/^SERVER_PRIVATE_KEY=//p')
     [ -n "$SK" ] || { echo "keygen 未产出私钥" >&2; exit 1; }
 
-    sudo -n pkill -9 -x sb-sync 2>/dev/null || true
+    sudo -n pkill -9 -x sbtools 2>/dev/null || true
     env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \\
       SING_BOX=${SB} SERVER_PRIVATE_KEY="$SK" \\
-      nohup ${GUEST_BINARY} server --port ${PORT} > /work/sb-sync-server.log 2>&1 &
+      nohup ${GUEST_BINARY} server --port ${PORT} > /work/sbtools-server.log 2>&1 &
     for _ in $(seq 1 40); do
       curl -sS --noproxy '*' -o /dev/null "http://127.0.0.1:${PORT}/healthz" && exit 0
       sleep 0.2
     done
-    echo "服务端未就绪"; cat /work/sb-sync-server.log; exit 1
+    echo "服务端未就绪"; cat /work/sbtools-server.log; exit 1
   `,
   );
   if (r.code !== 0) fail("启动服务端", (r.err + r.out).trim());
@@ -340,7 +340,7 @@ function fetchAndPrepare(options: LoopOptions): void {
     python3 /work/sandbox-prepare.py /work/sing-box/raw.json ${WORK}/config.json
     ${SB} check -c ${WORK}/config.json
     # 服务端已完成使命：留着会占端口，挡住下一次引导
-    sudo -n pkill -9 -x sb-sync 2>/dev/null || true
+    sudo -n pkill -9 -x sbtools 2>/dev/null || true
   `,
     yaml,
   );
