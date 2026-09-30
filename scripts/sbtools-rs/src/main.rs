@@ -312,7 +312,12 @@ fn cmd_config(rest: &[String]) -> Result<(), String> {
         Ok(eff) => {
             let outcome = load_and_print_redacted(&eff);
             match outcome {
-                Ok(c) => c,
+                // controller 发现顺序与 logs 一致：顶层 → overlay，拿到的是原始值
+                Ok(v) => v.as_ref().and_then(|v| {
+                    clashapi::configured_controller(v).or_else(|| {
+                        overlay_value(v).and_then(|o| clashapi::configured_controller(&o))
+                    })
+                }),
                 // --path 是用户显式意图，读不到必须报错；发现链结果不可读才降级
                 Err(e) if eff.explicit => return Err(e),
                 Err(e) => {
@@ -328,21 +333,42 @@ fn cmd_config(rest: &[String]) -> Result<(), String> {
         }
     };
 
-    // SFM 分支：磁盘读不到 profile 时运行时真相只在 clash api；缺省回环口与 trace 一致
+    // SFM 分支：磁盘读不到 profile 时运行时真相只在 clash api；缺省回环口与 trace 一致。
+    // 配置了非回环 controller 时显式拒绝并跳过摘要，不静默回退缺省口——那会把
+    // 缺省口上无关内核的 /configs 摘要张冠李戴（logs/trace 对此是硬报错，config
+    // 的主功能是本地脱敏查看，拒绝探测即可，不挡主输出）。
     let disk_found = disk_controller.is_some();
-    let controller = disk_controller.unwrap_or_else(|| "127.0.0.1:9090".to_string());
-    if clashapi::reachable(&controller) {
-        print_runtime_summary(&controller);
-    } else if !disk_found {
-        return Err(format!(
-            "未找到生效配置，且 clash api {controller} 不可达；可用 --path 指定配置文件"
-        ));
+    let controller = config_runtime_controller(disk_controller.as_deref());
+    if let Some(controller) = &controller {
+        if clashapi::reachable(controller) {
+            print_runtime_summary(controller);
+        } else if !disk_found {
+            return Err(format!(
+                "未找到生效配置，且 clash api {controller} 不可达；可用 --path 指定配置文件"
+            ));
+        }
     }
     Ok(())
 }
 
-/// 读取磁盘配置、打印脱敏 JSON，返回其中的 clash api controller（若有）。
-fn load_and_print_redacted(eff: &paths::EffectiveConfig) -> Result<Option<String>, String> {
+/// config 的运行时摘要 controller：配置的 controller 非回环时拒绝（None）并提示，
+/// 没配才用缺省回环口。
+fn config_runtime_controller(raw: Option<&str>) -> Option<String> {
+    match raw {
+        Some(addr) if clashapi::is_loopback(addr) => Some(addr.to_string()),
+        Some(addr) => {
+            println!("· controller {addr} 非回环地址，已拒绝；跳过运行时摘要（clash_api 仅允许 127.0.0.1）");
+            None
+        }
+        None => Some("127.0.0.1:9090".to_string()),
+    }
+}
+
+/// 读取磁盘配置、打印脱敏 JSON，返回解析后的完整配置值。controller 的发现
+/// （顶层 → overlay）与回环裁决都在调用方，与 logs 的解析顺序一致。
+fn load_and_print_redacted(
+    eff: &paths::EffectiveConfig,
+) -> Result<Option<serde_json::Value>, String> {
     let text = std::fs::read_to_string(&eff.path)
         .map_err(|e| format!("读取 {}: {e}", eff.path.display()))?;
     let value = parse_config_text(&text, &eff.path)?;
@@ -352,7 +378,7 @@ fn load_and_print_redacted(eff: &paths::EffectiveConfig) -> Result<Option<String
         serde_json::to_string_pretty(&redact::redact(&value))
             .map_err(|e| format!("序列化失败: {e}"))?
     );
-    Ok(clashapi::discover_controller(&value))
+    Ok(Some(value))
 }
 
 /// 按扩展名解析 YAML 或 JSON（legacy singbox.json 走严格 JSON，报错更准）。
@@ -790,6 +816,21 @@ mod tests {
         // 无配置源 → 缺省口
         assert_eq!(
             resolve_trace_controller(None, None).unwrap().as_deref(),
+            Some("127.0.0.1:9090")
+        );
+    }
+
+    /// config 的运行时摘要 controller 与 logs/trace 同口径：配置了非回环地址
+    /// 必须显式拒绝并跳过摘要，不能静默回退缺省口连上无关内核；没配才用缺省。
+    #[test]
+    fn config_runtime_controller_拒绝非回环不回退缺省() {
+        assert!(config_runtime_controller(Some("192.0.2.5:19090")).is_none());
+        assert_eq!(
+            config_runtime_controller(Some("127.0.0.1:19090")).as_deref(),
+            Some("127.0.0.1:19090")
+        );
+        assert_eq!(
+            config_runtime_controller(None).as_deref(),
             Some("127.0.0.1:9090")
         );
     }

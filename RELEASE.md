@@ -47,4 +47,5 @@ gh workflow run release-sbtools.yml --ref <分支或 tag>
 
 - 沙箱 VM 的内核版本取自 `just vm-create` 执行时的 `.mise.toml`。已存在的 `proxy-test` VM 不会自动换内核，需要时 `just vm-delete` 后重建
 - 客户端已安装的二进制不会随发版自动升级；`latest` 只是镜像便利入口
+- `v0.6.0` 起全仓改名 `sb-sync` → `sbtools`：二进制与 CLI 名称已变，mise（ubi/vmg 后端）用户需删除旧 `sb-sync` 安装后按新名重装，旧安装不会自动迁移
 - 服务端部署由 home-ops 的 VPS Docker Compose 完成，本仓库只负责产出

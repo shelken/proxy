@@ -10,3 +10,6 @@
 - [008 · release-plz 版本 PR 的 CI 卡在 action_required](./008-release-plz-pr-ci-action-required.md)
 - [009 · 手写样例测不出日志解析边界，需真实抓取序列回归](./009-log-parser-tests-need-real-capture.md)
 - [010 · 静态检查冒充复现，空 direct detour 引入启动错误](./010-template-audit-evidence.md)
+- [011 · controller 守卫静默回退,只读顶层漏掉 overlay 形态](./011-controller-guard-silent-fallback.md)
+- [012 · lane 证据落 /tmp 随重启蒸发,子代理落盘声明不实](./012-tmp-evidence-volatile-and-false-claims.md)
+- [013 · 验证直接跑旧 release 产物得出假阴性](./013-stale-release-binary-false-negative.md)

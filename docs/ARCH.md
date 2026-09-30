@@ -77,7 +77,7 @@ flowchart LR
 
 DNS 查询先匹配本地与国内规则，未匹配的 A/AAAA 使用 FakeIP，其余查询经代理加密 DNS 解析，不拒绝 HTTPS 记录。FakeIP 映射持久化以跨正常重启保留客户端缓存的地址含义
 
-进入内核的明文 DNS 由路由规则接管；TUN 排除段和前置终结规则仍然优先，不能据此宣称接管全部系统 DNS。规则边界、平台限制与复现证据见[底模审查](./research/template-audit.md)
+进入内核的明文 DNS 由路由规则接管；TUN 排除段和前置终结规则仍然优先，不能据此宣称接管全部系统 DNS。
 
 ## 4. 链路三：沙箱仿真与验证闭环 (Verification Loop)
 
