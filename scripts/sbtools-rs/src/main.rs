@@ -68,7 +68,7 @@ fn usage() -> String {
         "sbtools — 客户端加密编码 + 服务端原生合并",
         "",
         "  sbtools encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
-        "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 系统解析/DNS判定/路由判定/链路/耗时",
+        "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 解析/dns归属/内核判定/live归属/静态规则/耗时",
         "  sbtools check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
         "  sbtools config [--path <config.yaml|singbox.json>]  打印生效配置(隐私脱敏); SFM 可达时附 /configs 运行时摘要",
         "  sbtools logs [-f] [-n N] [--level debug|info|warn|error]  查看日志: -f 跟踪 /logs 流, -n N 读 log.output 末 N 行",
@@ -164,19 +164,34 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
         }
     }
     let domain = domain.ok_or(usage_hint)?;
-    let controller = match api {
-        Some(a) => Some(a),
-        None => std::fs::read_to_string(legacy_config_path())
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| trace::clash_controller(&v))
-            .or_else(|| Some("127.0.0.1:9090".to_string())),
-    };
+    let legacy = std::fs::read_to_string(legacy_config_path())
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let controller = resolve_trace_controller(api, legacy.as_ref())?;
     let fails = trace::trace(&domain, controller.as_deref());
     if fails > 0 {
         return Err(format!("{fails} 个阶段失败"));
     }
     Ok(())
+}
+
+/// trace 的 controller 解析。--api 显式指定总是放行；legacy 配置里有 controller 时
+/// 回环放行、非回环显式拒绝（与 logs 同口径：回退缺省口会连上无关内核，如真机 SFM）；
+/// 没有配置源才用缺省口。
+fn resolve_trace_controller(
+    api: Option<String>,
+    legacy: Option<&serde_json::Value>,
+) -> Result<Option<String>, String> {
+    if let Some(a) = api {
+        return Ok(Some(a));
+    }
+    match legacy.and_then(clashapi::configured_controller) {
+        Some(c) if c.starts_with("127.0.0.1") => Ok(Some(c)),
+        Some(c) => Err(format!(
+            "trace: 配置的 clash api {c} 非回环地址，拒绝连接（回退缺省口会连上无关内核）；可用 --api 显式指定回环地址"
+        )),
+        None => Ok(Some("127.0.0.1:9090".to_string())),
+    }
 }
 
 /// check: 离线校验。读本机 YAML → 合并 overlay 到底模 → 内核 check → 打印生效摘要。
@@ -569,6 +584,7 @@ mod tests {
         assert!(u.contains("check"));
         assert!(u.contains("sbtools config [--path"));
         assert!(u.contains("sbtools logs [-f] [-n N]"));
+        assert!(u.contains("解析/dns归属/内核判定/live归属/静态规则/耗时"));
         assert!(!u.contains("doctor"));
         assert!(!u.contains("sbtools sync"));
         assert!(u.contains("encode -s <server>"));
@@ -742,6 +758,39 @@ mod tests {
         assert!(
             err.contains("127.0.0.2:19090") && err.contains("拒绝"),
             "实际: {err}"
+        );
+    }
+
+    /// trace 的 controller 解析与 logs 同口径：配置了非回环地址必须显式报错，
+    /// 不得静默回退缺省口（会连上缺省口上无关内核）。
+    #[test]
+    fn trace_controller_rejects_non_loopback_instead_of_fallback() {
+        // --api 显式指定总是放行
+        assert_eq!(
+            resolve_trace_controller(Some("127.0.0.1:19090".into()), None)
+                .unwrap()
+                .as_deref(),
+            Some("127.0.0.1:19090")
+        );
+        // legacy 配置有回环 controller → 采用
+        let cfg = serde_json::json!({"experimental":{"clash_api":{"external_controller":"127.0.0.1:19090"}}});
+        assert_eq!(
+            resolve_trace_controller(None, Some(&cfg))
+                .unwrap()
+                .as_deref(),
+            Some("127.0.0.1:19090")
+        );
+        // 非回环 → 显式报错且含被拒地址
+        let cfg = serde_json::json!({"experimental":{"clash_api":{"external_controller":"192.0.2.5:9090"}}});
+        let err = resolve_trace_controller(None, Some(&cfg)).unwrap_err();
+        assert!(
+            err.contains("192.0.2.5:9090") && err.contains("拒绝"),
+            "实际: {err}"
+        );
+        // 无配置源 → 缺省口
+        assert_eq!(
+            resolve_trace_controller(None, None).unwrap().as_deref(),
+            Some("127.0.0.1:9090")
         );
     }
 }
