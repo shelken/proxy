@@ -305,10 +305,48 @@ const DEFAULT_NODES = [
   "hy2://pass@192.0.2.2:8388?sni=example.com#selfhost-hk",
 ];
 
+/** 真实数据源：用户的客户端配置。默认引用其 nodes/subs 走完整闭环，
+ *  缺失或为空时 WARN 退回合成夹具。凭据只经 stdin 进 VM，不落日志。 */
+const REAL_CONFIG = join(process.env.HOME ?? "", ".config/sing-box/config.yaml");
+
+/** 提取客户端配置的 nodes/subs 列表，其余键（overlay 等）不碰。 */
+export function extractRealInput(
+  raw: string,
+): { nodes: string[]; subs: string[] } {
+  const parsed = Bun.YAML.parse(raw) as Record<string, unknown> | null;
+  const pick = (key: string): string[] => {
+    const list = parsed?.[key];
+    return Array.isArray(list)
+      ? list.filter((v): v is string => typeof v === "string")
+      : [];
+  };
+  return { nodes: pick("nodes"), subs: pick("subs") };
+}
+
+function loadRealInput(): { nodes: string[]; subs: string[] } | null {
+  if (!existsSync(REAL_CONFIG)) return null;
+  try {
+    const input = extractRealInput(readFileSync(REAL_CONFIG, "utf8"));
+    return input.nodes.length + input.subs.length > 0 ? input : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 经客户端 encode + 服务端 /sub 取回真实产物，并后处理为可在 VM 内运行的配置。 */
 function fetchAndPrepare(options: LoopOptions): void {
-  const nodes = options.nodes ?? DEFAULT_NODES;
-  const subs = options.subs ?? [];
+  const real = options.nodes || options.subs ? null : loadRealInput();
+  const nodes = options.nodes ?? real?.nodes ?? DEFAULT_NODES;
+  const subs = options.subs ?? real?.subs ?? [];
+  if (real) {
+    console.log(
+      `[引导] 真实数据源 ${REAL_CONFIG}：nodes=${nodes.length} subs=${subs.length}（凭据不入日志）`,
+    );
+  } else if (!options.nodes && !options.subs) {
+    console.warn(
+      `[引导] WARN：${REAL_CONFIG} 不存在或无 nodes/subs，退回合成夹具节点，仅验证链路，不代表真实出口`,
+    );
+  }
   if (nodes.length === 0 && subs.length === 0) {
     fail("构造客户端配置", "subs 与 nodes 均为空，服务端会拒绝");
   }
