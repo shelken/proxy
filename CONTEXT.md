@@ -17,6 +17,12 @@
 **底模（template）**
 sing-box 配置的公共骨架：双入站、内网穿透、分流策略组与 route_exclude_address。服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模（仅 https，严格校验）。
 
+**DNS 出口（DNS egress）**
+访问真实 DNS 上游所使用的网络路径，可独立于应用的业务出口选择
+
+**业务出口（application egress）**
+应用连接远端服务所使用的网络路径，决定服务看到的来源 IP 与地区
+
 **订阅 URL（subscription URL）**
 客户端 `encode` 的产物。密文载荷就是本机 YAML 配置（ECIES，`/sub?d=`），粘贴进 SFM Remote Profile 后由 SFM 按间隔拉取；配置一变就要重新 `encode` 并覆盖该 profile 里的 URL（每次密文都不同）。
 

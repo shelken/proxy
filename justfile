@@ -63,6 +63,11 @@ test-loop:
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests/loop.test.ts
 
 
+
+# DNS 对照只依赖合成上游，可在服务端产物构建前验证模板策略。
+test-dns name="":
+    {{lima_shell}} /opt/proxy-test/bin/bun --no-env-file test {{repo_in_guest}}/config/sing-box/tests/dns-behavior.test.js --test-name-pattern '{{name}}'
+
 # 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
 sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 

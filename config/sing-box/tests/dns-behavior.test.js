@@ -27,10 +27,10 @@ function response(packet) {
   rr.writeUInt16BE(0xc00c); rr.writeUInt16BE(type, 2); rr.writeUInt16BE(1, 4); rr.writeUInt32BE(30, 6); rr.writeUInt16BE(data?.length ?? 0, 10);
   return Buffer.concat([header, packet.subarray(12, end + 4), ...(data ? [rr, data] : [])]);
 }
-function query(name, type) {
+function query(name, type, timeoutMs = 3000) {
   return new Promise((resolve, reject) => {
     const socket = createSocket("udp4");
-    const timer = setTimeout(() => { socket.close(); reject(new Error("DNS response timeout")); }, 3000);
+    const timer = setTimeout(() => { socket.close(); reject(new Error("DNS response timeout")); }, timeoutMs);
     socket.once("message", packet => { clearTimeout(timer); socket.close(); resolve(packet); });
     socket.send(question(name, type), 15353, "127.0.0.1");
   });
@@ -52,10 +52,12 @@ async function start(config, dir) {
   throw new Error(`Kernel startup failed: ${log}`);
 }
 
-test("真实内核保留HTTPS记录、代理DNS兜底、空应答与FakeIP跨重启映射", async () => {
+async function withDNS(run) {
   const dir = await mkdtemp(join(tmpdir(), "sb-dns-behavior-"));
-  let core, relay, doh;
+  const processes = [];
+  const relays = {};
   const udp = createSocket("udp4");
+  let doh, health;
   let udpQueries = 0, dohQueries = 0;
   try {
     const cert = join(dir, "cert.pem"), key = join(dir, "key.pem");
@@ -67,48 +69,110 @@ test("真实内核保留HTTPS记录、代理DNS兜底、空应答与FakeIP跨重
       dohQueries++;
       return new Response(response(Buffer.from(await req.arrayBuffer())), { headers: { "content-type": "application/dns-message" } });
     }});
-    const relayDir = await mkdtemp(join(dir, "relay-"));
-    relay = await start({ log: { level: "debug" }, inbounds: [{ type: "socks", listen: "127.0.0.1", listen_port: 15355 }], outbounds: [{ type: "direct", tag: "direct" }], route: { final: "direct", default_domain_resolver: "local" }, dns: { servers: [{ type: "local", tag: "local" }] } }, relayDir);
+    health = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 204 }) });
+    const nodes = [
+      { type: "socks", tag: "selfhost-hk", server: "127.0.0.1", server_port: 15355 },
+      { type: "socks", tag: "jp-backup", server: "127.0.0.1", server_port: 15356 },
+    ];
+    const startRelay = async tag => {
+      const node = nodes.find(node => node.tag === tag);
+      const relay = await start({
+        log: { level: "debug" },
+        inbounds: [{ type: "socks", listen: "127.0.0.1", listen_port: node.server_port }],
+        outbounds: [{ type: "direct", tag: "direct" }], route: { final: "direct" },
+      }, await mkdtemp(join(dir, "relay-")));
+      processes.push(relay);
+      relays[tag] = relay;
+    };
+    for (const node of nodes) await startRelay(node.tag);
     const dns = structuredClone(template.dns);
     for (const server of dns.servers) {
       if (server.type === "https") { server.server = "127.0.0.1"; server.server_port = doh.port; server.tls = { enabled: true, server_name: "localhost", certificate: await readFile(cert, "utf8") }; }
       if (server.type === "udp") { server.server = "127.0.0.1"; server.server_port = 15354; }
     }
+    const detour = dns.servers.find(server => server.tag === "dns-proxy").detour;
+    const group = structuredClone(template.outbounds.find(outbound => outbound.tag === detour));
+    group.outbounds = [...new Set(group.outbounds.flatMap(pattern => {
+      const insensitive = pattern.startsWith("(?i)");
+      const regex = new RegExp(insensitive ? pattern.slice(4) : pattern, insensitive ? "i" : "");
+      return nodes.filter(node => regex.test(node.tag)).map(node => node.tag);
+    }))];
+    group.url = health.url.href;
     const config = {
       log: { level: "debug" }, dns,
       inbounds: [{ type: "direct", tag: "dns-test", listen: "127.0.0.1", listen_port: 15353 }],
-      outbounds: [{ type: "direct", tag: "direct" }, { type: "socks", tag: "proxy", server: "127.0.0.1", server_port: 15355 }],
+      outbounds: [{ type: "direct", tag: "direct" }, ...nodes, group],
       route: { default_domain_resolver: "dns-local-system", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: ["Lan-dns", "MyDirect-dns", "ChinaMax-dns"].map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })) },
-      experimental: { cache_file: { ...template.experimental.cache_file, path: "cache.db" } },
+      experimental: { cache_file: { ...template.experimental.cache_file, path: "cache.db" }, clash_api: { external_controller: "127.0.0.1:19090" } },
     };
-    core = await start(config, dir);
-    const https = await query("public.test", 65);
-    expect(https.readUInt16BE(2) & 15).toBe(0);
-    expect(https.readUInt16BE(6)).toBe(1);
-    await query("public.test", 16);
-    expect(dohQueries).toBe(2);
-    expect(udpQueries).toBe(0);
-    expect(relay.log()).toContain(`127.0.0.1:${doh.port}`);
-    const beforeDoh = dohQueries, beforeUdp = udpQueries;
-    const empty = await query("internal.int.ooooo.space", 16);
-    expect(empty.readUInt16BE(2) & 15).toBe(0);
-    expect(empty.readUInt16BE(6)).toBe(0);
-    // predefined 空应答由内核本地裁决；删掉该规则会落到 dns-proxy 上游，
-    // 因此"无上游查询"才是区分点，光看 rcode/答案数无法区分
-    expect(dohQueries).toBe(beforeDoh);
-    expect(udpQueries).toBe(beforeUdp);
-    const first = (await query("first.test", 1)).subarray(-4).toString("hex");
-    await core.stop(); core = null;
-    core = await start(config, dir);
-    const second = (await query("second.test", 1)).subarray(-4).toString("hex");
-    const restored = (await query("first.test", 1)).subarray(-4).toString("hex");
-    expect(second).not.toBe(first);
-    expect(restored).toBe(first);
+    const startCore = async () => {
+      const core = await start(config, dir);
+      processes.push(core);
+      return core;
+    };
+    await run({ config, startCore, startRelay, relays, doh, queries: () => ({ udp: udpQueries, doh: dohQueries }) });
   } finally {
-    if (core) await core.stop();
-    if (relay) await relay.stop();
+    for (const process of processes) await process.stop();
     if (doh) doh.stop(true);
+    if (health) health.stop(true);
     udp.close();
     await rm(dir, { recursive: true, force: true });
   }
-}, 15000);
+}
+
+async function eventuallyQuery(name, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    try {
+      const packet = await query(name, 65, 300);
+      if ((packet.readUInt16BE(2) & 15) === 0 && packet.readUInt16BE(6) === 1) return packet;
+    } catch (error) {
+      if (error.message !== "DNS response timeout") throw error;
+    }
+    await Bun.sleep(50);
+  } while (Date.now() < deadline);
+  throw new Error(`未在 ${timeoutMs}ms 内恢复 DNS 查询: ${name}`);
+}
+
+test("真实内核保留HTTPS记录、代理DNS兜底、空应答与FakeIP跨重启映射", () => withDNS(async f => {
+  let core = await f.startCore();
+  const https = await query("public.test", 65);
+  expect(https.readUInt16BE(2) & 15).toBe(0);
+  expect(https.readUInt16BE(6)).toBe(1);
+  await query("public.test", 16);
+  expect(f.queries()).toEqual({ doh: 2, udp: 0 });
+  const before = f.queries();
+  const empty = await query("internal.int.ooooo.space", 16);
+  expect(empty.readUInt16BE(2) & 15).toBe(0);
+  expect(empty.readUInt16BE(6)).toBe(0);
+  expect(f.queries()).toEqual(before);
+  const first = (await query("first.test", 1)).subarray(-4).toString("hex");
+  await core.stop();
+  core = await f.startCore();
+  const second = (await query("second.test", 1)).subarray(-4).toString("hex");
+  const restored = (await query("first.test", 1)).subarray(-4).toString("hex");
+  expect(second).not.toBe(first);
+  expect(restored).toBe(first);
+}), 15000);
+
+test("HK 全断仍可通过其他地区解析，运行中所选节点断开后自动恢复", () => withDNS(async f => {
+  await f.relays["selfhost-hk"].stop();
+  let core = await f.startCore();
+  const cold = await eventuallyQuery("cold-region-failure.test", 3000);
+  expect(cold.readUInt16BE(2) & 15).toBe(0);
+  expect(cold.readUInt16BE(6)).toBe(1);
+  await core.stop();
+  await f.startRelay("selfhost-hk");
+  core = await f.startCore();
+  await eventuallyQuery("before-live-failure.test", 3000);
+  const tag = f.config.dns.servers.find(server => server.tag === "dns-proxy").detour;
+  const state = () => fetch(`http://127.0.0.1:19090/proxies/${encodeURIComponent(tag)}`).then(response => response.json());
+  const selected = (await state()).now;
+  await f.relays[selected].stop();
+  const before = Date.now();
+  const restored = await eventuallyQuery("after-live-failure.test", 75000);
+  expect(restored.readUInt16BE(2) & 15).toBe(0);
+  expect(restored.readUInt16BE(6)).toBe(1);
+  expect((await state()).now).not.toBe(selected);
+  console.log(JSON.stringify({ scenario: "dns-region-and-live-failover", recovery_ms: Date.now() - before }));
+}), 90000);

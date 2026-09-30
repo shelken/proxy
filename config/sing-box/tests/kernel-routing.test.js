@@ -87,9 +87,7 @@ function tunsConfig(extraRules = []) {
     inbounds: [tun],
     outbounds: [
       { type: "direct", tag: "direct" },
-      { type: "block", tag: "block" },
-      // 模板的 dns-proxy(https) 带 detour: proxy，tag 必须存在，否则内核拒绝启动
-      { type: "socks", tag: "proxy", server: "127.0.0.1", server_port: 15355 },
+      { type: "socks", tag: template.dns.servers.find(s => s.tag === "dns-proxy").detour, server: "127.0.0.1", server_port: 15355 },
     ],
     dns: { ...structuredClone(template.dns), servers },
     route: {

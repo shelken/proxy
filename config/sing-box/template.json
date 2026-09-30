@@ -43,7 +43,7 @@
         "type": "https",
         "tag": "dns-proxy",
         "server": "1.1.1.1",
-        "detour": "hk",
+        "detour": "dns-auto",
         "tls": {
           "enabled": true,
           "server_name": "cloudflare-dns.com"
@@ -553,6 +553,20 @@
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "urltest",
+      "tag": "dns-auto",
+      "outbounds": [
+        "(?i)(vps|hy2|selfhost)",
+        "(?i)(港|HK|Hong)",
+        "(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)",
+        "(?i)(新加坡|坡|狮城|SG|Singapore)"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "1m",
+      "tolerance": 50,
+      "interrupt_exist_connections": true
     },
     {
       "type": "selector",
