@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.1](https://github.com/shelken/proxy/compare/v0.7.0...v0.7.1) - 2026-10-01
+
+### Fixed
+
+- *(sbtools)* 消除擅自改变命令行为的静默退化 ([#85](https://github.com/shelken/proxy/pull/85))
+
 ## [0.7.0](https://github.com/shelken/proxy/compare/v0.6.1...v0.7.0) - 2026-09-30
 
 ### Other
