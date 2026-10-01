@@ -62,6 +62,18 @@ impl TemplateSource {
     }
 }
 
+/// 从底模/配置树读 fakeip server 的 `inet4_range`（无 fakeip server 时 None）。
+pub fn fakeip_range_in(template: &Value) -> Option<&str> {
+    template["dns"]["servers"]
+        .as_array()
+        .and_then(|servers| {
+            servers
+                .iter()
+                .find(|s| s["type"].as_str() == Some("fakeip"))
+        })
+        .and_then(|s| s["inet4_range"].as_str())
+}
+
 /// 内嵌底模（编译期打包，出厂兜底）。
 /// 解析失败只可能是编译期产物损坏，仍返回 Err 由调用方上报，不用 expect 直接 panic。
 pub fn embedded_template() -> Result<Value, String> {

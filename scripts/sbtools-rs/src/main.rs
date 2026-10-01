@@ -157,7 +157,8 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
         }
     }
     let domain = domain.ok_or(usage_hint)?;
-    let eff = config::load_effective(None).ok();
+    // 宽松加载：配置不存在走无配置路径；存在但损坏直接报错，段落提示不能撒谎
+    let eff = config::load_effective_lenient(None)?;
     let controller = match clashapi::resolve_controller(eff.as_ref(), api.as_deref()) {
         clashapi::ControllerResolution::Loopback(c)
         | clashapi::ControllerResolution::Default(c) => c,
@@ -355,7 +356,7 @@ fn print_runtime_summary(controller: &str) {
 /// logs: 查看日志。`-n N` 读 log.output 末 N 行，`-f` 跟踪 clash api /logs 流。
 ///
 /// /logs 只吐连接后的新行、无回放（附录 A 探针二），回看只能走 log.output 文件；
-/// SFM 磁盘直读受限，缺 log.output 时明示并退化 -f。Ctrl-C 走默认 SIGINT 终止。
+/// 缺 log.output 时 -n 报错退出（显式请求必须显式兑现，不擅自转跟踪）。Ctrl-C 走默认 SIGINT 终止。
 fn cmd_logs(rest: &[String]) -> Result<(), String> {
     let usage_hint = "logs 用法: sbtools logs [-f] [-n N] [--level debug|info|warn|error]";
     let mut follow = false;
@@ -382,25 +383,26 @@ fn cmd_logs(rest: &[String]) -> Result<(), String> {
         ));
     }
 
-    // 生效配置统一从 config 模块加载（涵盖发现、读取与 overlay 预解析）
-    let eff = config::load_effective(None).ok();
+    // 生效配置统一从 config 模块加载；配置损坏必须报错，不能当成「没配置」继续
+    let eff = config::load_effective_lenient(None)?;
 
-    let mut follow = follow || tail.is_none();
+    // /logs 端点不回放历史，未显式给 -f 时缺省进入跟踪
+    let follow = follow || tail.is_none();
     if let Some(n) = tail {
-        if let Some(path) = eff
+        // -n 是显式回看请求：没有可回看的文件就报错退出，绝不擅自转成没请求过的 -f
+        let Some(path) = eff
             .as_ref()
             .and_then(config::EffectiveConfig::log_output)
             .map(std::path::PathBuf::from)
-        {
-            println!("✓ log.output: {}", path.display());
-            for line in tail_lines(&path, n)? {
-                println!("{line}");
-            }
-        } else {
-            println!(
-                "· 未配置 log.output（legacy singbox.json 与 overlay 均无），退化 -f 跟踪 /logs 流"
+        else {
+            return Err(
+                "logs: 未配置 log.output，无法回看末 N 行（内核 /logs 不回放历史）；请在 overlay 配 log.output，或改用显式 -f 跟踪"
+                    .to_string(),
             );
-            follow = true;
+        };
+        println!("✓ log.output: {}", path.display());
+        for line in tail_lines(&path, n)? {
+            println!("{line}");
         }
     }
     if follow {

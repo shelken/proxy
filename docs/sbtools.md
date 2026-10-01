@@ -274,8 +274,8 @@ flowchart LR
 
 - controller 决议由 `clashapi::resolve_controller` 统一处理，顺序为 `trace --api`、已加载配置顶层、overlay、缺省 `127.0.0.1:9090`
 - 非回环 controller 被拒绝时，`trace` 与 `logs -f` 报错退出，`config` 保留脱敏输出并跳过运行时摘要；`trace --api` 也受同一守卫约束
-- `logs -n N` 只查询已加载配置的 `log.output`，顶层优先于 overlay；YAML 存在时不再额外读取旧 JSON 的日志路径
-- 缺配置仍可连接缺省 9090；`trace`、`logs` 的配置加载错误与 overlay 解析错误仍可能被当作无配置处理，因此只替换 `HOME` 不构成网络隔离
+- `logs -n N` 只查询已加载配置的 `log.output`，顶层优先于 overlay；缺 `log.output` 时报错退出（`-n` 是显式回看请求，不擅自转 `-f` 跟踪）。YAML 存在时不再额外读取旧 JSON 的日志路径
+- 缺配置仍可连接缺省 9090（此时会打印缺省口提示）；配置损坏现在直接报错（`config::load_effective_lenient` 区分「不存在」与「损坏」），只有「配置不存在」按无配置处理。网络隔离由网络命名空间/独立环境提供，只替换 `HOME` 不构成隔离
 
 共享 controller 决议的回归检查：
 
