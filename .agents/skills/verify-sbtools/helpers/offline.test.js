@@ -480,6 +480,15 @@ describe("check", () => {
     expect(rec.stderr).toContain("YAML 解析失败");
   });
 
+  test("subs 与 nodes 均为空：装配前置校验失败", async () => {
+    const home = makeHome("check-empty-subs-nodes");
+    const p = writeFx(join(home, ".config", "sing-box", "config.yaml"), "subs: []\nnodes: []\n");
+    const rec = await runCli("check 空 subs 与 nodes", ["check", "-c", p], { home });
+    expect(rec.exit).toBe(1);
+    expect(rec.stderr).toContain("`subs` 与 `nodes` 至少需要一个非空列表");
+    expect(rec.stdout).not.toContain("内核 check 通过");
+  });
+
   test("overlay 引用不存在的 rule-set：内核 check 失败（该命令的核心价值）", async () => {
     requireKernel();
     const home = makeHome("check-bad-ruleset");

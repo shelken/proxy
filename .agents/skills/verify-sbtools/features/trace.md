@@ -6,7 +6,8 @@
 
 - `guard` 覆盖顶层、overlay 和 `--api` 的非回环拒绝
 - `dns` 覆盖确定性域名规则、rule_set 候选与 final 提示
-- `live` 覆盖实际 CONNECT 存续连接的规则集和出站链
+- `dial` 覆盖出站拨号解析段的 `✓/✗/·/⚠` 形态（当前用例只观察 `⚠`，无独立断言）
+- `live` 覆盖实际 CONNECT 存续连接的规则集和出站链，以及无存续连接时的 `规则分配目标` 兜底
 - `static` 覆盖实际 `/rules` 结果
 - `https` 覆盖可信公网 HTTPS 成功与自签名证书失败
 - `fakeip` 覆盖假地址提示和失败计数
@@ -30,6 +31,6 @@ Preconditions:
 
 ## Gotchas
 
-路由规则分配不证明代理节点可连接。无 TUN 时原始 HTTPS 请求未必进入内核，live 段通过 mixed CONNECT 保持连接。未捕获到 debug 判定必须保留原提示，不能用静态规则或本地 DNS 推演替代该段证据。
+路由规则分配不证明代理节点可连接。无 TUN 时原始 HTTPS 请求未必进入内核；生效配置可读且含回环 mixed 入站时 live 段经 CONNECT 保持连接，否则退化为直连 range 下载。未捕获到 debug 判定必须保留原提示，不能用静态规则或本地 DNS 推演替代该段证据。controller 由 CLI 恒定提供：未配置时回退缺省 127.0.0.1:9090 并提示；内核段探活失败记 `✗` 并继续其余段。
 
 公网组将自己的 resolver 指向自己启动的 DNS 入站，使用 [官方 HTTPS DNS 配置](https://sing-box.sagernet.org/configuration/dns/server/https/) 查询公共 DoH。不借用 VM 默认 DNS，避免宿主机 fakeip 干扰。

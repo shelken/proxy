@@ -4,11 +4,12 @@
 
 ## Sub-features
 
-- `tail` 覆盖 `-n N`、0 行、超出文件长度和读取错误
-- `source` 覆盖 YAML 与旧 JSON 的日志来源优先级
-- `follow` 覆盖 `-f` 与级别过滤
+- `tail` 覆盖 `-n N`、0 行、超出文件长度、文件不存在与非法 UTF-8
+- `source` 覆盖 YAML 优先于旧 JSON，以及 root 未写 `log.output` 时 overlay 的兜底
+- `follow` 覆盖 `-f`、未给 `-n` 时的缺省跟踪，与交给内核 `/logs?level=` 的级别过滤
 - `tail-follow` 覆盖 `-n N -f` 的先回看后跟踪
 - `lifetime` 覆盖跨过 4 秒后仍能接收新事件
+- `args` 覆盖 `--level` 白名单、`-n`/`--level` 缺值、非数字行数和未知参数
 
 ## How to get to it (user POV)
 
@@ -26,4 +27,4 @@ Preconditions:
 
 ## Gotchas
 
-`/logs` 不回放历史。缺 log.output 时 `-n` 报错退出（不转跟踪），显式 `-f` 才跟踪。用例终止自己的跟踪进程并标记 `stoppedByHarness`，不要把主动终止码当作产品失败。
+`/logs` 不回放历史。未给 `-n` 时缺省进入跟踪（等价 `-f`）；`-n` 是显式回看请求，缺 log.output 时报错退出，不转跟踪。级别过滤由内核在 `/logs?level=` 侧生效，sbtools 不自行过滤。用例终止自己的跟踪进程并标记 `stoppedByHarness`，不要把主动终止码当作产品失败。

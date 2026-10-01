@@ -13,7 +13,7 @@
 ## 功能
 
 - [基础命令](core.md) 对应 `version`、帮助和 `keygen`，运行 `offline`、`mac`
-- [加密订阅与服务端](subscription.md) 对应 `encode`、`server` 和 HTTP 端点，运行 `server`、`remote`、`mac`
+- [加密订阅与服务端](subscription.md) 对应 `encode`、`server` 和 HTTP 端点，运行 `offline`、`server`、`remote`、`mac`
 - [配置检查](check.md) 对应 `check`，运行 `offline`、`remote`
 - [查看配置](config.md) 对应 `config`，运行 `offline`、`observability`
 - [查看日志](logs.md) 对应 `logs`，运行 `offline`、`observability`

@@ -20,7 +20,7 @@ Preconditions:
 
 运行 `bun --no-env-file .agents/skills/verify-sbtools/helpers/verify.js drive --out "$RUN" --suite offline,mac`。
 
-版本入口应返回相同版本和退出码 0。无参数显示帮助。未知命令退出 1。两次 keygen 产生格式正确且不同的密钥；服务端组再用生成的私钥启动实际服务，并核对 `/pubkey`。
+`version`、`--version`、`-V` 返回相同版本且退出 0：offline 按 Cargo.toml 精确比对，mac 只校验格式。无参数 stdout 为空，帮助写 stderr，退出 0。未知命令与 `--help`、`-h` 同样按未知命令处理：帮助写 stderr，退出 1。两次 keygen 产生格式正确且不同的密钥；mac 组用该私钥启动实际服务，以 `/healthz` 判就绪。私钥与 `/pubkey` 的一致性由 server 套件核对，见 [subscription.md](subscription.md)。
 
 ## Gotchas
 

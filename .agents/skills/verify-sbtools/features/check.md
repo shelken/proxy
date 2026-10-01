@@ -6,7 +6,7 @@
 
 - `embedded-check` 覆盖内嵌模板与 overlay 的真实内核检查
 - `dynamic-check` 覆盖远程模板下载与检查
-- `reject` 覆盖缺文件、坏 YAML、坏规则引用和缺内核
+- `reject` 覆盖缺文件、坏 YAML、`subs` 与 `nodes` 均为空、坏规则引用、缺内核、未知参数与 `-c` 缺值
 
 ## How to get to it (user POV)
 
