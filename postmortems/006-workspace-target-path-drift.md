@@ -28,7 +28,7 @@ sb-sync-x86_64-unknown-linux-musl: ELF 64-bit LSB pie executable, x86-64, … Bu
 二进制版本与清单不一致: sb-sync 0.5.2
 ```
 
-关键判据：两次不同 commit（`491e4ed`、`5c27c1e`）的运行报出**完全相同的 BuildID**。若产物来自本次编译，两次构建不可能同 ID——只能来自同一份被缓存恢复的旧文件。
+关键判据：两次不同 commit（`491e4ed`、`5c27c1e`）的运行报出**完全相同的 BuildID**。若产物来自本次编译，两次构建不可能同 ID，只能来自同一份被缓存恢复的旧文件。
 
 ## 根因
 

@@ -1,12 +1,12 @@
 # tag 作为发布触发点，迫使引入长期 PAT
 
 **日期**: 2026-09-24
-**影响**: 发布链路的设计初稿引入了一个必须人工维护的 fine-grained PAT（`RELEASE_PLZ_TOKEN`）。凭据本身不是必需的——是触发点选错了才产生这个依赖。更隐蔽的后果是：为绕开 token 限制而让 release-plz 自己创建 GitHub Release，会让发布工作流「Release 已存在即跳过」的判据永久挡住真正的发布（无资产的 Release 挡在有资产的 Release 前面）
+**影响**: 发布链路的设计初稿引入了一个必须人工维护的 fine-grained PAT（`RELEASE_PLZ_TOKEN`）。凭据本身不是必需的，是触发点选错了才产生这个依赖。更隐蔽的后果是：为绕开 token 限制而让 release-plz 自己创建 GitHub Release，会让发布工作流「Release 已存在即跳过」的判据永久挡住真正的发布（无资产的 Release 挡在有资产的 Release 前面）
 **发现人**: 用户质疑（「为什么需要生成 token？仓库本身不支持 PR 读写吗」），非 CI
 
 ## 问题
 
-`release-sb-sync.yml` 原以 `on.push.tags: v*` 作为发布触发点。引入 release-plz 做自动版本后，tag 由 release-plz 推送——而 `GITHUB_TOKEN` 创建的 tag 不会触发 `push` 事件，发布工作流根本不会跑。当时的第一反应是「加一个 PAT」。
+`release-sb-sync.yml` 原以 `on.push.tags: v*` 作为发布触发点。引入 release-plz 做自动版本后，tag 由 release-plz 推送，而 `GITHUB_TOKEN` 创建的 tag 不会触发 `push` 事件，发布工作流根本不会跑。当时的第一反应是「加一个 PAT」。
 
 用户提出质疑后回查官方文档，确认这才是约束：
 
@@ -63,6 +63,6 @@ $ gh run list --workflow=release-sb-sync.yml --limit 3
 ## 预防
 
 - **给发布链路选触发点前，先查官方的 token 例外表**，逐事件确认能否被 `GITHUB_TOKEN` 触发。查法：读 `docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow` 的 "Triggering a workflow from a workflow" 一节。`push`（含 tag）会被抑制；`workflow_dispatch` / `repository_dispatch` 不受限。
-- **凡是要新增 PAT / GitHub App / 任何长期凭据，先写出「不引入它的话哪一步做不到」，并证明那一步无法改造成 `workflow_dispatch` 形态**。做不到这个论证就不要引入——长期凭据的维护成本会一直存在。
+- **凡是要新增 PAT / GitHub App / 任何长期凭据，先写出「不引入它的话哪一步做不到」，并证明那一步无法改造成 `workflow_dispatch` 形态**。做不到这个论证就不要引入，长期凭据的维护成本会一直存在。
 - **同一 run 内能闭合的步骤，不要拆成靠事件串联的两个工作流**。跨工作流串联的唯一硬需求，是「第二个工作流必须在不同 runner 上且由第一个的产物触发」，本仓库的发布链路不属于此类。
 - **「已发布」的判据要选不可能被中间态污染的信号**。多步骤发布里，tag / 分支 / 提交都可能先于产物存在；只有最终产物（这里是带资产的 GitHub Release）才能当判据。

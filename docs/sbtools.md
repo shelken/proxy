@@ -8,7 +8,7 @@
 
 | | 客户端 | 服务端 |
 | :--- | :--- | :--- |
-| 子命令 | `encode`、`keygen`、`check`（离线校验）、`trace`（诊断） | `server` |
+| 子命令 | `encode`、`keygen`、`check`（离线校验）、`config`（脱敏生效配置）、`logs`（内核日志）、`trace`（诊断） | `server` |
 | 运行位置 | 任意 arm Mac（mise 安装） | 容器（home-ops） |
 | 输入 | 本机 YAML 配置 | 加密 URL 查询参数 |
 | 输出 | 剪切板订阅 URL | sing-box 配置 JSON |
@@ -49,6 +49,8 @@ flowchart LR
 ```text
 sbtools encode -s <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 加密 → 写剪切板
 sbtools check [-c <config.yaml>]                # 离线校验: 合并 overlay 到底模并跑内核 check
+sbtools config [--path <file>]                  # 打印脱敏后的生效配置与发现链
+sbtools logs [-n N] [-f] [--level <lvl>]        # 读内核日志: 回看末 N 行或跟踪
 sbtools keygen                                  # 生成服务端 X25519 密钥对（部署时一次）
 ```
 
@@ -76,7 +78,7 @@ cmd_encode
 
 服务端地址是**命令行参数**，不写进 YAML：同一份配置可以指向不同服务端，切换只改命令。公钥每次从服务端 `/pubkey` 实时拉取并由私钥推导，因此没有任何需要手工同步的密钥材料
 
-**URL 每次都不同**：密文载荷就是本机 YAML 内容本身，且每次 `encode` 用新的临时密钥对与随机 nonce（见 §4）。改了 YAML 就必须重新 `encode` 并把新 URL **覆盖进** SFM 的 Remote Profile —— SFM 存的是 URL 字符串，不覆盖就一直在拉旧密文。反过来，只改服务端侧的东西（`template_url` 指向的文件、机场订阅里的节点）不需要重出 URL，服务端每次请求都重新加载底模、重新抓订阅
+**URL 每次都不同**：密文载荷就是本机 YAML 内容本身，且每次 `encode` 用新的临时密钥对与随机 nonce（见 §4）。改了 YAML 就必须重新 `encode` 并把新 URL **覆盖进** SFM 的 Remote Profile，SFM 存的是 URL 字符串，不覆盖就一直在拉旧密文。反过来，只改服务端侧的东西（`template_url` 指向的文件、机场订阅里的节点）不需要重出 URL，服务端每次请求都重新加载底模、重新抓订阅
 
 ## 4. 加密协议
 
@@ -170,7 +172,7 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 02-base.json      服务端装配好的底模（含节点、策略组）
 ```
 
-实测（sing-box 1.14.1）：生效顺序由**文件路径字典序**决定，与 `-c` 的 argv 顺序、文件 mtime 都无关
+实测（sing-box 1.14.1；当前固定版本见 `.mise.toml`，升级后本节结论需重跑）：生效顺序由**文件路径字典序**决定，与 `-c` 的 argv 顺序、文件 mtime 都无关
 
 | 类型 | 行为 | 在本层序下的结果 |
 | :--- | :--- | :--- |
@@ -319,7 +321,7 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | :--- | :--- |
 | `Cargo.toml` / `Cargo.lock` | 仓库根 workspace 清单与锁文件（release-plz 版本推导要求清单与 `.git` 同目录） |
 | `scripts/sbtools-rs/Cargo.toml` | crate 清单，版本真源 |
-| `scripts/sbtools-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `keygen` / `version` 分派 |
+| `scripts/sbtools-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `check` / `config` / `logs` / `keygen` / `version` 分派 |
 | `scripts/sbtools-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装与本地观测配置加载 |
 | `scripts/sbtools-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |
 | `scripts/sbtools-rs/src/server.rs` | HTTP 路由、载荷解析、CLI 合并调用、临时目录 RAII |
@@ -329,5 +331,6 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | `scripts/sbtools-rs/src/trace.rs` | 真机全链路探测：内核 debug 日志流 → DNS/路由决策与出口链路 |
 | `scripts/sbtools-rs/src/clashapi.rs` | controller 统一决议与 Clash API 请求 |
 | `scripts/sbtools-rs/src/paths.rs` | 本地观测配置路径发现，YAML 优先于旧 JSON |
+| `scripts/sbtools-rs/src/redact.rs` | 生效配置脱敏：`subs` / `nodes` 整元素隐藏、敏感键替换、URL userinfo 兜底 |
 | `scripts/sbtools-rs/src/lib.rs` | 模块声明与 crate 级 lint 门禁（`forbid(unsafe_code)`、`deny(warnings, clippy::all, pedantic)`、生产代码禁 panic） |
 | `config/sing-box/template.json` | 生产底模（策略组与路由骨架） |

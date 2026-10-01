@@ -40,12 +40,12 @@ gh workflow run release-sbtools.yml --ref <分支或 tag>
 ## 失败处理
 
 - 优先 Re-run failed jobs。同一个版本不移动 tag；需要改代码或改工作流时，发新的 patch 版本
-- 版本是否算「已发布」只看 GitHub Release 是否存在，不看 tag。构建中途失败会留下已建但未发布的 tag，直接重跑即可继续——`prepare` 会复用它，不会因为 tag 已存在而跳过
+- 版本是否算「已发布」只看 GitHub Release 是否存在，不看 tag。构建中途失败会留下已建但未发布的 tag，直接重跑即可继续，`prepare` 会复用它，不会因为 tag 已存在而跳过
 - 发布完成的判据是 `release` job 成功，且 GitHub Release 有三份裸二进制加 `SHA256SUMS`，GHCR 上 `vX.Y.Z` 与 `latest` 指向同一双架构 digest。tag 存在、工作流转绿都不代表发布完成
 
 ## 其他
 
 - 沙箱 VM 的内核版本取自 `just vm-create` 执行时的 `.mise.toml`。已存在的 `proxy-test` VM 不会自动换内核，需要时 `just vm-delete` 后重建
-- 客户端已安装的二进制不会随发版自动升级；`latest` 只是镜像便利入口
+- 客户端已安装的二进制不会随发版自动升级；`latest` 只是镜像便利入口。升级命令见 `docs/user-guide/00-cli-sync.md`
 - `v0.6.0` 起全仓改名 `sb-sync` → `sbtools`：二进制与 CLI 名称已变，mise（ubi/vmg 后端）用户需删除旧 `sb-sync` 安装后按新名重装，旧安装不会自动迁移
 - 服务端部署由 home-ops 的 VPS Docker Compose 完成，本仓库只负责产出

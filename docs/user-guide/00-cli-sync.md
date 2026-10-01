@@ -90,5 +90,5 @@ sbtools encode -s https://sub.example.com
 | `template_url 不得指向内网地址` | 内网与云元数据地址被拒 |
 | `HTTP 请求失败 .../pubkey` | 服务端不可达或地址写错 |
 
-**升级 sbtools**：`mise install github:shelken/proxy@latest`；新 release 有 24h 冷却期，
-追平用 `mise install github:shelken/proxy@<版本号> --minimum-release-age 0d`
+**升级 sbtools**：`mise upgrade github:shelken/proxy`（mise 的工具键是 `github:shelken/proxy`，不是二进制名 `sbtools`）
+新 release 默认有 24h 冷却期（mise `minimum_release_age` 默认值），追平用 `mise upgrade github:shelken/proxy --minimum-release-age 0d`
