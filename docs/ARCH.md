@@ -25,7 +25,7 @@ proxy/
 flowchart TD
     subgraph S1 ["1. 规则编译 (CI)"]
         R_SRC["规则清单 (config/rules/index.yaml + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
-        GHA --> R_BIN["各端产物\n(singbox 66 / clash 31 / plain 31)\n发布到 sing-box-rules 分支"]
+        GHA --> R_BIN["各端产物\n(按客户端分目录, 见 config/rules/README.md)\n发布到 sing-box-rules 分支"]
     end
 
     subgraph S2 ["2. 客户端编码 (sbtools encode)"]
@@ -111,7 +111,7 @@ sequenceDiagram
 每次改动 (scripts/sbtools-rs/**、根 Cargo.toml/Cargo.lock 或 template.json) → ci-sbtools.yml
   → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
   → mise 装 .mise.toml 里的 sing-box → cargo test → cargo build --release
-  → cargo build --release → docker build（--build-arg 内核版本，不推送）
+  → docker build（--build-arg 内核版本，不推送）
     + 起容器验 /healthz 与 /pubkey
 
 合并 Release PR → main 的清单版本变化被 release-sbtools.yml 检测到
@@ -127,7 +127,7 @@ sequenceDiagram
   → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取 darwin 产物
 ```
 
-触发点是 `push: main` 而非 tag：用 `GITHUB_TOKEN` 创建 tag 不会触发 `on.push.tags` 的工作流（要绕开只能引入 PAT），所以 tag 被降级为同一次 run 内的产物。是否已发布只看 GitHub Release 是否存在——构建失败留下的 tag 会被复用，版本不会卡死。
+触发点是 `push: main` 而非 tag：用 `GITHUB_TOKEN` 创建 tag 不会触发 `on.push.tags` 的工作流（要绕开只能引入 PAT），所以 tag 被降级为同一次 run 内的产物。是否已发布只看 GitHub Release 是否存在，构建失败留下的 tag 会被复用，版本不会卡死。
 
 构建期不改写任何文件：版本由 Release PR 提交，CI 只校验。原实现的 `sed` 改 `Cargo.toml` 却不改 `Cargo.lock`，与后续 `--locked` 冲突，三个平台会同时失败（见 `postmortems/004`）。
 
