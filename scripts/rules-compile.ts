@@ -312,9 +312,14 @@ export function parseYamlToRuleLines(yamlText: string): string[] {
 }
 
 export function readRuleLines(content: string, sourcePath?: string): string[] {
+  const trimmed = content.trimStart();
+  // 兼容 external classical payload YAML（payload: 开头），不论扩展名
+  if (trimmed.startsWith("payload:")) {
+    return normalizeRuleLines(content);
+  }
   const isYaml = sourcePath
     ? sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml")
-    : content.trimStart().startsWith("rules:");
+    : trimmed.startsWith("rules:");
   return isYaml ? parseYamlToRuleLines(content) : normalizeRuleLines(content);
 }
 
@@ -610,18 +615,23 @@ export function clashRuleLine(stripped: string): string | null {
   const extra = parts.slice(2).join(",");
 
   // 范围端口
-  if (
+  const isDstRange =
     ruleType === "DST-PORT-RANGE" ||
     ruleType === "DEST-PORT-RANGE" ||
-    (ruleType === "DST-PORT" && (value.includes("-") || value.includes(":")))
-  ) {
+    ruleType === "PORT-RANGE" ||
+    ((ruleType === "DST-PORT" || ruleType === "DEST-PORT" || ruleType === "PORT") &&
+      (value.includes("-") || value.includes(":")));
+
+  if (isDstRange) {
     const range = value.replace(":", "-");
     return extra ? `DST-PORT,${range},${extra}` : `DST-PORT,${range}`;
   }
-  if (
+
+  const isSrcRange =
     ruleType === "SRC-PORT-RANGE" ||
-    (ruleType === "SRC-PORT" && (value.includes("-") || value.includes(":")))
-  ) {
+    (ruleType === "SRC-PORT" && (value.includes("-") || value.includes(":")));
+
+  if (isSrcRange) {
     const range = value.replace(":", "-");
     return extra ? `SRC-PORT,${range},${extra}` : `SRC-PORT,${range}`;
   }
@@ -657,12 +667,15 @@ export function plainRuleLine(line: string): string {
   const value = parts[1]?.trim() ?? "";
   const extra = parts.slice(2).join(",");
 
-  if (
+  const isDstPort =
     ruleType === "DST-PORT" ||
     ruleType === "DEST-PORT" ||
+    ruleType === "PORT" ||
     ruleType === "DST-PORT-RANGE" ||
-    ruleType === "DEST-PORT-RANGE"
-  ) {
+    ruleType === "DEST-PORT-RANGE" ||
+    ruleType === "PORT-RANGE";
+
+  if (isDstPort) {
     const portVal = value.replace(":", "-");
     return extra ? `DEST-PORT,${portVal},${extra}` : `DEST-PORT,${portVal}`;
   }
@@ -850,9 +863,7 @@ export function buildOne(
   dnsCompanion: boolean,
 ): BuildResult[] {
   const rawSource = readSource(item.source);
-  const ruleLines = (item.source.endsWith(".yaml") || item.source.endsWith(".yml"))
-    ? parseYamlToRuleLines(rawSource)
-    : normalizeRuleLines(rawSource);
+  const ruleLines = readRuleLines(rawSource, item.source);
   const name = outputName(item.tag);
   const results: BuildResult[] = [];
 

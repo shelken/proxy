@@ -9,4 +9,4 @@ rules:
   - domain_keyword:
       - player-api-prod
   - ip-asn:
-      - 396982
+      - 396982,no-resolve

@@ -20,6 +20,7 @@ import {
   orphanCustomLists,
   outputName,
   parseYamlToRuleLines,
+  readRuleLines,
   splitTopLevel,
   stripOuterParens,
   toSourceJson,
@@ -487,5 +488,43 @@ describe("YAML 规则 AST 解析与多端方言发射", () => {
     const parsed = JSON.parse(singbox.text) as { rules: Record<string, unknown>[] };
     const logicalRules = parsed.rules.filter((r) => r.type === "logical");
     expect(logicalRules.length).toBe(3);
+  });
+
+  test("ptcg.yaml 导出时保留 IP-ASN 的 no-resolve 选项", () => {
+    const raw = readFileSync("config/rules/custom/ptcg.yaml", "utf-8");
+    const lines = parseYamlToRuleLines(raw);
+    expect(lines).toContain("IP-ASN,396982,no-resolve");
+
+    const clash = emitClash(lines);
+    expect(clash.text).toContain("'IP-ASN,396982,no-resolve'");
+
+    const plain = emitPlain(lines);
+    expect(plain.text).toContain("IP-ASN,396982,no-resolve");
+  });
+
+  test("readRuleLines 正确识别外部 classical payload YAML 与内部 rules YAML", () => {
+    const payloadYaml = "payload:\n  - 'DOMAIN-SUFFIX,example.com'\n";
+    const linesFromPayload = readRuleLines(payloadYaml, "external.yaml");
+    expect(linesFromPayload).toContain("DOMAIN-SUFFIX,example.com");
+
+    const customYaml = "rules:\n  - domain_suffix:\n      - internal.com\n";
+    const linesFromCustom = readRuleLines(customYaml, "custom.yaml");
+    expect(linesFromCustom).toContain("DOMAIN-SUFFIX,internal.com");
+  });
+
+  test("PORT-RANGE 与 DEST-PORT 范围别名在三端均能正确映射", () => {
+    const lines = ["PORT-RANGE,6881:6889", "DEST-PORT,8000:9000"];
+    const clash = emitClash(lines);
+    expect(clash.text).toContain("'DST-PORT,6881-6889'");
+    expect(clash.text).toContain("'DST-PORT,8000-9000'");
+
+    const plain = emitPlain(lines);
+    expect(plain.text).toContain("DEST-PORT,6881-6889");
+    expect(plain.text).toContain("DEST-PORT,8000-9000");
+
+    const singbox = emitSingbox(lines);
+    const parsed = JSON.parse(singbox.text) as { rules: Record<string, unknown>[] };
+    expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("6881:6889"))).toBe(true);
+    expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("8000:9000"))).toBe(true);
   });
 });
