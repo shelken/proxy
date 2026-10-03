@@ -72,6 +72,27 @@ rules:
       - surrit
       - skyearth
   - logical:
-      - "AND,((OR,((DOMAIN-SUFFIX,online),(DOMAIN-SUFFIX,site))),(DOMAIN-KEYWORD,assets-))"
-      - "AND,((DOMAIN-SUFFIX,store),(OR,((DOMAIN-KEYWORD,trendcart),(DOMAIN-KEYWORD,freshvibe),(DOMAIN-KEYWORD,urbanhaze),(DOMAIN-KEYWORD,green-leaf),(DOMAIN-KEYWORD,red-stone))))"
-      - "AND,((DOMAIN-SUFFIX,space),(OR,((DOMAIN-KEYWORD,radiantflow),(DOMAIN-KEYWORD,clear-water))))"
+      - mode: and
+        rules:
+          - mode: or
+            rules:
+              - domain_suffix: online
+              - domain_suffix: site
+          - domain_keyword: assets-
+      - mode: and
+        rules:
+          - domain_suffix: store
+          - mode: or
+            rules:
+              - domain_keyword: trendcart
+              - domain_keyword: freshvibe
+              - domain_keyword: urbanhaze
+              - domain_keyword: green-leaf
+              - domain_keyword: red-stone
+      - mode: and
+        rules:
+          - domain_suffix: space
+          - mode: or
+            rules:
+              - domain_keyword: radiantflow
+              - domain_keyword: clear-water

@@ -26,66 +26,6 @@ const SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip
 const SING_GEOSITE_PREFIX =
   "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
 
-/** 源语法 → sing-box 字段。未列出的类型一律跳过并记录。 */
-const SUPPORTED_FIELDS: Record<string, string> = {
-  DOMAIN: "domain",
-  "DOMAIN-SUFFIX": "domain_suffix",
-  "DOMAIN-KEYWORD": "domain_keyword",
-  "DOMAIN-REGEX": "domain_regex",
-  "IP-CIDR": "ip_cidr",
-  "IP-CIDR6": "ip_cidr",
-  "SRC-IP-CIDR": "source_ip_cidr",
-  "SRC-PORT": "source_port",
-  "DST-PORT": "port",
-  "DEST-PORT": "port",
-  PORT: "port",
-  "DST-PORT-RANGE": "port_range",
-  "DEST-PORT-RANGE": "port_range",
-  "PORT-RANGE": "port_range",
-  "SRC-PORT-RANGE": "source_port_range",
-  "PROCESS-NAME": "process_name",
-  NETWORK: "network",
-};
-
-/**
- * sing-box 路由没有对应表达、只能跳过的类型。
- *
- * USER-AGENT / URL-REGEX：单靠 TLS 嗅探拿不到这两个维度。
- * IP-ASN / SRC-GEOIP / SRC-IP-ASN：geoip 族行内匹配已在 1.12.0 移除，源侧无等价表达。
- * IN-PORT：sing-box 用 inbound tag 区分入口，不是端口号。
- * PROTOCOL：Loon 取值（TCP/UDP/QUIC/HTTP）与 sing-box 的 protocol/network 两套语义交叉，
- *           无法一一映射，宁可跳过也不猜。
- *
- * GEOIP / GEOSITE 不在此列：整份列表只剩这类引用时，退化为对上游预编译规则集的引用。
- */
-const UNSUPPORTED_TYPES = new Set([
-  "USER-AGENT",
-  "URL-REGEX",
-  "IP-ASN",
-  "SRC-GEOIP",
-  "SRC-IP-ASN",
-  "IN-PORT",
-  "PROTOCOL",
-]);
-
-/** mihomo 的 classical provider 能原生吃下这些行。 */
-const CLASH_SUPPORTED = new Set([
-  ...Object.keys(SUPPORTED_FIELDS),
-  "IP-ASN",
-  "GEOIP",
-  "GEOSITE",
-  "SRC-GEOIP",
-  "SRC-IP-ASN",
-  "SRC-IP-SUFFIX",
-  "IP-SUFFIX",
-  "AND",
-  "OR",
-  "NOT",
-]);
-
-/** Loon 用 DEST-PORT，mihomo 用 DST-PORT，同一语义两种拼写。 */
-const CLASH_RENAMES: Record<string, string> = { "DEST-PORT": "DST-PORT" };
-
 const DNS_RULE_FIELDS = [
   "domain",
   "domain_suffix",
@@ -231,339 +171,216 @@ export function outputName(tag: string): string {
   return safe || "rule";
 }
 
-// ---------------------------------------------------------------- 归一化
+// ---------------------------------------------------------------- AST 统一解析
 
-/**
- * provider 的 YAML payload 形态：只取 `payload:` 列表里的条目。
- * 上游 blackmatrix7 的 Clash 列表就是这个格式。
- */
-function parsePayloadYaml(lines: string[]): string[] {
-  const payload: string[] = [];
-  let inPayload = false;
-  for (const rawLine of lines) {
-    const stripped = rawLine.trim();
-    if (!stripped || stripped.startsWith("#")) continue;
-    if (stripped === "payload:") {
-      inPayload = true;
-      continue;
-    }
-    if (!inPayload) continue;
-    if (rawLine.replace(/^\s+/, "").startsWith("- ")) {
-      payload.push(
-        rawLine
-          .replace(/^\s+/, "")
-          .slice(2)
-          .trim()
-          .replace(/^['"]|['"]$/g, ""),
-      );
-      continue;
-    }
-    // payload 段结束：遇到一个顶格的新键
-    if (!rawLine.startsWith(" ")) break;
-  }
-  return payload;
+export interface RuleAST {
+  domain?: string[];
+  domain_suffix?: string[];
+  domain_keyword?: string[];
+  domain_regex?: string[];
+  ip_cidr?: string[];
+  source_ip_cidr?: string[];
+  ip_asn?: string[];
+  port?: number[];
+  port_range?: string[];
+  source_port?: number[];
+  source_port_range?: string[];
+  process_name?: string[];
+  network?: string[];
+  logical?: Array<Record<string, unknown>>;
+  raw_unsupported?: string[];
+  special?: string[];
 }
 
-/** 去掉注释与空行，并把 YAML payload 还原成纯规则行。 */
-export function normalizeRuleLines(text: string): string[] {
-  const rawLines = text.split("\n");
-  const firstNonComment = rawLines
-    .map((l) => l.trim())
-    .find((l) => l && !l.startsWith("#"));
-  if (firstNonComment === "payload:") return parsePayloadYaml(rawLines);
-
-  const lines: string[] = [];
-  for (const rawLine of rawLines) {
-    const stripped = rawLine.trim();
-    if (!stripped || stripped.startsWith("#")) continue;
-    lines.push(stripped);
-  }
-  return lines;
+export function formatLogicalRule(r: Record<string, unknown>): string {
+  const mode = String(r.mode ?? "and").toUpperCase();
+  const children = ((r.rules as Record<string, unknown>[]) ?? []).map((sub) => {
+    if ("mode" in sub) return `(${formatLogicalRule(sub)})`;
+    const [k, v] = Object.entries(sub)[0];
+    const type = k.toUpperCase().replace(/_/g, "-");
+    return `(${type},${v})`;
+  });
+  return `${mode},${children.join(",")}`;
 }
 
-/** 将结构化 YAML 规则映射为规范规则行。 */
-export function parseYamlToRuleLines(yamlText: string): string[] {
-  const parsed = Bun.YAML.parse(yamlText) as { rules?: Record<string, unknown>[] };
-  const lines: string[] = [];
-
-  for (const item of parsed?.rules ?? []) {
-    for (const [key, rawValues] of Object.entries(item)) {
-      const values = Array.isArray(rawValues) ? rawValues : [rawValues];
-      const type = key.toUpperCase();
-
-      for (const val of values) {
-        if (key === "domain_suffix") lines.push(`DOMAIN-SUFFIX,${val}`);
-        else if (key === "domain_keyword") lines.push(`DOMAIN-KEYWORD,${val}`);
-        else if (key === "domain") lines.push(`DOMAIN,${val}`);
-        else if (key === "domain_regex") lines.push(`DOMAIN-REGEX,${val}`);
-        else if (key === "ip_cidr") lines.push(`IP-CIDR,${val}`);
-        else if (key === "source_ip_cidr") lines.push(`SRC-IP-CIDR,${val}`);
-        else if (key === "port") lines.push(`DST-PORT,${val}`);
-        else if (key === "port_range") lines.push(`DST-PORT-RANGE,${String(val).replace("-", ":")}`);
-        else if (key === "source_port") lines.push(`SRC-PORT,${val}`);
-        else if (key === "source_port_range") lines.push(`SRC-PORT-RANGE,${String(val).replace("-", ":")}`);
-        else if (key === "process_name") lines.push(`PROCESS-NAME,${val}`);
-        else if (key === "logical") lines.push(String(val));
-        else lines.push(`${type},${val}`);
-      }
-    }
-  }
-  return lines;
-}
-
-export function readRuleLines(content: string, sourcePath?: string): string[] {
+export function parseSourceToAst(content: string, sourcePath?: string): {
+  ast: RuleAST;
+  specialRefs: { kind: string; value: string }[];
+  skipped: string[];
+} {
   const firstNonComment = content
     .split("\n")
     .map((l) => l.trim())
     .find((l) => l && !l.startsWith("#"));
 
-  if (firstNonComment === "payload:") {
-    return normalizeRuleLines(content);
-  }
-  const isYaml = sourcePath
+  const isRulesYaml = firstNonComment?.startsWith("rules:");
+  const isPayloadYaml = firstNonComment === "payload:";
+  const isYamlFile = sourcePath
     ? sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml")
-    : (firstNonComment?.startsWith("rules:") ?? false);
-  return isYaml ? parseYamlToRuleLines(content) : normalizeRuleLines(content);
-}
+    : false;
 
-// ---------------------------------------------------------------- 解析
-
-/** 剥掉最外层括号，但仅当它真的包住整串（`(a),(b)` 不能剥）。 */
-export function stripOuterParens(text: string): string {
-  const stripped = text.trim();
-  if (!stripped.startsWith("(") || !stripped.endsWith(")")) return stripped;
-  let depth = 0;
-  for (let i = 0; i < stripped.length; i++) {
-    if (stripped[i] === "(") depth++;
-    else if (stripped[i] === ")") {
-      depth--;
-      if (depth === 0 && i !== stripped.length - 1) return stripped;
-    }
-  }
-  return stripped.slice(1, -1).trim();
-}
-
-/** 按顶层逗号切分，括号内的逗号不算。 */
-export function splitTopLevel(text: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let depth = 0;
-  for (const char of text) {
-    if (char === "," && depth === 0) {
-      const part = current.trim();
-      if (part) parts.push(part);
-      current = "";
-      continue;
-    }
-    if (char === "(") depth++;
-    else if (char === ")") depth--;
-    current += char;
-  }
-  const tail = current.trim();
-  if (tail) parts.push(tail);
-  return parts;
-}
-
-type Classified =
-  | { kind: "rule"; field: string; value: string | number }
-  | { kind: "special"; ref: { kind: string; value: string } }
-  | { kind: "unsupported" };
-
-/**
- * 判定一行源规则。
- *
- * 省略写法：`.domain.com` 等同 DOMAIN-SUFFIX，裸域名等同 DOMAIN。
- * 这在 Surge/Loon 的列表里很常见（如 Apple_Domain.list）。
- */
-export function classifySimpleRule(line: string): Classified {
-  const stripped = line.trim();
-  if (!stripped.includes(",")) {
-    if (stripped.startsWith(".")) {
-      return { kind: "rule", field: "domain_suffix", value: stripped.slice(1) };
-    }
-    return { kind: "rule", field: "domain", value: stripped };
-  }
-
-  const parts = stripped.split(",").map((p) => p.trim());
-  if (parts.length < 2) return { kind: "unsupported" };
-  const ruleType = parts[0].toUpperCase();
-  const value = parts[1];
-
-  if (ruleType === "GEOIP" || ruleType === "GEOSITE") {
-    return { kind: "special", ref: { kind: ruleType.toLowerCase(), value: value.toLowerCase() } };
-  }
-  if (UNSUPPORTED_TYPES.has(ruleType)) return { kind: "unsupported" };
-  const field = SUPPORTED_FIELDS[ruleType];
-  if (!field) return { kind: "unsupported" };
-
-  if (field === "ip_cidr") {
-    const cidrOnly = value.split(",")[0].trim();
-    return { kind: "rule", field, value: cidrOnly };
-  }
-
-  if (field === "port" || field === "source_port") {
-    if (value.includes("-") || value.includes(":")) {
-      const range = value.replace("-", ":");
-      const [s, e] = range.split(":").map(Number);
-      if (Number.isFinite(s) && Number.isFinite(e)) {
-        const targetField = field === "source_port" ? "source_port_range" : "port_range";
-        return { kind: "rule", field: targetField, value: range };
-      }
-    }
-    const port = Number.parseInt(value, 10);
-    if (!Number.isFinite(port)) return { kind: "unsupported" };
-    return { kind: "rule", field, value: port };
-  }
-  return { kind: "rule", field, value };
-}
-export function specialRefToUrl(ref: { kind: string; value: string }): string {
-  const suffix = `${ref.kind}-${ref.value}.srs`;
-  return ref.kind === "geoip"
-    ? `${SING_GEOIP_PREFIX}/${suffix}`
-    : `${SING_GEOSITE_PREFIX}/${suffix}`;
-}
-
-export interface ConvertResult {
-  rules: SingBoxRule[];
-  specialRefs: { kind: string; value: string }[];
-  unsupported: string[];
-}
-
-/**
- * 源规则行 → sing-box 源规则集 rules。
- *
- * 同字段的值合并进一条规则（内核语义相同，合并后体积更小）。
- * GEOIP/GEOSITE 单独收集：整份列表只有它们时退化为上游预编译规则集的引用。
- */
-export function convertRuleLines(ruleLines: string[]): ConvertResult {
-  // 字段名来自固定表，值去重要保序：Record 做字段表，Set 做值集合（都是插入序）。
-  const grouped: Record<string, Set<string>> = {};
-  const logicalRules: SingBoxRule[] = [];
+  const ast: RuleAST = {};
   const specialRefs: { kind: string; value: string }[] = [];
-  const unsupported: string[] = [];
+  const skipped: string[] = [];
 
-  const addValue = (field: string, value: string): void => {
-    (grouped[field] ??= new Set()).add(value);
+  const add = (key: keyof RuleAST, val: unknown): void => {
+    const target = (ast[key] ??= [] as unknown[]) as unknown[];
+    if (!target.includes(val)) target.push(val);
   };
 
-  for (const line of ruleLines) {
-    const stripped = line.trim();
-    if (/^(AND|OR|NOT),/i.test(stripped)) {
-      const parsed = parseLogicalRule(stripped);
-      if (parsed.rule) logicalRules.push(parsed.rule);
-      unsupported.push(...parsed.unsupported);
-      continue;
-    }
-
-    const classified = classifySimpleRule(stripped);
-    if (classified.kind === "unsupported") {
-      unsupported.push(stripped);
-      continue;
-    }
-    if (classified.kind === "special") {
-      specialRefs.push(classified.ref);
-      continue;
-    }
-    addValue(classified.field, String(classified.value));
-  }
-
-  const rules: SingBoxRule[] = [];
-  for (const [field, values] of Object.entries(grouped)) {
-    const list: JsonValue[] =
-      field === "port" || field === "source_port"
-        ? [...values].map((v) => Number.parseInt(v, 10))
-        : [...values];
-    rules.push({ [field]: list });
-  }
-  rules.push(...logicalRules);
-  return { rules, specialRefs, unsupported: [...new Set(unsupported)].sort() };
-}
-
-interface LogicalParse {
-  rule: SingBoxRule | null;
-  unsupported: string[];
-}
-
-/** `AND,(...),(...)` / `OR,(...)` / `NOT,(...)`，子表达式可嵌套。 */
-export function parseLogicalRule(line: string): LogicalParse {
-  const comma = line.indexOf(",");
-  const op = line.slice(0, comma).toUpperCase();
-  // 括号有两种形态，都要能吃下：
-  //   AND,(a),(b)      → 顶层逗号直接切
-  //   AND,((a),(OR,...)) → 多包了一层，先剥掉才能按顶层逗号切
-  // NOT 的子表达式同理，但它只有一个，剥不剥都能交给 parseRuleExpression。
-  const rest = stripOuterParens(line.slice(comma + 1).trim());
-  const unsupported: string[] = [];
-
-  if (op === "AND" || op === "OR") {
-    const parts = splitTopLevel(rest);
-    const children: SingBoxRule[] = [];
-    for (const part of parts) {
-      const child = parseRuleExpression(stripOuterParens(part));
-      unsupported.push(...child.unsupported);
-      if (!child.rule) {
-        unsupported.push(line);
-        return { rule: null, unsupported: [...new Set(unsupported)].sort() };
+  // 1. 结构化 custom rules YAML
+  if (isRulesYaml || (isYamlFile && !isPayloadYaml)) {
+    const parsed = Bun.YAML.parse(content) as { rules?: Record<string, unknown>[] };
+    for (const item of parsed?.rules ?? []) {
+      for (const [rawKey, rawValues] of Object.entries(item)) {
+        const key = rawKey.replace(/-/g, "_");
+        if (key === "logical") {
+          const list = Array.isArray(rawValues) ? rawValues : [rawValues];
+          for (const l of list) {
+            if (typeof l === "object" && l !== null) {
+              (ast.logical ??= []).push(l as Record<string, unknown>);
+            }
+          }
+          continue;
+        }
+        const values = Array.isArray(rawValues) ? rawValues : [rawValues];
+        for (const val of values) {
+          if (key === "port" || key === "source_port") {
+            add(key, Number(val));
+          } else if (key === "port_range" || key === "source_port_range") {
+            add(key, String(val).replace("-", ":"));
+          } else if (key === "ip_asn") {
+            add("ip_asn", String(val));
+          } else if (FIELD_ORDER.includes(key as keyof RuleAST)) {
+            add(key as keyof RuleAST, String(val));
+          } else {
+            skipped.push(`${key},${val}`);
+          }
+        }
       }
-      children.push(child.rule);
     }
-    return {
-      rule: { type: "logical", mode: op.toLowerCase(), rules: children },
-      unsupported: [...new Set(unsupported)].sort(),
-    };
+    return { ast, specialRefs, skipped };
   }
 
-  if (op === "NOT") {
-    const child = parseRuleExpression(rest);
-    unsupported.push(...child.unsupported);
-    if (!child.rule) {
-      unsupported.push(line);
-      return { rule: null, unsupported: [...new Set(unsupported)].sort() };
-    }
-    return {
-      rule: { ...child.rule, invert: true },
-      unsupported: [...new Set(unsupported)].sort(),
-    };
+  // 2. 外部纯文本行或 Classical Payload
+  let rawLines: string[] = [];
+  if (isPayloadYaml) {
+    const parsed = Bun.YAML.parse(content) as { payload?: string[] };
+    rawLines = parsed?.payload ?? [];
+  } else {
+    rawLines = content.split("\n");
   }
 
-  return { rule: null, unsupported: [line] };
+  for (const rawLine of rawLines) {
+    const stripped = rawLine.trim();
+    if (!stripped || stripped.startsWith("#")) continue;
+
+    if (!stripped.includes(",")) {
+      if (stripped.startsWith(".")) add("domain_suffix", stripped.slice(1));
+      else add("domain", stripped);
+      continue;
+    }
+
+    if (/^(AND|OR|NOT),/i.test(stripped)) {
+      // 解析单行 logical 表达式为简易树
+      const comma = stripped.indexOf(",");
+      const mode = stripped.slice(0, comma).toLowerCase();
+      const rest = stripped.slice(comma + 1);
+      const subRules: Record<string, unknown>[] = [];
+      const re = /\(([^()]+)\)/g;
+      let m;
+      while ((m = re.exec(rest)) !== null) {
+        const [t, v] = m[1].split(",");
+        if (t && v) {
+          const k = t.trim().toLowerCase().replace(/-/g, "_");
+          subRules.push({ [k]: v.trim() });
+        }
+      }
+      (ast.logical ??= []).push({ mode, rules: subRules });
+      continue;
+    }
+
+    const parts = stripped.split(",").map((s) => s.trim());
+    const type = parts[0].toUpperCase();
+    const val = parts[1];
+    const extra = parts.slice(2).join(",");
+
+    if (type === "GEOIP" || type === "GEOSITE") {
+      specialRefs.push({ kind: type.toLowerCase(), value: val.toLowerCase() });
+      (ast.special ??= []).push(stripped);
+    } else if (type === "DOMAIN") add("domain", val);
+    else if (type === "DOMAIN-SUFFIX") add("domain_suffix", val);
+    else if (type === "DOMAIN-KEYWORD") add("domain_keyword", val);
+    else if (type === "DOMAIN-REGEX") add("domain_regex", val);
+    else if (type === "IP-CIDR" || type === "IP-CIDR6") add("ip_cidr", extra ? `${val},${extra}` : val);
+    else if (type === "SRC-IP-CIDR") add("source_ip_cidr", val);
+    else if (type === "IP-ASN") add("ip_asn", extra ? `${val},${extra}` : val);
+    else if (type === "PROCESS-NAME") add("process_name", val);
+    else if (type === "NETWORK") add("network", val);
+    else if (type === "DST-PORT" || type === "DEST-PORT" || type === "PORT") {
+      if (val.includes("-") || val.includes(":")) add("port_range", val.replace("-", ":"));
+      else add("port", Number(val));
+    } else if (type === "DST-PORT-RANGE" || type === "DEST-PORT-RANGE" || type === "PORT-RANGE") {
+      add("port_range", val.replace("-", ":"));
+    } else if (type === "SRC-PORT") {
+      if (val.includes("-") || val.includes(":")) add("source_port_range", val.replace("-", ":"));
+      else add("source_port", Number(val));
+    } else if (type === "SRC-PORT-RANGE") {
+      add("source_port_range", val.replace("-", ":"));
+    } else {
+      (ast.raw_unsupported ??= []).push(stripped);
+      skipped.push(stripped);
+    }
+  }
+
+  return { ast, specialRefs, skipped };
 }
 
-function parseRuleExpression(line: string): LogicalParse {
-  const stripped = line.trim();
-  if (/^(AND|OR|NOT),/i.test(stripped)) return parseLogicalRule(stripped);
-  const classified = classifySimpleRule(stripped);
-  if (classified.kind !== "rule") return { rule: null, unsupported: [stripped] };
-  return { rule: { [classified.field]: [classified.value] }, unsupported: [] };
+export function readRuleLines(content: string, sourcePath?: string): string[] {
+  const { ast } = parseSourceToAst(content, sourcePath);
+  return emitPlain(ast).text.split("\n").filter(Boolean);
 }
 
-/** 把 rules 按字段稳定排序后包成源规则集文档。 */
-export function toSourceJson(rules: SingBoxRule[]): { version: number; rules: SingBoxRule[] } {
-  // 字段排序只影响「单字段规则」的相对位置；带 type/invert 等结构字段的规则
-  // （logical、invert）没有可排序的字段名，必须原样保留在末位。
-  const isPlainFieldRule = (rule: SingBoxRule): boolean =>
-    !("type" in rule) && !("invert" in rule) && Object.keys(rule).length === 1;
-
-  const ordered: SingBoxRule[] = [];
-  for (const field of FIELD_ORDER) {
-    for (const rule of rules) {
-      if (isPlainFieldRule(rule) && field in rule) ordered.push(rule);
-    }
+export function normalizeRuleLines(text: string): string[] {
+  const rawLines = text.split("\n");
+  const firstNonComment = rawLines.map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
+  if (firstNonComment === "payload:") {
+    const parsed = Bun.YAML.parse(text) as { payload?: string[] };
+    return parsed?.payload ?? [];
   }
-  for (const rule of rules) {
-    if (!isPlainFieldRule(rule)) ordered.push(rule);
-  }
-  return { version: 3, rules: ordered };
+  return rawLines.map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
 }
 
-// ---------------------------------------------------------------- 各端产物
+export function parseYamlToRuleLines(yamlText: string): string[] {
+  const { ast } = parseSourceToAst(yamlText, "custom.yaml");
+  const lines: string[] = [];
+  for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
+  for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
+  for (const d of ast.domain ?? []) lines.push(`DOMAIN,${d}`);
+  for (const d of ast.domain_regex ?? []) lines.push(`DOMAIN-REGEX,${d}`);
+  for (const p of ast.process_name ?? []) lines.push(`PROCESS-NAME,${p}`);
+  for (const c of ast.ip_cidr ?? []) lines.push(`IP-CIDR,${c}`);
+  for (const a of ast.ip_asn ?? []) lines.push(`IP-ASN,${a}`);
+  for (const p of ast.port ?? []) lines.push(`DST-PORT,${p}`);
+  for (const r of ast.port_range ?? []) lines.push(`DST-PORT-RANGE,${r}`);
+  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
+  return lines;
+}
 
-export function emitSingbox(ruleLines: string[]): Emission {
-  const { rules, specialRefs, unsupported } = convertRuleLines(ruleLines);
-  // 整份列表只有 GEOIP/GEOSITE 时，行内表达为空 → 退化为对上游预编译规则集的引用
-  if (specialRefs.length > 0 && rules.length === 0 && unsupported.length === 0) {
+// ---------------------------------------------------------------- 各端纯净发射器
+
+export function emitSingbox(input: RuleAST | string[]): Emission {
+  const { ast, specialRefs, skipped } = Array.isArray(input)
+    ? parseSourceToAst(input.join("\n"))
+    : { ast: input, specialRefs: [], skipped: [] };
+
+  const hasContentRules =
+    FIELD_ORDER.some((f) => (ast[f as keyof RuleAST] as unknown[])?.length) ||
+    (ast.logical?.length ?? 0) > 0;
+
+  if (specialRefs.length > 0 && !hasContentRules) {
     return {
-      text: `${jsonPretty({
+      text: `${JSON.stringify({
         version: 1,
         kind: "external_rule_set",
         references: specialRefs.map((ref) => ({
@@ -572,96 +389,97 @@ export function emitSingbox(ruleLines: string[]): Emission {
           tag: `${ref.kind}-${ref.value}`,
           url: specialRefToUrl(ref),
         })),
-      })}\n`,
+      }, null, 2)}\n`,
       skipped: [],
       specialRefs,
     };
   }
-  return { text: `${jsonPretty(toSourceJson(rules))}\n`, skipped: unsupported, specialRefs };
-}
 
-/** 只保留按查询名匹配的字段，产出 DNS 规则专用的规则集。 */
-export function emitSingboxDns(ruleLines: string[]): Emission {
-  const base = emitSingbox(ruleLines);
-  const payload = JSON.parse(base.text) as {
-    kind?: string;
-    rules?: SingBoxRule[];
-  };
-  // 纯 GEOIP/GEOSITE 列表退化成 external_rule_set 形态，没有可过滤的 rules，
-  // 与「没有域名条目」是同一个结局：产不出 DNS 版。
-  const rules = payload.kind === "external_rule_set" ? [] : (payload.rules ?? []);
+  const rules: SingBoxRule[] = [];
+  const finalSkipped = [...skipped];
+  if (ast.ip_asn?.length) {
+    for (const a of ast.ip_asn) finalSkipped.push(`IP-ASN,${a}`);
+  }
 
-  const kept: SingBoxRule[] = [];
-  for (const rule of rules) {
-    const domainFields: SingBoxRule = {};
-    for (const field of DNS_RULE_FIELDS) {
-      if (field in rule) domainFields[field] = rule[field];
+  for (const field of FIELD_ORDER) {
+    const vals = ast[field as keyof RuleAST];
+    if (vals && vals.length > 0) {
+      if (field === "ip_cidr") {
+        rules.push({ [field]: (vals as string[]).map((v) => v.split(",")[0].trim()) });
+      } else {
+        rules.push({ [field]: vals as JsonValue });
+      }
     }
-    if (Object.keys(domainFields).length > 0) kept.push(domainFields);
   }
-  // 没有域名条目时产出空规则集而不是报错：空规则集是合法的（内核接受 rules: []），
-  // 而任何清单都可能被设备 overlay 的 DNS 规则引用，构建期无法预知谁会被引用。
-  // 之前在这里抛错，等于把「谁会被引用」这个运行期的决定提前到构建期猜。
-  return { text: `${jsonPretty(toSourceJson(kept))}\n`, skipped: base.skipped, specialRefs: [] };
-}
-
-/** 一行源规则 → mihomo classical provider 的行；无法表达时返回 null。 */
-export function clashRuleLine(stripped: string): string | null {
-  if (!stripped.includes(",")) {
-    return stripped.startsWith(".")
-      ? `DOMAIN-SUFFIX,${stripped.slice(1)}`
-      : `DOMAIN,${stripped}`;
-  }
-  const parts = stripped.split(",");
-  const ruleType = parts[0].trim().toUpperCase();
-  const value = parts[1]?.trim() ?? "";
-  const extra = parts.slice(2).join(",");
-
-  // 范围端口
-  const isDstRange =
-    ruleType === "DST-PORT-RANGE" ||
-    ruleType === "DEST-PORT-RANGE" ||
-    ruleType === "PORT-RANGE" ||
-    ((ruleType === "DST-PORT" || ruleType === "DEST-PORT" || ruleType === "PORT") &&
-      (value.includes("-") || value.includes(":")));
-
-  if (isDstRange) {
-    const range = value.replace(":", "-");
-    return extra ? `DST-PORT,${range},${extra}` : `DST-PORT,${range}`;
-  }
-
-  const isSrcRange =
-    ruleType === "SRC-PORT-RANGE" ||
-    (ruleType === "SRC-PORT" && (value.includes("-") || value.includes(":")));
-
-  if (isSrcRange) {
-    const range = value.replace(":", "-");
-    return extra ? `SRC-PORT,${range},${extra}` : `SRC-PORT,${range}`;
-  }
-
-  if (!CLASH_SUPPORTED.has(ruleType)) return null;
-  const renamed = CLASH_RENAMES[ruleType] ?? ruleType;
-  return renamed + stripped.slice(ruleType.length);
-}
-
-export function emitClash(ruleLines: string[]): Emission {
-  const kept: string[] = [];
-  const skipped: string[] = [];
-  for (const line of ruleLines) {
-    const stripped = line.trim();
-    if (!stripped) continue;
-    const converted = clashRuleLine(stripped);
-    if (converted === null) {
-      skipped.push(stripped);
-      continue;
+  function normalizeSingboxLogical(node: Record<string, unknown>): Record<string, unknown> {
+    if ("mode" in node && Array.isArray(node.rules)) {
+      if (node.mode === "not" && node.rules.length === 1) {
+        const sub = node.rules[0] as Record<string, unknown>;
+        const [k, v] = Object.entries(sub)[0];
+        return { [k]: Array.isArray(v) ? v : [v], invert: true };
+      }
+      return {
+        type: "logical",
+        mode: node.mode,
+        rules: (node.rules as Record<string, unknown>[]).map(normalizeSingboxLogical),
+      };
     }
-    kept.push(converted);
+    const res: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node)) {
+      res[k] = Array.isArray(v) ? v : [v];
+    }
+    return res;
   }
-  const body = kept.map((line) => `  - '${line}'`).join("\n");
-  return { text: kept.length > 0 ? `payload:\n${body}\n` : "payload: []\n", skipped, specialRefs: [] };
+
+  for (const l of ast.logical ?? []) {
+    rules.push(normalizeSingboxLogical(l));
+  }
+  return { text: `${JSON.stringify({ version: 3, rules }, null, 2)}\n`, skipped: finalSkipped, specialRefs };
 }
 
-/** Loon 单行规整：单/范围端口统一为 DEST-PORT，IPv6 CIDR 统一为 IP-CIDR6。 */
+export function emitSingboxDns(input: RuleAST | string[]): Emission {
+  const { ast, skipped } = Array.isArray(input)
+    ? parseSourceToAst(input.join("\n"))
+    : { ast: input, skipped: [] };
+
+  const rules: SingBoxRule[] = [];
+  for (const field of DNS_RULE_FIELDS) {
+    const vals = ast[field as keyof RuleAST];
+    if (vals && vals.length > 0) {
+      rules.push({ [field]: vals as JsonValue });
+    }
+  }
+  return { text: `${JSON.stringify({ version: 3, rules }, null, 2)}\n`, skipped, specialRefs: [] };
+}
+
+export function emitClash(input: RuleAST | string[]): Emission {
+  const { ast, skipped } = Array.isArray(input)
+    ? parseSourceToAst(input.join("\n"))
+    : { ast: input, skipped: [] };
+
+  const payload: string[] = [];
+  for (const d of ast.domain_suffix ?? []) payload.push(`DOMAIN-SUFFIX,${d}`);
+  for (const d of ast.domain_keyword ?? []) payload.push(`DOMAIN-KEYWORD,${d}`);
+  for (const d of ast.domain ?? []) payload.push(`DOMAIN,${d}`);
+  for (const d of ast.domain_regex ?? []) payload.push(`DOMAIN-REGEX,${d}`);
+  for (const p of ast.process_name ?? []) payload.push(`PROCESS-NAME,${p}`);
+  for (const c of ast.ip_cidr ?? []) payload.push(`IP-CIDR,${c}`);
+  for (const c of ast.source_ip_cidr ?? []) payload.push(`SRC-IP-CIDR,${c}`);
+  for (const a of ast.ip_asn ?? []) payload.push(`IP-ASN,${a}`);
+  for (const p of ast.port ?? []) payload.push(`DST-PORT,${p}`);
+  for (const r of ast.port_range ?? []) payload.push(`DST-PORT,${r.replace(":", "-")}`);
+  for (const p of ast.source_port ?? []) payload.push(`SRC-PORT,${p}`);
+  for (const r of ast.source_port_range ?? []) payload.push(`SRC-PORT,${r.replace(":", "-")}`);
+  for (const n of ast.network ?? []) payload.push(`NETWORK,${n}`);
+  for (const s of ast.special ?? []) payload.push(s);
+  for (const l of ast.logical ?? []) payload.push(formatLogicalRule(l));
+
+  const text = payload.length > 0
+    ? `payload:\n` + payload.map((line) => `  - '${line}'`).join("\n") + "\n"
+    : "payload: []\n";
+  return { text, skipped, specialRefs: [] };
+}
+
 export function plainRuleLine(line: string): string {
   const stripped = line.trim();
   if (!stripped.includes(",")) return stripped;
@@ -692,17 +510,47 @@ export function plainRuleLine(line: string): string {
   return stripped;
 }
 
-/** Loon / Surge 文本产物输出。 */
-export function emitPlain(ruleLines: string[]): Emission {
-  const lines = ruleLines.map((l) => plainRuleLine(l));
+export function emitPlain(input: RuleAST | string[]): Emission {
+  if (Array.isArray(input)) {
+    const lines = input.map(plainRuleLine);
+    return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
+  }
+
+  const ast = input;
+  const lines: string[] = [];
+  for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
+  for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
+  for (const d of ast.domain ?? []) lines.push(`DOMAIN,${d}`);
+  for (const d of ast.domain_regex ?? []) lines.push(`DOMAIN-REGEX,${d}`);
+  for (const p of ast.process_name ?? []) lines.push(`PROCESS-NAME,${p}`);
+  for (const c of ast.ip_cidr ?? []) {
+    lines.push(c.includes(":") ? `IP-CIDR6,${c}` : `IP-CIDR,${c}`);
+  }
+  for (const c of ast.source_ip_cidr ?? []) lines.push(`SRC-IP-CIDR,${c}`);
+  for (const a of ast.ip_asn ?? []) lines.push(`IP-ASN,${a}`);
+  for (const p of ast.port ?? []) lines.push(`DEST-PORT,${p}`);
+  for (const r of ast.port_range ?? []) lines.push(`DEST-PORT,${r.replace(":", "-")}`);
+  for (const p of ast.source_port ?? []) lines.push(`SRC-PORT,${p}`);
+  for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
+  for (const n of ast.network ?? []) lines.push(`NETWORK,${n}`);
+  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
+  for (const u of ast.raw_unsupported ?? []) lines.push(u);
+
   return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
 }
 
-export const CLIENT_EMITTERS: Record<Client, (lines: string[]) => Emission> = {
+export const CLIENT_EMITTERS: Record<Client, (input: RuleAST | string[]) => Emission> = {
   singbox: emitSingbox,
   clash: emitClash,
   plain: emitPlain,
 };
+
+export function specialRefToUrl(ref: { kind: string; value: string }): string {
+  const suffix = `${ref.kind}-${ref.value}.srs`;
+  return ref.kind === "geoip"
+    ? `${SING_GEOIP_PREFIX}/${suffix}`
+    : `${SING_GEOSITE_PREFIX}/${suffix}`;
+}
 
 // ---------------------------------------------------------------- 模板契约
 
@@ -866,12 +714,18 @@ export function buildOne(
   dnsCompanion: boolean,
 ): BuildResult[] {
   const rawSource = readSource(item.source);
-  const ruleLines = readRuleLines(rawSource, item.source);
+  const { ast, specialRefs, skipped } = parseSourceToAst(rawSource, item.source);
   const name = outputName(item.tag);
   const results: BuildResult[] = [];
+  const totalCount = Object.values(ast).reduce(
+    (acc, v) => acc + (Array.isArray(v) ? v.length : 0),
+    0,
+  );
 
   for (const client of Object.keys(CLIENT_EMITTERS) as Client[]) {
-    const emission = CLIENT_EMITTERS[client](ruleLines);
+    const emission = CLIENT_EMITTERS[client](ast);
+    if (specialRefs.length > 0) emission.specialRefs = specialRefs;
+    if (skipped.length > 0) emission.skipped = skipped;
     const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
     writeText(path, emission.text);
 
@@ -895,17 +749,17 @@ export function buildOne(
     results.push({
       client,
       path,
-      total: ruleLines.length,
+      total: totalCount,
       skipped: emission.skipped.length,
     });
   }
 
   if (dnsCompanion) {
-    const dns = emitSingboxDns(ruleLines);
+    const dns = emitSingboxDns(ast);
     const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.json`);
     writeText(dnsPath, dns.text);
     compileSrs(binary, dnsPath, dnsPath.replace(/\.json$/, ".srs"));
-    results.push({ client: "singbox", path: dnsPath, total: ruleLines.length, skipped: 0 });
+    results.push({ client: "singbox", path: dnsPath, total: totalCount, skipped: 0 });
   }
   return results;
 }
@@ -1018,9 +872,9 @@ function cmdConvert(args: string[]): number {
   }
 
   const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
-  const lines = readRuleLines(raw, input === "-" ? undefined : input);
+  const { ast } = parseSourceToAst(raw, input === "-" ? undefined : input);
   const dnsOnly = args.includes("--dns-only");
-  const emission = dnsOnly ? emitSingboxDns(lines) : CLIENT_EMITTERS[client](lines);
+  const emission = dnsOnly ? emitSingboxDns(ast) : CLIENT_EMITTERS[client](ast);
 
   const output = argValue(args, "--output") ?? "-";
   if (output === "-") process.stdout.write(emission.text);

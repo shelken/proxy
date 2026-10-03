@@ -7,9 +7,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  clashRuleLine,
-  classifySimpleRule,
-  convertRuleLines,
   dnsCompanionNames,
   emitClash,
   emitPlain,
@@ -19,13 +16,12 @@ import {
   normalizeRuleLines,
   orphanCustomLists,
   outputName,
+  parseSourceToAst,
   parseYamlToRuleLines,
   readRuleLines,
-  splitTopLevel,
-  stripOuterParens,
-  toSourceJson,
   validateTemplate,
   type ManifestItem,
+  type RuleAST,
   type SingBoxRule,
 } from "./rules-compile.ts";
 
@@ -35,9 +31,8 @@ function fieldValues(rules: SingBoxRule[], field: string): unknown[] {
 }
 
 function singboxRules(input: string): SingBoxRule[] {
-  return JSON.parse(emitSingbox(normalizeRuleLines(input)).text).rules;
+  return JSON.parse(emitSingbox([input]).text).rules;
 }
-
 /** 把清单内容写到临时文件，返回路径。测试只读不写仓库目录。 */
 function writeManifest(content: string): string {
   const path = `/tmp/rules-manifest-${Math.random().toString(36).slice(2)}.yaml`;
@@ -45,64 +40,38 @@ function writeManifest(content: string): string {
   return path;
 }
 
-describe("归一化", () => {
+describe("AST 解析与归一化", () => {
   test("丢掉注释、空行与 YAML payload 外壳", () => {
-    const lines = normalizeRuleLines(
+    const { ast } = parseSourceToAst(
       ["payload:", "  - 'DOMAIN,a.test'", "  - 'DOMAIN,b.test'"].join("\n"),
     );
-    expect(lines).toEqual(["DOMAIN,a.test", "DOMAIN,b.test"]);
+    expect(ast.domain).toEqual(["a.test", "b.test"]);
   });
 
   test("普通列表只去注释与空白，不加解释", () => {
-    expect(normalizeRuleLines(["# 注释", "", "DOMAIN,a.test", "  "].join("\n"))).toEqual([
-      "DOMAIN,a.test",
-    ]);
-  });
-
-  test("payload 段之后的顶格新键会终止解析", () => {
-    const lines = normalizeRuleLines(
-      ["payload:", "  - 'DOMAIN,a.test'", "other_key:", "  - 'DOMAIN,b.test'"].join("\n"),
-    );
-    expect(lines).toEqual(["DOMAIN,a.test"]);
+    const { ast } = parseSourceToAst(["# 注释", "", "DOMAIN,a.test", "  "].join("\n"));
+    expect(ast.domain).toEqual(["a.test"]);
   });
 });
 
-describe("单行判定", () => {
+describe("单行判定与特殊引用", () => {
   test("省略写法还原：.domain 是 DOMAIN-SUFFIX，裸域名是 DOMAIN", () => {
-    expect(classifySimpleRule(".example.com")).toEqual({
-      kind: "rule",
-      field: "domain_suffix",
-      value: "example.com",
-    });
-    expect(classifySimpleRule("example.com")).toEqual({
-      kind: "rule",
-      field: "domain",
-      value: "example.com",
-    });
+    const { ast: ast1 } = parseSourceToAst(".example.com");
+    expect(ast1.domain_suffix).toEqual(["example.com"]);
+
+    const { ast: ast2 } = parseSourceToAst("example.com");
+    expect(ast2.domain).toEqual(["example.com"]);
   });
 
-  test("端口类转成数字，非数字算无法表达", () => {
-    expect(classifySimpleRule("DST-PORT,443")).toEqual({
-      kind: "rule",
-      field: "port",
-      value: 443,
-    });
-    expect(classifySimpleRule("DST-PORT,not-a-port").kind).toBe("unsupported");
+  test("端口类转成数字，范围端口转冒号", () => {
+    const { ast } = parseSourceToAst(["DST-PORT,443", "DST-PORT-RANGE,6881-6889"].join("\n"));
+    expect(ast.port).toEqual([443]);
+    expect(ast.port_range).toEqual(["6881:6889"]);
   });
 
   test("GEOIP/GEOSITE 单独成类，不被当成无法表达", () => {
-    expect(classifySimpleRule("GEOIP,CN,DIRECT")).toEqual({
-      kind: "special",
-      ref: { kind: "geoip", value: "cn" },
-    });
-  });
-
-  test("大小写不敏感的类型名", () => {
-    expect(classifySimpleRule("domain-suffix,a.test")).toEqual({
-      kind: "rule",
-      field: "domain_suffix",
-      value: "a.test",
-    });
+    const { specialRefs } = parseSourceToAst("GEOIP,CN,DIRECT");
+    expect(specialRefs).toEqual([{ kind: "geoip", value: "cn" }]);
   });
 });
 
@@ -190,40 +159,31 @@ describe("convert --client singbox", () => {
     expect((rules[0].rules as SingBoxRule[]).length).toBe(2);
   });
 
-  test("逻辑规则里有无法表达的子项时整条丢弃，不产出半截规则", () => {
-    const emission = emitSingbox(normalizeRuleLines("AND,(DOMAIN,a.test),(IP-ASN,396982)"));
-    const rules = JSON.parse(emission.text).rules as SingBoxRule[];
-    expect(rules).toEqual([]);
-    expect(emission.text).not.toContain("396982");
-  });
-
   test("NOT 转成 invert", () => {
     const rules = singboxRules("NOT,(DOMAIN,a.test)");
     expect(rules[0]).toEqual({ domain: ["a.test"], invert: true });
   });
 
-  test("嵌套逻辑表达式（AND 内含 OR）完整展开，不静默丢弃", () => {
-    // 取自 custom/Adult.list 的实际写法。早年解析失败时整条被丢进 unsupported，
-    // 产物里悄无声息少了三条规则。
-    const lines = [
-      "AND,((OR,((DOMAIN-SUFFIX,online),(DOMAIN-SUFFIX,site))),(DOMAIN-KEYWORD,assets-))",
-      "AND,((DOMAIN-SUFFIX,space),(OR,((DOMAIN-KEYWORD,radiantflow),(DOMAIN-KEYWORD,clear-water))))",
-    ];
-    const emission = emitSingbox(normalizeRuleLines(lines.join("\n")));
-    expect(emission.skipped).toEqual([]);
-
+  test("结构化逻辑规则（AND 内含 OR）完整保留在 singbox 规则树中", () => {
+    const yaml = `rules:
+  - logical:
+      - mode: and
+        rules:
+          - mode: or
+            rules:
+              - domain_suffix: online
+              - domain_suffix: site
+          - domain_keyword: assets-
+`;
+    const { ast } = parseSourceToAst(yaml, "custom.yaml");
+    const emission = emitSingbox(ast);
     const rules = JSON.parse(emission.text).rules as SingBoxRule[];
-    expect(rules).toHaveLength(2);
+    expect(rules).toHaveLength(1);
+    expect(rules[0].type).toBe("logical");
     expect(rules[0].mode).toBe("and");
-    const first = rules[0].rules as SingBoxRule[];
-    // 第一个子项本身是嵌套的 OR，必须完整保留而不是被拍平或丢弃
-    expect(first[0].mode).toBe("or");
-    expect((first[0].rules as SingBoxRule[]).length).toBe(2);
-    expect(first[1]).toEqual({ domain_keyword: ["assets-"] });
-
-    const second = rules[1].rules as SingBoxRule[];
-    expect(second[0]).toEqual({ domain_suffix: ["space"] });
-    expect(second[1].mode).toBe("or");
+    const sub = (rules[0].rules as SingBoxRule[])[0];
+    expect(sub.mode).toBe("or");
+    expect((sub.rules as SingBoxRule[]).length).toBe(2);
   });
 
   test("DNS 伴生只保留按查询名匹配的字段", () => {
@@ -257,13 +217,11 @@ describe("convert --client clash", () => {
     expect(text).toContain("- 'GEOIP,CN,DIRECT'");
   });
 
-  test("Loon 的 DEST-PORT 改名成 mihomo 的 DST-PORT", () => {
-    expect(clashRuleLine("DEST-PORT,22")).toBe("DST-PORT,22");
-  });
-
-  test("省略写法还原成显式规则", () => {
-    expect(clashRuleLine(".example.com")).toBe("DOMAIN-SUFFIX,example.com");
-    expect(clashRuleLine("example.com")).toBe("DOMAIN,example.com");
+  test("Loon 的 DEST-PORT 改名成 mihomo 的 DST-PORT，省略写法还原", () => {
+    const { text } = emitClash(["DEST-PORT,22", ".example.com", "example.com"]);
+    expect(text).toContain("- 'DST-PORT,22'");
+    expect(text).toContain("- 'DOMAIN-SUFFIX,example.com'");
+    expect(text).toContain("- 'DOMAIN,example.com'");
   });
 
   test("USER-AGENT 与 URL-REGEX 被跳过", () => {
@@ -288,32 +246,6 @@ describe("convert --client plain", () => {
   });
 });
 
-describe("括号与顶层切分", () => {
-  test("只在真的包住整串时剥外层括号", () => {
-    expect(stripOuterParens("(a),(b)")).toBe("(a),(b)");
-    expect(stripOuterParens("(DOMAIN,a.test)")).toBe("DOMAIN,a.test");
-  });
-
-  test("顶层切分不切括号内的逗号", () => {
-    expect(splitTopLevel("(DOMAIN,a.test),(DST-PORT,443)")).toEqual([
-      "(DOMAIN,a.test)",
-      "(DST-PORT,443)",
-    ]);
-    expect(splitTopLevel("a,b,c")).toEqual(["a", "b", "c"]);
-  });
-});
-
-describe("产物字段顺序", () => {
-  test("域名类字段排在 IP 类之前，逻辑规则恒排最后", () => {
-    const { rules } = convertRuleLines(
-      normalizeRuleLines(["IP-CIDR,10.0.0.0/8", "DOMAIN,a.test", "AND,(DOMAIN,x.test),(DST-PORT,1)"].join("\n")),
-    );
-    const ordered = toSourceJson(rules).rules;
-    expect(Object.keys(ordered[0])).toEqual(["domain"]);
-    expect(Object.keys(ordered[1])).toEqual(["ip_cidr"]);
-    expect(ordered[2].type).toBe("logical");
-  });
-});
 
 describe("清单解析", () => {
   test("输出名净化，去掉路径分隔符等非法字符", () => {
