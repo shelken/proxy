@@ -18,6 +18,7 @@ import {
   normalizeRuleLines,
   orphanCustomLists,
   outputName,
+  parseYamlToRuleLines,
   splitTopLevel,
   stripOuterParens,
   toSourceJson,
@@ -351,17 +352,17 @@ describe("清单解析", () => {
     // 真实踩过的坑：把新列表丢进 custom/ 就以为 CI 会发现它。
     // 清单是唯一入口，孤儿文件不产出任何规则，所以必须显式提醒。
     const orphans = orphanCustomLists([
-      { tag: "Known", source: "config/rules/custom/MyReject.list" },
+      { tag: "Known", source: "config/rules/custom/MyReject.yaml" },
     ]);
-    expect(orphans).toContain("config/rules/custom/OpenAI.list");
-    expect(orphans).not.toContain("config/rules/custom/MyReject.list");
+    expect(orphans).toContain("config/rules/custom/OpenAI.yaml");
+    expect(orphans).not.toContain("config/rules/custom/MyReject.yaml");
   });
 });
 
 describe("底模契约校验", () => {
   const items: ManifestItem[] = [
-    { tag: "MyReject", source: "config/rules/custom/MyReject.list" },
-    { tag: "OpenAI", source: "config/rules/custom/OpenAI.list" },
+    { tag: "MyReject", source: "config/rules/custom/MyReject.yaml" },
+    { tag: "OpenAI", source: "config/rules/custom/OpenAI.yaml" },
   ];
   const template = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
     route: {
@@ -430,5 +431,21 @@ describe("底模契约校验", () => {
   test("DNS 规则引用了清单外的规则集时报错", () => {
     const t = template({ dns: { rules: [{ rule_set: ["DoesNotExist"], server: "dns-direct-cn" }] } });
     expect(() => dnsCompanionNames(t, items)).toThrow(/既不在清单里/);
+  });
+});
+
+describe("YAML 规则 AST 解析与范围端口", () => {
+  test("parseYamlToRuleLines 正确展开紧凑字典 YAML", () => {
+    const yaml = `rules:\n  - domain_suffix:\n      - example.com\n  - port:\n      - 8080\n  - port_range:\n      - 6881:6889\n`;
+    const lines = parseYamlToRuleLines(yaml);
+    expect(lines).toContain("DOMAIN-SUFFIX,example.com");
+    expect(lines).toContain("DST-PORT,8080");
+    expect(lines).toContain("DST-PORT-RANGE,6881:6889");
+
+    const emission = emitSingbox(lines);
+    const parsed = JSON.parse(emission.text) as { rules: Record<string, unknown>[] };
+    expect(parsed.rules.some((r) => Array.isArray(r.domain_suffix) && r.domain_suffix.includes("example.com"))).toBe(true);
+    expect(parsed.rules.some((r) => Array.isArray(r.port) && r.port.includes(8080))).toBe(true);
+    expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("6881:6889"))).toBe(true);
   });
 });

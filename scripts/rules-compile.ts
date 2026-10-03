@@ -39,6 +39,10 @@ const SUPPORTED_FIELDS: Record<string, string> = {
   "DST-PORT": "port",
   "DEST-PORT": "port",
   PORT: "port",
+  "DST-PORT-RANGE": "port_range",
+  "DEST-PORT-RANGE": "port_range",
+  "PORT-RANGE": "port_range",
+  "SRC-PORT-RANGE": "source_port_range",
   "PROCESS-NAME": "process_name",
   NETWORK: "network",
 };
@@ -101,7 +105,9 @@ const FIELD_ORDER = [
   "ip_cidr",
   "source_ip_cidr",
   "port",
+  "port_range",
   "source_port",
+  "source_port_range",
   "network",
 ];
 
@@ -191,7 +197,7 @@ export function orphanCustomLists(items: ManifestItem[]): string[] {
     return [];
   }
   return entries
-    .filter((name) => name.endsWith(".list"))
+    .filter((name) => name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".list"))
     .map((name) => `config/rules/custom/${name}`)
     .filter((rel) => !referenced.has(rel))
     .sort();
@@ -275,6 +281,34 @@ export function normalizeRuleLines(text: string): string[] {
   return lines;
 }
 
+/** 将结构化 YAML 规则映射为规范规则行。 */
+export function parseYamlToRuleLines(yamlText: string): string[] {
+  const parsed = Bun.YAML.parse(yamlText) as { rules?: Record<string, unknown>[] };
+  const lines: string[] = [];
+
+  for (const item of parsed?.rules ?? []) {
+    for (const [key, rawValues] of Object.entries(item)) {
+      const values = Array.isArray(rawValues) ? rawValues : [rawValues];
+      const type = key.toUpperCase();
+
+      for (const val of values) {
+        if (key === "domain_suffix") lines.push(`DOMAIN-SUFFIX,${val}`);
+        else if (key === "domain_keyword") lines.push(`DOMAIN-KEYWORD,${val}`);
+        else if (key === "domain") lines.push(`DOMAIN,${val}`);
+        else if (key === "domain_regex") lines.push(`DOMAIN-REGEX,${val}`);
+        else if (key === "ip_cidr") lines.push(`IP-CIDR,${val}`);
+        else if (key === "source_ip_cidr") lines.push(`SRC-IP-CIDR,${val}`);
+        else if (key === "port") lines.push(`DST-PORT,${val}`);
+        else if (key === "port_range") lines.push(`DST-PORT-RANGE,${String(val).replace("-", ":")}`);
+        else if (key === "source_port") lines.push(`SRC-PORT,${val}`);
+        else if (key === "process_name") lines.push(`PROCESS-NAME,${val}`);
+        else lines.push(`${type},${val}`);
+      }
+    }
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------- 解析
 
 /** 剥掉最外层括号，但仅当它真的包住整串（`(a),(b)` 不能剥）。 */
@@ -347,13 +381,20 @@ export function classifySimpleRule(line: string): Classified {
   if (!field) return { kind: "unsupported" };
 
   if (field === "port" || field === "source_port") {
+    if (value.includes("-") || value.includes(":")) {
+      const range = value.replace("-", ":");
+      const [s, e] = range.split(":").map(Number);
+      if (Number.isFinite(s) && Number.isFinite(e)) {
+        const targetField = field === "source_port" ? "source_port_range" : "port_range";
+        return { kind: "rule", field: targetField, value: range };
+      }
+    }
     const port = Number.parseInt(value, 10);
     if (!Number.isFinite(port)) return { kind: "unsupported" };
     return { kind: "rule", field, value: port };
   }
   return { kind: "rule", field, value };
 }
-
 export function specialRefToUrl(ref: { kind: string; value: string }): string {
   const suffix = `${ref.kind}-${ref.value}.srs`;
   return ref.kind === "geoip"
@@ -745,7 +786,10 @@ export function buildOne(
   binary: string,
   dnsCompanion: boolean,
 ): BuildResult[] {
-  const ruleLines = normalizeRuleLines(readSource(item.source));
+  const rawSource = readSource(item.source);
+  const ruleLines = (item.source.endsWith(".yaml") || item.source.endsWith(".yml"))
+    ? parseYamlToRuleLines(rawSource)
+    : normalizeRuleLines(rawSource);
   const name = outputName(item.tag);
   const results: BuildResult[] = [];
 

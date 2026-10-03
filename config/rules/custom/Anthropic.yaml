@@ -1,0 +1,12 @@
+rules:
+  - domain:
+      - cdn.usefathom.com
+      - servd-anthropic-website.b-cdn.net
+  - domain_suffix:
+      - anthropic.com
+      - clau.de
+      - claude.ai
+      - claude.com
+      - claudemcpclient.com
+      - claudemcpcontent.com
+      - claudeusercontent.com

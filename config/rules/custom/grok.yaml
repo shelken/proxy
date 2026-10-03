@@ -1,0 +1,5 @@
+rules:
+  - domain:
+      - cli-chat-proxy.grok.com
+      - accounts.x.ai
+      - api.x.ai
