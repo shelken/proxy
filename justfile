@@ -72,7 +72,12 @@ test-dns name="":
 sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 
-# --- 生产底模校验与容器化订阅验证 ---
+# --- 生产底模装配与校验 ---
+# 从 config/sing-box/modules 构建 template.json
+template-build:
+    @bun scripts/template-build.ts
+    @just check-singbox
+
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
@@ -98,6 +103,7 @@ rules-check:
 # 沙箱网络行为测试（TUN/netns）不在这里跑：宿主机上会破坏在用的网络，
 # 走 just test-sandbox 在 VM 内执行。
 verify: check-singbox rules-check
+    @bun scripts/template-build.ts --check
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked

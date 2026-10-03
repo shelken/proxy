@@ -1,0 +1,8 @@
+{
+  "http_clients": [
+    {
+      "tag": "rule-set-dl",
+      "detour": "proxy"
+    }
+  ]
+}
