@@ -46,82 +46,101 @@ export function assembleTemplate(modulesDir: string = MODULES_DIR): string {
     .filter((f: string) => f.endsWith(".json"))
     .sort();
 
-  const result: SingBoxTemplate = {
-    inbounds: [],
-    dns: {
-      strategy: "",
-      optimistic: false,
-      servers: [],
-      rules: [],
-      final: ""
-    },
-    route: {
-      auto_detect_interface: true,
-      rules: [],
-      final: "",
-      default_domain_resolver: null,
-      default_http_client: "",
-      rule_set: []
-    },
-    http_clients: [],
-    outbounds: [],
-    experimental: {}
-  };
+  const topLevel: Record<string, unknown> = {};
+  const inbounds: unknown[] = [];
+  const httpClients: unknown[] = [];
+  const outbounds: unknown[] = [];
+  const experimental: Record<string, unknown> = {};
+
+  const dnsProps: Record<string, unknown> = {};
+  const dnsServers: unknown[] = [];
+  const dnsRules: unknown[] = [];
+
+  const routeProps: Record<string, unknown> = {};
+  const routeRules: unknown[] = [];
+  const routeRuleSet: unknown[] = [];
 
   for (const file of fileNames) {
     const raw = readFileSync(join(modulesDir, file), "utf-8");
-    const mod: SingBoxTemplate = JSON.parse(raw);
+    const mod: Record<string, any> = JSON.parse(raw);
 
-    if (mod.inbounds) {
-      result.inbounds!.push(...mod.inbounds);
-    }
-    if (mod.dns) {
-      if (mod.dns.strategy) result.dns!.strategy = mod.dns.strategy;
-      if (mod.dns.optimistic !== undefined) result.dns!.optimistic = mod.dns.optimistic;
-      if (mod.dns.final) result.dns!.final = mod.dns.final;
-      if (mod.dns.servers) result.dns!.servers!.push(...mod.dns.servers);
-      if (mod.dns.rules) result.dns!.rules!.push(...mod.dns.rules);
-    }
-    if (mod.route) {
-      if (mod.route.auto_detect_interface !== undefined) {
-        result.route!.auto_detect_interface = mod.route.auto_detect_interface;
+    // 处理顶层字段
+    for (const [key, value] of Object.entries(mod)) {
+      if (value === undefined) continue;
+
+      if (key === "inbounds" && Array.isArray(value)) {
+        inbounds.push(...value);
+      } else if (key === "http_clients" && Array.isArray(value)) {
+        httpClients.push(...value);
+      } else if (key === "outbounds" && Array.isArray(value)) {
+        outbounds.push(...value);
+      } else if (key === "experimental" && typeof value === "object" && value !== null) {
+        Object.assign(experimental, value);
+      } else if (key === "dns" && typeof value === "object" && value !== null) {
+        for (const [dKey, dVal] of Object.entries(value)) {
+          if (dVal === undefined) continue;
+          if (dKey === "servers" && Array.isArray(dVal)) {
+            dnsServers.push(...dVal);
+          } else if (dKey === "rules" && Array.isArray(dVal)) {
+            dnsRules.push(...dVal);
+          } else {
+            dnsProps[dKey] = dVal;
+          }
+        }
+      } else if (key === "route" && typeof value === "object" && value !== null) {
+        for (const [rKey, rVal] of Object.entries(value)) {
+          if (rVal === undefined) continue;
+          if (rKey === "rules" && Array.isArray(rVal)) {
+            routeRules.push(...rVal);
+          } else if (rKey === "rule_set" && Array.isArray(rVal)) {
+            routeRuleSet.push(...rVal);
+          } else {
+            routeProps[rKey] = rVal;
+          }
+        }
+      } else {
+        // 其余任意顶层字段（如 log, ntp 等）保留
+        topLevel[key] = value;
       }
-      if (mod.route.final) result.route!.final = mod.route.final;
-      if (mod.route.default_domain_resolver !== undefined) {
-        result.route!.default_domain_resolver = mod.route.default_domain_resolver;
-      }
-      if (mod.route.default_http_client) {
-        result.route!.default_http_client = mod.route.default_http_client;
-      }
-      if (mod.route.rules) result.route!.rules!.push(...mod.route.rules);
-      if (mod.route.rule_set) result.route!.rule_set!.push(...mod.route.rule_set);
-    }
-    if (mod.http_clients) {
-      result.http_clients!.push(...mod.http_clients);
-    }
-    if (mod.outbounds) {
-      result.outbounds!.push(...mod.outbounds);
-    }
-    if (mod.experimental) {
-      result.experimental = { ...result.experimental, ...mod.experimental };
     }
   }
 
-  // 严格保持底模预期的顶层与嵌套字段顺序
-  const output: SingBoxTemplate = {
-    inbounds: result.inbounds,
-    dns: result.dns,
-    route: {
-      auto_detect_interface: result.route!.auto_detect_interface,
-      rules: result.route!.rules,
-      final: result.route!.final,
-      default_domain_resolver: result.route!.default_domain_resolver,
-      default_http_client: result.route!.default_http_client,
-      rule_set: result.route!.rule_set
-    },
-    http_clients: result.http_clients,
-    outbounds: result.outbounds,
-    experimental: result.experimental
+  // 组装 DNS 对象（遵循标准字段次序，保留未列出的任意合法字段）
+  const finalDns: Record<string, unknown> = {};
+  if ("strategy" in dnsProps) finalDns.strategy = dnsProps.strategy;
+  if ("optimistic" in dnsProps) finalDns.optimistic = dnsProps.optimistic;
+  finalDns.servers = dnsServers;
+  finalDns.rules = dnsRules;
+  if ("final" in dnsProps) finalDns.final = dnsProps.final;
+  for (const [k, v] of Object.entries(dnsProps)) {
+    if (!(k in finalDns)) {
+      finalDns[k] = v;
+    }
+  }
+
+  // 组装 Route 对象（遵循标准字段次序，保留未列出的任意合法字段）
+  const finalRoute: Record<string, unknown> = {};
+  if ("auto_detect_interface" in routeProps) finalRoute.auto_detect_interface = routeProps.auto_detect_interface;
+  finalRoute.rules = routeRules;
+  if ("final" in routeProps) finalRoute.final = routeProps.final;
+  if ("default_domain_resolver" in routeProps) finalRoute.default_domain_resolver = routeProps.default_domain_resolver;
+  if ("default_http_client" in routeProps) finalRoute.default_http_client = routeProps.default_http_client;
+  finalRoute.rule_set = routeRuleSet;
+  for (const [k, v] of Object.entries(routeProps)) {
+    if (!(k in finalRoute)) {
+      finalRoute[k] = v;
+    }
+  }
+
+  // 组装顶层输出对象（标准键前置，其余未列出的顶层键保留在末尾）
+  const output: Record<string, unknown> = {
+    inbounds,
+    dns: finalDns,
+    route: finalRoute,
+    http_clients: httpClients,
+    outbounds,
+    experimental,
+    ...topLevel
   };
 
   let json = JSON.stringify(output, null, 2);

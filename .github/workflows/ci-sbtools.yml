@@ -10,6 +10,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "config/sing-box/template.json"
+      - "config/sing-box/modules/**"
+      - "scripts/template-build.ts"
+      - "scripts/template-build.test.ts"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -52,6 +55,15 @@ jobs:
             target
           key: ci-sbtools-${{ hashFiles('Cargo.lock') }}
           restore-keys: ci-sbtools-
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: verify template modules consistency
+        run: |
+          bun scripts/template-build.ts --check
+          bun test scripts/template-build.test.ts
+        working-directory: .
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
