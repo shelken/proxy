@@ -502,14 +502,18 @@ describe("YAML 规则 AST 解析与多端方言发射", () => {
     expect(plain.text).toContain("IP-ASN,396982,no-resolve");
   });
 
-  test("readRuleLines 正确识别外部 classical payload YAML 与内部 rules YAML", () => {
-    const payloadYaml = "payload:\n  - 'DOMAIN-SUFFIX,example.com'\n";
+  test("readRuleLines 正确识别带头部注释与空行的 classical payload 与 rules YAML", () => {
+    const payloadYaml = "# upstream source comment\n\n# another comment\npayload:\n  - 'DOMAIN-SUFFIX,example.com'\n";
     const linesFromPayload = readRuleLines(payloadYaml, "external.yaml");
     expect(linesFromPayload).toContain("DOMAIN-SUFFIX,example.com");
 
-    const customYaml = "rules:\n  - domain_suffix:\n      - internal.com\n";
+    const customYaml = "# custom rule comment\n\nrules:\n  - domain_suffix:\n      - internal.com\n";
     const linesFromCustom = readRuleLines(customYaml, "custom.yaml");
     expect(linesFromCustom).toContain("DOMAIN-SUFFIX,internal.com");
+
+    // stdin 且带头部注释的 rules 识别
+    const linesFromStdin = readRuleLines(customYaml);
+    expect(linesFromStdin).toContain("DOMAIN-SUFFIX,internal.com");
   });
 
   test("PORT-RANGE 与 DEST-PORT 范围别名在三端均能正确映射", () => {

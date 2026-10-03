@@ -312,14 +312,17 @@ export function parseYamlToRuleLines(yamlText: string): string[] {
 }
 
 export function readRuleLines(content: string, sourcePath?: string): string[] {
-  const trimmed = content.trimStart();
-  // 兼容 external classical payload YAML（payload: 开头），不论扩展名
-  if (trimmed.startsWith("payload:")) {
+  const firstNonComment = content
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith("#"));
+
+  if (firstNonComment === "payload:") {
     return normalizeRuleLines(content);
   }
   const isYaml = sourcePath
     ? sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml")
-    : trimmed.startsWith("rules:");
+    : (firstNonComment?.startsWith("rules:") ?? false);
   return isYaml ? parseYamlToRuleLines(content) : normalizeRuleLines(content);
 }
 
