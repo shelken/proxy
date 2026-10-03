@@ -59,12 +59,7 @@ rules:
 
 可用字段见 `scripts/rules-compile.ts` 的 `FIELD_ORDER`，另有 `ip_asn`（仅
 mihomo / Loon 端有效，sing-box 1.12 起移除行内 ASN 匹配）与 `logical`。
-未知字段构建期直接报错，不静默丢弃；字段值只能是字符串或数字（含其数组），
-`null` / 映射对象 / 嵌套数组一律报错。
-
-`logical` 叶节点按字段字典书写，同字段多值等价 OR、多字段等价 AND，与
-sing-box headless 语义一致；`network` 在 mihomo 端输出 `NETWORK`，在
-Loon / Surge 端输出 `PROTOCOL`。
+未知字段构建期直接报错，不静默丢弃。
 
 ## 二进制编译产物
 

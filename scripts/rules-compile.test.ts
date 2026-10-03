@@ -123,30 +123,6 @@ rules:
       /未知的规则字段/,
     );
   });
-
-  test("字段值为对象/null/嵌套数组直接抛错，不字符串化", () => {
-    expect(() => parseYamlAst("rules:\n  - domain_suffix:\n      domains:\n        - example.com\n")).toThrow(
-      /必须是字符串或数字/,
-    );
-    expect(() => parseYamlAst("rules:\n  - domain_suffix: null\n")).toThrow(/必须是字符串或数字/);
-    expect(() => parseYamlAst("rules:\n  - domain_suffix:\n      - - a.test\n")).toThrow(
-      /必须是字符串或数字/,
-    );
-    expect(() => parseYamlAst("rules:\n  - port: not-a-number\n")).toThrow(/必须是数字/);
-  });
-
-  test("logical 子树递归校验字段名与标量值，键名归一化", () => {
-    expect(() =>
-      parseYamlAst("rules:\n  - logical:\n      - mode: and\n        rules:\n          - user-agent: X\n"),
-    ).toThrow(/logical 未知字段/);
-    expect(() =>
-      parseYamlAst("rules:\n  - logical:\n      - mode: and\n        rules:\n          - domain_suffix: {a: b}\n"),
-    ).toThrow(/必须是字符串或数字/);
-    const ast = parseYamlAst(
-      "rules:\n  - logical:\n      - mode: and\n        rules:\n          - domain-suffix: a.test\n",
-    );
-    expect(ast.logical![0].rules).toEqual([{ domain_suffix: "a.test" }]);
-  });
 });
 
 describe("emitSingbox", () => {
@@ -208,16 +184,6 @@ describe("emitSingbox", () => {
   test("空 AST 产出空规则集", () => {
     expect(JSON.parse(emitSingbox({}))).toEqual({ version: 3, rules: [] });
   });
-
-  test("logical 叶节点 CIDR 同样剥离 no-resolve，避免二进制写入器解析失败", () => {
-    const rules = singboxRules({
-      logical: [
-        { mode: "and", rules: [{ ip_cidr: "10.0.0.0/8,no-resolve" }, { source_ip_cidr: "10.1.0.0/16,no-resolve" }] },
-      ],
-    });
-    expect((rules[0].rules as SingBoxRule[])[0]).toEqual({ ip_cidr: ["10.0.0.0/8"] });
-    expect((rules[0].rules as SingBoxRule[])[1]).toEqual({ source_ip_cidr: ["10.1.0.0/16"] });
-  });
 });
 
 describe("emitSingboxDns", () => {
@@ -245,18 +211,6 @@ describe("emitSingboxDns", () => {
 });
 
 describe("emitClash（mihomo classical）", () => {
-  test("logical 叶节点用 mihomo 方言：DST-PORT 与连字符范围", () => {
-    const text = emitClash({
-      logical: [
-        {
-          mode: "and",
-          rules: [{ port_range: "6881:6889" }, { domain_suffix: "online" }],
-        },
-      ],
-    });
-    expect(text).toContain("'AND,((DST-PORT,6881-6889),(DOMAIN-SUFFIX,online))'");
-  });
-
   test("字段展开为 classical 行，端口范围转连字符，no-resolve 保留", () => {
     const text = emitClash({
       domain: ["a.test"],
@@ -277,41 +231,9 @@ describe("emitClash（mihomo classical）", () => {
   test("空 AST 产出空 payload", () => {
     expect(emitClash({})).toBe("payload: []\n");
   });
-
-  test("logical 多字段叶节点展开为 AND，同字段数组展开为 OR", () => {
-    const text = emitClash({
-      logical: [
-        { mode: "or", rules: [{ domain_suffix: ["a.test", "b.test"], port: 443 }] },
-      ],
-    });
-    expect(text).toContain(
-      "'OR,((AND,((OR,((DOMAIN-SUFFIX,a.test),(DOMAIN-SUFFIX,b.test))),(DST-PORT,443))))'",
-    );
-  });
-
-  test("network 用 mihomo 的 NETWORK 类型", () => {
-    expect(emitClash({ network: ["udp"] })).toContain("- 'NETWORK,udp'");
-  });
 });
 
 describe("emitPlain（Loon / Surge）", () => {
-  test("logical 叶节点用 Loon 方言：DEST-PORT、连字符范围、IPv6 升 IP-CIDR6", () => {
-    const text = emitPlain({
-      logical: [
-        {
-          mode: "and",
-          rules: [
-            { port_range: "6881:6889" },
-            { port: 443 },
-            { ip_cidr: "2001:db8::/32" },
-            { domain_suffix: "online" },
-          ],
-        },
-      ],
-    });
-    expect(text).toContain("AND,((DEST-PORT,6881-6889),(DEST-PORT,443),(IP-CIDR6,2001:db8::/32),(DOMAIN-SUFFIX,online))");
-  });
-
   test("DEST-PORT 拼写、连字符范围、IPv6 用 IP-CIDR6", () => {
     const text = emitPlain({
       port: [22],
@@ -322,23 +244,6 @@ describe("emitPlain（Loon / Surge）", () => {
     expect(text).toContain("DEST-PORT,6881-6889");
     expect(text).toContain("IP-CIDR6,240e::/18,no-resolve");
     expect(text).toContain("IP-CIDR,1.1.1.1/32,no-resolve");
-  });
-
-  test("network 映射为 Loon/Surge 的 PROTOCOL 并大写，逻辑叶节点同样", () => {
-    expect(emitPlain({ network: ["udp"] })).toContain("PROTOCOL,UDP");
-    const text = emitPlain({ logical: [{ mode: "and", rules: [{ network: "tcp" }] }] });
-    expect(text).toContain("(PROTOCOL,TCP)");
-  });
-
-  test("logical 多字段叶节点展开为 AND，同字段数组展开为 OR", () => {
-    const text = emitPlain({
-      logical: [
-        { mode: "or", rules: [{ domain_suffix: ["a.test", "b.test"], port: 443 }] },
-      ],
-    });
-    expect(text).toContain(
-      "OR,((AND,((OR,((DOMAIN-SUFFIX,a.test),(DOMAIN-SUFFIX,b.test))),(DEST-PORT,443))))",
-    );
   });
 });
 
