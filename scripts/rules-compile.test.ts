@@ -177,7 +177,14 @@ describe("convert --client singbox", () => {
 `;
     const { ast } = parseSourceToAst(yaml, "custom.yaml");
     const rules = JSON.parse(emitSingbox(ast).text).rules as SingBoxRule[];
-    expect(rules[0]).toEqual({ domain: ["a.test"], invert: false });
+    expect(rules[0]).toEqual({ domain: ["a.test"] });
+  });
+
+  test("纯 GEOIP 输入中无法表达的条目仍保留在 skipped 诊断里", () => {
+    const emission = emitSingbox(normalizeRuleLines(["GEOIP,cn,DIRECT", "USER-AGENT,SomeApp*", "IP-ASN,396982"].join("\n")));
+    const payload = JSON.parse(emission.text) as { kind?: string };
+    expect(payload.kind).toBe("external_rule_set");
+    expect(emission.skipped).toHaveLength(2);
   });
 
   test("结构化逻辑规则（AND 内含 OR）完整保留在 singbox 规则树中", () => {

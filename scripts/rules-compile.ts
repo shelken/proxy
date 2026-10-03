@@ -407,6 +407,12 @@ export function emitSingbox(input: EmitterInput): Emission {
     FIELD_ORDER.some((f) => (ast[f as keyof RuleAST] as unknown[])?.length) ||
     (ast.logical?.length ?? 0) > 0;
 
+  const rules: SingBoxRule[] = [];
+  const finalSkipped = [...skipped];
+  if (ast.ip_asn?.length) {
+    for (const a of ast.ip_asn) finalSkipped.push(`IP-ASN,${a}`);
+  }
+
   if (specialRefs.length > 0 && !hasContentRules) {
     return {
       text: `${JSON.stringify({
@@ -419,15 +425,9 @@ export function emitSingbox(input: EmitterInput): Emission {
           url: specialRefToUrl(ref),
         })),
       }, null, 2)}\n`,
-      skipped: [],
+      skipped: finalSkipped,
       specialRefs,
     };
-  }
-
-  const rules: SingBoxRule[] = [];
-  const finalSkipped = [...skipped];
-  if (ast.ip_asn?.length) {
-    for (const a of ast.ip_asn) finalSkipped.push(`IP-ASN,${a}`);
   }
 
   for (const field of FIELD_ORDER) {
@@ -444,8 +444,13 @@ export function emitSingbox(input: EmitterInput): Emission {
     if ("mode" in node && Array.isArray(node.rules)) {
       if (node.mode === "not" && node.rules.length === 1) {
         const sub = normalizeSingboxLogical(node.rules[0] as Record<string, unknown>);
-        const currentInvert = Boolean(sub.invert);
-        return { ...sub, invert: !currentInvert };
+        const nextInvert = !sub.invert;
+        if (nextInvert) {
+          return { ...sub, invert: true };
+        }
+        const copy = { ...sub };
+        delete copy.invert;
+        return copy;
       }
       return {
         type: "logical",
