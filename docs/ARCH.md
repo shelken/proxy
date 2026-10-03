@@ -10,7 +10,7 @@ proxy/
 ├── scripts/
 │   └── sbtools-rs/       # sbtools 客户端编码 + 服务端装配（Rust 单二进制）
 ├── config/
-│   ├── rules/            # 分流规则源 (自定义 .list 与上游 index.yaml)
+│   ├── rules/            # 分流规则源 (自定义 *.yaml 与 geosite:/geoip: 外部引用 index.yaml)
 │   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sbtools) 与用户指南
