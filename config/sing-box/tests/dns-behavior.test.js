@@ -98,11 +98,12 @@ async function withDNS(run) {
       return nodes.filter(node => regex.test(node.tag)).map(node => node.tag);
     }))];
     group.url = health.url.href;
+    const dnsTags = [...new Set((dns.rules ?? []).flatMap(r => Array.isArray(r.rule_set) ? r.rule_set : (r.rule_set ? [r.rule_set] : [])))];
     const config = {
       log: { level: "debug" }, dns,
       inbounds: [{ type: "direct", tag: "dns-test", listen: "127.0.0.1", listen_port: 15353 }],
       outbounds: [{ type: "direct", tag: "direct" }, ...nodes, group],
-      route: { default_domain_resolver: "dns-local-system", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: ["Lan-dns", "MyDirect-dns", "ChinaMax-dns"].map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })) },
+      route: { default_domain_resolver: "dns-local-system", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })) },
       experimental: { cache_file: { ...template.experimental.cache_file, path: "cache.db" }, clash_api: { external_controller: "127.0.0.1:19090" } },
     };
     const startCore = async () => {

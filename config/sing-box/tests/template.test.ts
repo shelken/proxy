@@ -163,6 +163,7 @@ describe("template.json structural verification", () => {
     // 与排除段互斥（尸检 001: TUN 落入排除段 → 劫持 DNS 包绕过 TUN → 系统解析器黑洞）
     for (const cidr of template.inbounds.find((i) => i.type === "tun")
       .route_exclude_address) {
+      if (cidr.includes(":")) continue;
       const [s, e] = rangeOf(cidr);
       expect(tunEnd < s || tunStart > e).toBe(true);
     }
@@ -203,5 +204,35 @@ describe("template.json structural verification", () => {
     for (const group of groups) {
       expect(group.interrupt_exist_connections).toBe(true);
     }
+  });
+
+  test("supports dual-stack IPv6 (tun address, exclude link-local, fakeip inet6_range)", () => {
+    const tun = template.inbounds.find((i) => i.type === "tun");
+    expect(tun.address.some((addr: string) => addr.includes(":"))).toBe(true);
+    expect(tun.route_exclude_address).toContain("fe80::/10");
+
+    const fakeip = (template.dns?.servers ?? []).find((s) => s.type === "fakeip");
+    expect(fakeip?.inet6_range).toBe("fc00::/18");
+  });
+
+  test("routes bittorrent and download tools directly without proxy", () => {
+    const sniffer = template.route?.rules?.[0]?.sniffer ?? [];
+    expect(sniffer).toContain("bittorrent");
+
+    const rules = template.route?.rules ?? [];
+    const btRule = rules.find((r) => r.protocol === "bittorrent");
+    expect(btRule?.outbound).toBe("direct");
+
+    const dlRule = rules.find((r) => r.rule_set?.includes("Download"));
+    expect(dlRule?.outbound).toBe("direct");
+
+    // Download-dns 应在 FakeIP 之前由直连 DNS 解析真实 IP
+    const dnsRules = template.dns?.rules ?? [];
+    const dlDnsRule = dnsRules.find((r) => r.rule_set?.includes("Download-dns"));
+    expect(dlDnsRule?.server).toBe("dns-direct-cn");
+
+    const fakeipIndex = dnsRules.findIndex((r) => r.server === "dns-fakeip");
+    const dlDnsIndex = dnsRules.indexOf(dlDnsRule);
+    expect(dlDnsIndex).toBeLessThan(fakeipIndex);
   });
 });
