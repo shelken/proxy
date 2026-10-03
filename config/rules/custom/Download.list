@@ -1,0 +1,27 @@
+# 下载软件进程（覆盖 macOS / Linux / Windows 常见客户端）
+PROCESS-NAME,aria2c
+PROCESS-NAME,qbittorrent
+PROCESS-NAME,qbittorrent-nox
+PROCESS-NAME,Transmission
+PROCESS-NAME,transmission-qt
+PROCESS-NAME,transmission-daemon
+PROCESS-NAME,BitComet
+PROCESS-NAME,Thunder
+PROCESS-NAME,Xunlei
+PROCESS-NAME,deluge
+PROCESS-NAME,deluged
+PROCESS-NAME,Folx
+PROCESS-NAME,fdm
+PROCESS-NAME,amule
+PROCESS-NAME,emule
+
+# 特征端口（eD2k TCP 4662 / UDP 4672，常用 BT 端口 51413）
+DST-PORT,4662
+DST-PORT,4672
+DST-PORT,51413
+
+# Tracker 与 Torrent 域名关键词（防止 Fake-IP 污染 Peer 通信）
+DOMAIN-KEYWORD,tracker
+DOMAIN-KEYWORD,announce
+DOMAIN-KEYWORD,torrent
+DOMAIN-KEYWORD,peer_id

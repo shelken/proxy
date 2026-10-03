@@ -7,7 +7,8 @@
           "http",
           "tls",
           "quic",
-          "dns"
+          "dns",
+          "bittorrent"
         ]
       },
       {
@@ -40,6 +41,25 @@
           80
         ],
         "action": "reject"
+      },
+      {
+        "protocol": "bittorrent",
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "port_range": [
+          "6881:6889"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Download"
+        ],
+        "action": "route",
+        "outbound": "direct"
       },
       {
         "rule_set": [

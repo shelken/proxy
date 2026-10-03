@@ -4,20 +4,22 @@
       "type": "tun",
       "tag": "tun-in",
       "address": [
-        "198.51.100.1/30"
+        "198.51.100.1/30",
+        "fdfe:dcba:9876::1/126"
       ],
       "auto_route": true,
       "dns_mode": "hijack",
       "route_exclude_address": [
         "10.0.0.0/8",
         "172.16.0.0/12",
-        "192.168.0.0/16"
+        "192.168.0.0/16",
+        "fe80::/10"
       ]
     },
     {
       "type": "mixed",
       "tag": "mixed-in",
-      "listen": "127.0.0.1",
+      "listen": "::",
       "listen_port": 2080
     }
   ],
@@ -47,7 +49,8 @@
       {
         "type": "fakeip",
         "tag": "dns-fakeip",
-        "inet4_range": "198.18.0.0/15"
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fc00::/18"
       }
     ],
     "rules": [
@@ -95,7 +98,8 @@
       },
       {
         "rule_set": [
-          "ChinaMax-dns"
+          "ChinaMax-dns",
+          "Download-dns"
         ],
         "server": "dns-direct-cn"
       },
@@ -118,7 +122,8 @@
           "http",
           "tls",
           "quic",
-          "dns"
+          "dns",
+          "bittorrent"
         ]
       },
       {
@@ -151,6 +156,25 @@
           80
         ],
         "action": "reject"
+      },
+      {
+        "protocol": "bittorrent",
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "port_range": [
+          "6881:6889"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Download"
+        ],
+        "action": "route",
+        "outbound": "direct"
       },
       {
         "rule_set": [
@@ -349,6 +373,13 @@
       },
       {
         "type": "remote",
+        "tag": "Download",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
         "tag": "Facebook",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Facebook.srs",
@@ -527,6 +558,13 @@
         "tag": "ChinaMax-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Download-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download-dns.srs",
         "update_interval": "1d"
       },
       {

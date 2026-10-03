@@ -52,6 +52,13 @@
       },
       {
         "type": "remote",
+        "tag": "Download",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
         "tag": "Facebook",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Facebook.srs",
@@ -230,6 +237,13 @@
         "tag": "ChinaMax-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Download-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download-dns.srs",
         "update_interval": "1d"
       },
       {

@@ -4,20 +4,22 @@
       "type": "tun",
       "tag": "tun-in",
       "address": [
-        "198.51.100.1/30"
+        "198.51.100.1/30",
+        "fdfe:dcba:9876::1/126"
       ],
       "auto_route": true,
       "dns_mode": "hijack",
       "route_exclude_address": [
         "10.0.0.0/8",
         "172.16.0.0/12",
-        "192.168.0.0/16"
+        "192.168.0.0/16",
+        "fe80::/10"
       ]
     },
     {
       "type": "mixed",
       "tag": "mixed-in",
-      "listen": "127.0.0.1",
+      "listen": "::",
       "listen_port": 2080
     }
   ]
