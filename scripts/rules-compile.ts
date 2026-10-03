@@ -197,10 +197,10 @@ export function parseYamlAst(content: string): RuleAST {
       const key = rawKey.replace(/-/g, "_");
       if (key === "logical") {
         for (const l of Array.isArray(rawValues) ? rawValues : [rawValues]) {
-          if (typeof l !== "object" || l === null || !("mode" in l) || !Array.isArray(l.rules)) {
-            throw new Error("logical 条目必须包含 mode 与 rules 数组");
+          if (l === null || typeof l !== "object" || Array.isArray(l)) {
+            throw new Error(`logical 条目必须是对象: ${JSON.stringify(l)}`);
           }
-          (ast.logical ??= []).push(l as Record<string, unknown>);
+          (ast.logical ??= []).push(normalizeLogical(l as Record<string, unknown>));
         }
         continue;
       }
@@ -209,14 +209,56 @@ export function parseYamlAst(content: string): RuleAST {
           `未知的规则字段: ${rawKey}（可用: ${[...FIELD_ORDER, "ip_asn", "logical"].join(", ")}）`,
         );
       }
-      for (const val of Array.isArray(rawValues) ? rawValues : [rawValues]) {
-        if (key === "port" || key === "source_port") add(key, Number(val));
-        else if (key === "port_range" || key === "source_port_range") add(key, String(val).replace("-", ":"));
-        else add(key, String(val));
+      for (const val of flatScalars(rawKey, rawValues)) {
+        if (key === "port" || key === "source_port") {
+          const num = Number(val);
+          if (!Number.isFinite(num)) throw new Error(`字段 ${rawKey} 必须是数字: ${JSON.stringify(val)}`);
+          add(key, num);
+        } else if (key === "port_range" || key === "source_port_range") {
+          add(key, String(val).replace("-", ":"));
+        } else {
+          add(key, String(val));
+        }
       }
     }
   }
   return ast;
+}
+
+/** 校验字段值只能是标量（或标量数组）；null、映射对象、嵌套数组一律报错。 */
+function flatScalars(field: string, raw: unknown): unknown[] {
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const one of list) {
+    if (typeof one !== "string" && typeof one !== "number") {
+      throw new Error(`字段 ${field} 的值必须是字符串或数字: ${JSON.stringify(one)}`);
+    }
+  }
+  return list;
+}
+
+/** 递归校验 logical 子树并规范化键名：键名统一下划线，字段名与标量值必须合法。 */
+function normalizeLogical(node: Record<string, unknown>): Record<string, unknown> {
+  if (typeof node.mode !== "string" || !Array.isArray(node.rules)) {
+    throw new Error("logical 条目必须包含 mode 与 rules 数组");
+  }
+  const rules = (node.rules as unknown[]).map((sub) => {
+    if (sub === null || typeof sub !== "object" || Array.isArray(sub)) {
+      throw new Error(`logical 子规则必须是对象: ${JSON.stringify(sub)}`);
+    }
+    const child = sub as Record<string, unknown>;
+    if ("mode" in child) return normalizeLogical(child);
+    const leaf: Record<string, unknown> = {};
+    for (const [rawKey, rawVal] of Object.entries(child)) {
+      const k = rawKey.replace(/-/g, "_");
+      if (!FIELD_ORDER.includes(k as keyof RuleAST) && k !== "ip_asn") {
+        throw new Error(`logical 未知字段: ${rawKey}`);
+      }
+      const vals = flatScalars(rawKey, rawVal);
+      leaf[k] = Array.isArray(rawVal) ? vals : vals[0];
+    }
+    return leaf;
+  });
+  return { mode: node.mode, rules };
 }
 
 /** logical 叶字段 → 单行方言类型。AST 字段名 → [mihomo 类型, Loon 类型]。 */
@@ -232,22 +274,36 @@ const LOGICAL_LEAF_TYPE: Record<string, [string, string]> = {
   source_port: ["SRC-PORT", "SRC-PORT"],
   source_port_range: ["SRC-PORT", "SRC-PORT"],
   process_name: ["PROCESS-NAME", "PROCESS-NAME"],
-  network: ["NETWORK", "NETWORK"],
+  network: ["NETWORK", "PROTOCOL"],
 };
+
+/** 叶字段在单行方言下的取值：端口范围转连字符、IPv6 升 IP-CIDR6、协议转大写。 */
+function leafTerm(key: string, value: unknown, client: "clash" | "plain"): string {
+  const fallback = key.toUpperCase().replace(/_/g, "-");
+  const [clashType, plainType] = LOGICAL_LEAF_TYPE[key] ?? [fallback, fallback];
+  let type = client === "plain" ? plainType : clashType;
+  if (key === "ip_cidr" && client === "plain" && String(value).includes(":")) type = "IP-CIDR6";
+  let val = String(value);
+  if (key === "port_range" || key === "source_port_range") val = val.replace(":", "-");
+  else if (key === "network" && client === "plain") val = val.toUpperCase();
+  return `(${type},${val})`;
+}
+
+/** 逻辑叶节点展开：同字段多值 → OR，多字段 → AND，与 sing-box headless 语义一致。 */
+function formatLeaf(node: Record<string, unknown>, client: "clash" | "plain"): string {
+  const fieldTerms = Object.entries(node).map(([k, v]) => {
+    const items = (Array.isArray(v) ? v : [v]).map((one) => leafTerm(k, one, client));
+    return items.length > 1 ? `(OR,(${items.join(",")}))` : items[0];
+  });
+  return fieldTerms.length > 1 ? `(AND,(${fieldTerms.join(",")}))` : fieldTerms[0];
+}
 
 /** 逻辑规则树 → Mihomo/Loon 的单行文本形态（叶节点应用各自方言）。 */
 export function formatLogicalRule(r: Record<string, unknown>, client: "clash" | "plain" = "clash"): string {
   const mode = String(r.mode ?? "and").toUpperCase();
-  const children = ((r.rules as Record<string, unknown>[]) ?? []).map((sub) => {
-    if ("mode" in sub) return `(${formatLogicalRule(sub, client)})`;
-    const [k, v] = Object.entries(sub)[0];
-    const fallback = [k.toUpperCase().replace(/_/g, "-"), k.toUpperCase().replace(/_/g, "-")] as [string, string];
-    let type = (LOGICAL_LEAF_TYPE[k] ?? fallback)[client === "plain" ? 1 : 0];
-    if (k === "ip_cidr" && client === "plain" && String(v).includes(":")) type = "IP-CIDR6";
-    // AST 中端口范围统一冒号，单行方言用连字符
-    const val = k === "port_range" || k === "source_port_range" ? String(v).replace(":", "-") : String(v);
-    return `(${type},${val})`;
-  });
+  const children = ((r.rules as Record<string, unknown>[]) ?? []).map((sub) =>
+    "mode" in sub ? `(${formatLogicalRule(sub, client)})` : formatLeaf(sub, client),
+  );
   return `${mode},(${children.join(",")})`;
 }
 
@@ -272,7 +328,11 @@ function normalizeSingboxLogical(node: Record<string, unknown>): SingBoxRule {
   }
   const res: SingBoxRule = {};
   for (const [k, v] of Object.entries(node)) {
-    res[k] = (Array.isArray(v) ? v : [v]) as JsonValue;
+    // sing-box 规则集无 no-resolve 概念，逻辑叶节点的 CIDR 同样要剥离
+    const values = (Array.isArray(v) ? v : [v]).map((one) =>
+      k === "ip_cidr" || k === "source_ip_cidr" ? String(one).split(",")[0].trim() : one,
+    );
+    res[k] = values as JsonValue;
   }
   return res;
 }
@@ -352,7 +412,7 @@ export function emitPlain(ast: RuleAST): string {
   for (const r of ast.port_range ?? []) lines.push(`DEST-PORT,${r.replace(":", "-")}`);
   for (const p of ast.source_port ?? []) lines.push(`SRC-PORT,${p}`);
   for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
-  for (const n of ast.network ?? []) lines.push(`NETWORK,${n}`);
+  for (const n of ast.network ?? []) lines.push(`PROTOCOL,${String(n).toUpperCase()}`);
   for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l, "plain"));
   return `${lines.join("\n")}\n`;
 }
