@@ -1,0 +1,185 @@
+{
+  "route": {
+    "rules": [
+      {
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic",
+          "dns"
+        ]
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "clash_mode": "direct",
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "clash_mode": "global",
+        "action": "route",
+        "outbound": "proxy"
+      },
+      {
+        "ip_is_private": true,
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "MyReject",
+          "Privacy"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
+          "Gemini"
+        ],
+        "action": "route",
+        "outbound": "gemini"
+      },
+      {
+        "rule_set": [
+          "OpenAI"
+        ],
+        "action": "route",
+        "outbound": "openai"
+      },
+      {
+        "rule_set": [
+          "Anthropic"
+        ],
+        "action": "route",
+        "outbound": "anthropic"
+      },
+      {
+        "rule_set": [
+          "Apple-AI"
+        ],
+        "action": "route",
+        "outbound": "appleai"
+      },
+      {
+        "rule_set": [
+          "opencode"
+        ],
+        "action": "route",
+        "outbound": "opencode"
+      },
+      {
+        "rule_set": [
+          "zai"
+        ],
+        "action": "route",
+        "outbound": "zai"
+      },
+      {
+        "rule_set": [
+          "Microsoft"
+        ],
+        "action": "route",
+        "outbound": "microsoft"
+      },
+      {
+        "rule_set": [
+          "PayPal"
+        ],
+        "action": "route",
+        "outbound": "paypal"
+      },
+      {
+        "rule_set": [
+          "grok"
+        ],
+        "action": "route",
+        "outbound": "grok"
+      },
+      {
+        "rule_set": [
+          "1024proxy"
+        ],
+        "action": "route",
+        "outbound": "1024proxy"
+      },
+      {
+        "rule_set": [
+          "Apple"
+        ],
+        "action": "route",
+        "outbound": "apple"
+      },
+      {
+        "rule_set": [
+          "dev"
+        ],
+        "action": "route",
+        "outbound": "dev"
+      },
+      {
+        "rule_set": [
+          "ptcg"
+        ],
+        "action": "route",
+        "outbound": "ptcg"
+      },
+      {
+        "rule_set": [
+          "Japan"
+        ],
+        "action": "route",
+        "outbound": "japansite"
+      },
+      {
+        "rule_set": [
+          "Adult"
+        ],
+        "action": "route",
+        "outbound": "adultnsfw"
+      },
+      {
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Facebook",
+          "Instagram",
+          "MyProxy",
+          "Spotify",
+          "Telegram",
+          "TikTok",
+          "Twitter",
+          "YouTube"
+        ],
+        "action": "route",
+        "outbound": "proxy"
+      }
+    ]
+  }
+}

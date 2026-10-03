@@ -1,0 +1,10 @@
+{
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy",
+    "default_domain_resolver": {
+      "server": "dns-local-system"
+    },
+    "default_http_client": "rule-set-dl"
+  }
+}
