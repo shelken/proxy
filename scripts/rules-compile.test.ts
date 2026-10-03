@@ -145,8 +145,10 @@ describe("convert --client singbox", () => {
     expect(payload.kind).toBe("external_rule_set");
     expect(payload.references[0].tag).toBe("geoip-cn");
     expect(payload.references[0].url).toContain("sing-geoip");
-  });
 
+    const fromAst = JSON.parse(emitSingbox(parseSourceToAst("GEOIP,cn,DIRECT")).text);
+    expect(fromAst.kind).toBe("external_rule_set");
+  });
   test("空输入产出空的规则列表", () => {
     expect(JSON.parse(emitSingbox([]).text)).toEqual({ version: 3, rules: [] });
   });
@@ -162,6 +164,20 @@ describe("convert --client singbox", () => {
   test("NOT 转成 invert", () => {
     const rules = singboxRules("NOT,(DOMAIN,a.test)");
     expect(rules[0]).toEqual({ domain: ["a.test"], invert: true });
+  });
+
+  test("NOT 嵌套时正确翻转 invert", () => {
+    const yaml = `rules:
+  - logical:
+      - mode: not
+        rules:
+          - mode: not
+            rules:
+              - domain: a.test
+`;
+    const { ast } = parseSourceToAst(yaml, "custom.yaml");
+    const rules = JSON.parse(emitSingbox(ast).text).rules as SingBoxRule[];
+    expect(rules[0]).toEqual({ domain: ["a.test"], invert: false });
   });
 
   test("结构化逻辑规则（AND 内含 OR）完整保留在 singbox 规则树中", () => {

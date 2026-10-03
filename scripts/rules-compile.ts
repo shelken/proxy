@@ -373,10 +373,35 @@ export function parseYamlToRuleLines(yamlText: string): string[] {
 
 // ---------------------------------------------------------------- 各端纯净发射器
 
-export function emitSingbox(input: RuleAST | string[]): Emission {
-  const { ast, specialRefs, skipped } = Array.isArray(input)
-    ? parseSourceToAst(input.join("\n"))
-    : { ast: input, specialRefs: [], skipped: [] };
+export type EmitterInput =
+  | RuleAST
+  | string[]
+  | { ast: RuleAST; specialRefs?: { kind: string; value: string }[]; skipped?: string[] };
+
+export function unpackInput(input: EmitterInput): {
+  ast: RuleAST;
+  specialRefs: { kind: string; value: string }[];
+  skipped: string[];
+} {
+  if (Array.isArray(input)) {
+    return parseSourceToAst(input.join("\n"));
+  }
+  if ("ast" in input && typeof input.ast === "object") {
+    return {
+      ast: input.ast,
+      specialRefs: input.specialRefs ?? [],
+      skipped: input.skipped ?? [],
+    };
+  }
+  return {
+    ast: input as RuleAST,
+    specialRefs: [],
+    skipped: [],
+  };
+}
+
+export function emitSingbox(input: EmitterInput): Emission {
+  const { ast, specialRefs, skipped } = unpackInput(input);
 
   const hasContentRules =
     FIELD_ORDER.some((f) => (ast[f as keyof RuleAST] as unknown[])?.length) ||
@@ -419,7 +444,8 @@ export function emitSingbox(input: RuleAST | string[]): Emission {
     if ("mode" in node && Array.isArray(node.rules)) {
       if (node.mode === "not" && node.rules.length === 1) {
         const sub = normalizeSingboxLogical(node.rules[0] as Record<string, unknown>);
-        return { ...sub, invert: true };
+        const currentInvert = Boolean(sub.invert);
+        return { ...sub, invert: !currentInvert };
       }
       return {
         type: "logical",
@@ -440,10 +466,8 @@ export function emitSingbox(input: RuleAST | string[]): Emission {
   return { text: `${JSON.stringify({ version: 3, rules }, null, 2)}\n`, skipped: finalSkipped, specialRefs };
 }
 
-export function emitSingboxDns(input: RuleAST | string[]): Emission {
-  const { ast, skipped } = Array.isArray(input)
-    ? parseSourceToAst(input.join("\n"))
-    : { ast: input, skipped: [] };
+export function emitSingboxDns(input: EmitterInput): Emission {
+  const { ast, skipped } = unpackInput(input);
 
   const rules: SingBoxRule[] = [];
   for (const field of DNS_RULE_FIELDS) {
@@ -455,10 +479,8 @@ export function emitSingboxDns(input: RuleAST | string[]): Emission {
   return { text: `${JSON.stringify({ version: 3, rules }, null, 2)}\n`, skipped, specialRefs: [] };
 }
 
-export function emitClash(input: RuleAST | string[]): Emission {
-  const { ast, skipped } = Array.isArray(input)
-    ? parseSourceToAst(input.join("\n"))
-    : { ast: input, skipped: [] };
+export function emitClash(input: EmitterInput): Emission {
+  const { ast, skipped, specialRefs } = unpackInput(input);
 
   const payload: string[] = [];
   for (const d of ast.domain_suffix ?? []) payload.push(`DOMAIN-SUFFIX,${d}`);
@@ -480,7 +502,7 @@ export function emitClash(input: RuleAST | string[]): Emission {
   const text = payload.length > 0
     ? `payload:\n` + payload.map((line) => `  - '${line}'`).join("\n") + "\n"
     : "payload: []\n";
-  return { text, skipped, specialRefs: [] };
+  return { text, skipped, specialRefs };
 }
 
 export function plainRuleLine(line: string): string {
@@ -513,13 +535,13 @@ export function plainRuleLine(line: string): string {
   return stripped;
 }
 
-export function emitPlain(input: RuleAST | string[]): Emission {
+export function emitPlain(input: EmitterInput): Emission {
   if (Array.isArray(input)) {
     const lines = input.map(plainRuleLine);
     return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
   }
 
-  const ast = input;
+  const { ast, skipped, specialRefs } = unpackInput(input);
   const lines: string[] = [];
   for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
   for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
@@ -540,10 +562,10 @@ export function emitPlain(input: RuleAST | string[]): Emission {
   for (const s of ast.special ?? []) lines.push(s);
   for (const u of ast.raw_unsupported ?? []) lines.push(u);
 
-  return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
+  return { text: `${lines.join("\n")}\n`, skipped, specialRefs };
 }
 
-export const CLIENT_EMITTERS: Record<Client, (input: RuleAST | string[]) => Emission> = {
+export const CLIENT_EMITTERS: Record<Client, (input: EmitterInput) => Emission> = {
   singbox: emitSingbox,
   clash: emitClash,
   plain: emitPlain,
@@ -727,9 +749,7 @@ export function buildOne(
   );
 
   for (const client of Object.keys(CLIENT_EMITTERS) as Client[]) {
-    const emission = CLIENT_EMITTERS[client](ast);
-    if (specialRefs.length > 0) emission.specialRefs = specialRefs;
-    if (skipped.length > 0) emission.skipped = skipped;
+    const emission = CLIENT_EMITTERS[client]({ ast, specialRefs, skipped });
     const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
     writeText(path, emission.text);
 
@@ -876,11 +896,9 @@ function cmdConvert(args: string[]): number {
   }
 
   const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
-  const { ast, specialRefs, skipped } = parseSourceToAst(raw, input === "-" ? undefined : input);
+  const parsed = parseSourceToAst(raw, input === "-" ? undefined : input);
   const dnsOnly = args.includes("--dns-only");
-  const emission = dnsOnly ? emitSingboxDns(ast) : CLIENT_EMITTERS[client](ast);
-  if (specialRefs.length > 0) emission.specialRefs = specialRefs;
-  if (skipped.length > 0) emission.skipped = [...new Set([...emission.skipped, ...skipped])];
+  const emission = dnsOnly ? emitSingboxDns(parsed) : CLIENT_EMITTERS[client](parsed);
 
   const output = argValue(args, "--output") ?? "-";
   if (output === "-") process.stdout.write(emission.text);
