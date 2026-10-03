@@ -36,10 +36,11 @@ bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js doctor 
 bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js drive --out "$RUN"
 ```
 
-三组断言：
+四组断言：
 
 - **D1 三端产物形态**：抽样 tag 的 `.srs` / `.yaml` / `.list` 存在且非空；clash 产物以 `payload:` 开头。
 - **D2 语义（VM 内）**：`sing-box rule-set decompile` 把 `.srs` 反编译为 JSON，断言内部 AST 的 logical 树、`no-resolve` 在 sing-box 端被剥离、外部镜像的 IP 段规模。
+- **D4 DNS 伴生产物**：internal 有 `-dns.json` + `-dns.srs`、geosite 伴生与主产物字节相同且无中间 JSON、geoip 不产伴生；`Lan-dns` 反编译后只含 domain 类字段（`Lan` 主产物作对照组）。
 - **D3 内核命中（VM 内）**：起 sing-box 加载生成的 `.srs`，断言 `javdb.com` 命中 `rule_set=Adult` 被 block、`example.com` 未命中走 `final=direct`。
 
 全流程入口（launch → doctor → drive → cleanup）：
