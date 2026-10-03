@@ -11,7 +11,7 @@
 
 ## Decision
 
-1. **外部规则生态对齐**：外部通用规则不再在本地做跨端语法转译，清单以 `geosite:x` / `geoip:x` 直接引用 MetaCubeX/meta-rules-dat 的三端同源资产（`.srs` / mihomo yaml / loon list），CI 构建时直接镜像下载落盘，零解析零编译；
+1. **外部规则生态对齐**：外部通用规则不再在本地做跨端语法转译，清单以 `geosite:x` / `geoip:x` 直接引用 MetaCubeX/meta-rules-dat 的三端同源资产（`.srs` / mihomo yaml / 原始 `.list`，后者为 mihomo text 或 DOMAIN-SET 兼容形态而非 RULE-SET），CI 构建时直接镜像下载落盘，零解析零编译；
 2. **内部规则声明式 YAML**：本地自定义规则全量从 `custom/*.list` 迁移为 `custom/*.yaml`，采用紧凑字典 AST 语法，天然支持数组、端口范围（`port_range`）与结构化逻辑规则（`logical` 子树）；
 3. **内部编译器极端收敛**：`scripts/rules-compile.ts` 彻底废弃所有文本行 split 与括号状态机代码，仅保留针对 `custom/*.yaml` 的结构化映射输出：
    - `emitSingbox`：结构化映射为 sing-box 源 JSON，原生支持 `port_range`，官方 compile 为 `.srs`，并自动过滤生成 `-dns` 伴生；

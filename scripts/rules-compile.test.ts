@@ -106,6 +106,18 @@ rules:
     expect(ast.logical![0].mode).toBe("and");
   });
 
+  test("logical 条目必须包含 mode 与 rules 数组", () => {
+    expect(() => parseYamlAst("rules:\n  - logical:\n      - domain_suffix: x\n")).toThrow(
+      /mode 与 rules/,
+    );
+  });
+
+  test("顶层与 rules 容器形态错误直接抛错", () => {
+    expect(() => parseYamlAst("- a\n- b\n")).toThrow(/顶层必须是对象/);
+    expect(() => parseYamlAst("foo: bar\n")).toThrow(/缺少 rules/);
+    expect(() => parseYamlAst("rules: null\n")).toThrow(/缺少 rules/);
+  });
+
   test("未知字段直接抛错，不静默丢规则", () => {
     expect(() => parseYamlAst("rules:\n  - user-agent:\n      - SomeApp*\n")).toThrow(
       /未知的规则字段/,
@@ -199,6 +211,18 @@ describe("emitSingboxDns", () => {
 });
 
 describe("emitClash（mihomo classical）", () => {
+  test("logical 叶节点用 mihomo 方言：DST-PORT 与连字符范围", () => {
+    const text = emitClash({
+      logical: [
+        {
+          mode: "and",
+          rules: [{ port_range: "6881:6889" }, { domain_suffix: "online" }],
+        },
+      ],
+    });
+    expect(text).toContain("'AND,((DST-PORT,6881-6889),(DOMAIN-SUFFIX,online))'");
+  });
+
   test("字段展开为 classical 行，端口范围转连字符，no-resolve 保留", () => {
     const text = emitClash({
       domain: ["a.test"],
@@ -222,6 +246,23 @@ describe("emitClash（mihomo classical）", () => {
 });
 
 describe("emitPlain（Loon / Surge）", () => {
+  test("logical 叶节点用 Loon 方言：DEST-PORT、连字符范围、IPv6 升 IP-CIDR6", () => {
+    const text = emitPlain({
+      logical: [
+        {
+          mode: "and",
+          rules: [
+            { port_range: "6881:6889" },
+            { port: 443 },
+            { ip_cidr: "2001:db8::/32" },
+            { domain_suffix: "online" },
+          ],
+        },
+      ],
+    });
+    expect(text).toContain("AND,((DEST-PORT,6881-6889),(DEST-PORT,443),(IP-CIDR6,2001:db8::/32),(DOMAIN-SUFFIX,online))");
+  });
+
   test("DEST-PORT 拼写、连字符范围、IPv6 用 IP-CIDR6", () => {
     const text = emitPlain({
       port: [22],

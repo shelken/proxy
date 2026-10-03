@@ -175,19 +175,32 @@ export function externalUrls(source: string): Record<Client, string> | null {
  * 结构化源的形态应该确定，静默跳过等于悄悄丢规则。
  */
 export function parseYamlAst(content: string): RuleAST {
-  const parsed = Bun.YAML.parse(content) as { rules?: Record<string, unknown>[] } | null;
+  const parsed = Bun.YAML.parse(content) as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("rules YAML 顶层必须是对象（rules: [...]）");
+  }
+  const { rules } = parsed as { rules?: unknown };
+  if (!Array.isArray(rules)) {
+    throw new Error("rules YAML 缺少 rules: 列表（或形态不是数组）");
+  }
   const ast: RuleAST = {};
   const add = (key: keyof RuleAST, val: unknown): void => {
     const target = (ast[key] ??= [] as unknown[]) as unknown[];
     if (!target.includes(val)) target.push(val);
   };
 
-  for (const item of parsed?.rules ?? []) {
+  for (const item of rules) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`rules 条目必须是对象: ${JSON.stringify(item)}`);
+    }
     for (const [rawKey, rawValues] of Object.entries(item)) {
       const key = rawKey.replace(/-/g, "_");
       if (key === "logical") {
         for (const l of Array.isArray(rawValues) ? rawValues : [rawValues]) {
-          if (typeof l === "object" && l !== null) (ast.logical ??= []).push(l as Record<string, unknown>);
+          if (typeof l !== "object" || l === null || !("mode" in l) || !Array.isArray(l.rules)) {
+            throw new Error("logical 条目必须包含 mode 与 rules 数组");
+          }
+          (ast.logical ??= []).push(l as Record<string, unknown>);
         }
         continue;
       }
@@ -206,14 +219,34 @@ export function parseYamlAst(content: string): RuleAST {
   return ast;
 }
 
-/** 逻辑规则树 → Mihomo/Loon 的单行文本形态。 */
-export function formatLogicalRule(r: Record<string, unknown>): string {
+/** logical 叶字段 → 单行方言类型。AST 字段名 → [mihomo 类型, Loon 类型]。 */
+const LOGICAL_LEAF_TYPE: Record<string, [string, string]> = {
+  domain: ["DOMAIN", "DOMAIN"],
+  domain_suffix: ["DOMAIN-SUFFIX", "DOMAIN-SUFFIX"],
+  domain_keyword: ["DOMAIN-KEYWORD", "DOMAIN-KEYWORD"],
+  domain_regex: ["DOMAIN-REGEX", "DOMAIN-REGEX"],
+  ip_cidr: ["IP-CIDR", "IP-CIDR"],
+  source_ip_cidr: ["SRC-IP-CIDR", "SRC-IP-CIDR"],
+  port: ["DST-PORT", "DEST-PORT"],
+  port_range: ["DST-PORT", "DEST-PORT"],
+  source_port: ["SRC-PORT", "SRC-PORT"],
+  source_port_range: ["SRC-PORT", "SRC-PORT"],
+  process_name: ["PROCESS-NAME", "PROCESS-NAME"],
+  network: ["NETWORK", "NETWORK"],
+};
+
+/** 逻辑规则树 → Mihomo/Loon 的单行文本形态（叶节点应用各自方言）。 */
+export function formatLogicalRule(r: Record<string, unknown>, client: "clash" | "plain" = "clash"): string {
   const mode = String(r.mode ?? "and").toUpperCase();
   const children = ((r.rules as Record<string, unknown>[]) ?? []).map((sub) => {
-    if ("mode" in sub) return `(${formatLogicalRule(sub)})`;
+    if ("mode" in sub) return `(${formatLogicalRule(sub, client)})`;
     const [k, v] = Object.entries(sub)[0];
-    const type = k.toUpperCase().replace(/_/g, "-");
-    return `(${type},${v})`;
+    const fallback = [k.toUpperCase().replace(/_/g, "-"), k.toUpperCase().replace(/_/g, "-")] as [string, string];
+    let type = (LOGICAL_LEAF_TYPE[k] ?? fallback)[client === "plain" ? 1 : 0];
+    if (k === "ip_cidr" && client === "plain" && String(v).includes(":")) type = "IP-CIDR6";
+    // AST 中端口范围统一冒号，单行方言用连字符
+    const val = k === "port_range" || k === "source_port_range" ? String(v).replace(":", "-") : String(v);
+    return `(${type},${val})`;
   });
   return `${mode},(${children.join(",")})`;
 }
@@ -295,7 +328,7 @@ export function emitClash(ast: RuleAST): string {
   for (const p of ast.source_port ?? []) payload.push(`SRC-PORT,${p}`);
   for (const r of ast.source_port_range ?? []) payload.push(`SRC-PORT,${r.replace(":", "-")}`);
   for (const n of ast.network ?? []) payload.push(`NETWORK,${n}`);
-  for (const l of ast.logical ?? []) payload.push(formatLogicalRule(l));
+  for (const l of ast.logical ?? []) payload.push(formatLogicalRule(l, "clash"));
 
   return payload.length > 0
     ? `payload:\n${payload.map((line) => `  - '${line}'`).join("\n")}\n`
@@ -320,7 +353,7 @@ export function emitPlain(ast: RuleAST): string {
   for (const p of ast.source_port ?? []) lines.push(`SRC-PORT,${p}`);
   for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
   for (const n of ast.network ?? []) lines.push(`NETWORK,${n}`);
-  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
+  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l, "plain"));
   return `${lines.join("\n")}\n`;
 }
 
@@ -518,8 +551,9 @@ export function buildOne(
       writeBytes(path, fetchBytes(ext[client]));
       results.push({ client, path, total: 0, skipped: 0 });
     }
-    if (dnsCompanion) {
-      // geosite 上游本就只含域名条目，-dns 伴生直接复用同一份 .srs
+    if (dnsCompanion && item.source.startsWith("geosite:")) {
+      // geosite 上游本就只含域名条目，-dns 伴生直接复用同一份 .srs；
+      // geoip 是 IP 集合，DNS 规则无法按查询名判定，不产 -dns 伴生
       const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.srs`);
       writeBytes(dnsPath, fetchBytes(ext.singbox));
       results.push({ client: "singbox", path: dnsPath, total: 0, skipped: 0 });

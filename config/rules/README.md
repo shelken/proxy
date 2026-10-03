@@ -78,8 +78,14 @@ just rules-check       # 只校验清单与底模是否漂移
 
 | source | singbox | clash | plain |
 | :--- | :--- | :--- | :--- |
-| `geosite:x` / `geoip:x` | 直接镜像 meta-rules-dat 的 `.srs` | 直接镜像 mihomo 原生 `.yaml` | 直接镜像 loon 原生 `.list` |
+| `geosite:x` / `geoip:x` | 直接镜像 meta-rules-dat 的 `.srs` | 直接镜像 mihomo 原生 `.yaml` | 直接镜像上游原始 `.list` |
 | `custom/*.yaml` | AST → 源 JSON → 官方 `rule-set compile` 成 `.srs` | classical payload YAML | Loon / Surge 文本 |
+
+两类 plain 的行格式不同：
+
+- 内部 `.list` 是 `TYPE,VALUE` 规则行，供 Loon / Surge 以 RULE-SET 引用
+- 外部 `.list` 是上游原始形态：每行 `+.domain.com` 通配域名（geoip 则为裸 CIDR），
+  供 mihomo `format: text` 或 Surge / Loon 的 DOMAIN-SET 引用，不是 RULE-SET 格式
 
 外部镜像零解析零编译，内部 YAML 经 AST 结构化发射。产物 `generated/` 已
 gitignore，本地可随时重建；生产消费的是下面这条发布链路。
@@ -109,6 +115,7 @@ DNS 规则在拿到响应前只能按查询名判定，IP 类条目在 DNS 规�
 
 - 内部 YAML：从 AST 过滤出只含域名条目的子集（`emitSingboxDns`）
 - 外部 `geosite:`：上游本就只含域名条目，`-dns` 副本直接复用同一份 `.srs`
+- 外部 `geoip:`：IP 集合在 DNS 规则中无判定语义，不产出 `-dns` 伴生
 
 全量产出而非只产被底模引用的那几个：设备 overlay 在运行期可以引用任意清单的
 `-dns` 副本，构建期无法枚举。只构建被引用的两份，等于让 overlay 只能用底模已经
