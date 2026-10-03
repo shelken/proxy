@@ -5,6 +5,7 @@
 // 用法：bun test scripts/rules-compile.test.ts
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   clashRuleLine,
   classifySimpleRule,
@@ -434,7 +435,7 @@ describe("底模契约校验", () => {
   });
 });
 
-describe("YAML 规则 AST 解析与范围端口", () => {
+describe("YAML 规则 AST 解析与多端方言发射", () => {
   test("parseYamlToRuleLines 正确展开紧凑字典 YAML", () => {
     const yaml = `rules:\n  - domain_suffix:\n      - example.com\n  - port:\n      - 8080\n  - port_range:\n      - 6881:6889\n`;
     const lines = parseYamlToRuleLines(yaml);
@@ -447,5 +448,44 @@ describe("YAML 规则 AST 解析与范围端口", () => {
     expect(parsed.rules.some((r) => Array.isArray(r.domain_suffix) && r.domain_suffix.includes("example.com"))).toBe(true);
     expect(parsed.rules.some((r) => Array.isArray(r.port) && r.port.includes(8080))).toBe(true);
     expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("6881:6889"))).toBe(true);
+  });
+
+  test("emitClash 和 emitPlain 正确转换目标端口、范围端口与 IPv6 CIDR", () => {
+    const lines = [
+      "DST-PORT,22",
+      "DST-PORT-RANGE,6881:6889",
+      "SRC-PORT-RANGE,1000:2000",
+      "IP-CIDR,240e::/18,no-resolve",
+      "IP-CIDR,1.1.1.1/32,no-resolve"
+    ];
+
+    // Mihomo: DST-PORT, 连字符范围
+    const clash = emitClash(lines);
+    expect(clash.text).toContain("'DST-PORT,22'");
+    expect(clash.text).toContain("'DST-PORT,6881-6889'");
+    expect(clash.text).toContain("'SRC-PORT,1000-2000'");
+    expect(clash.text).toContain("'IP-CIDR,240e::/18,no-resolve'");
+    expect(clash.text).toContain("'IP-CIDR,1.1.1.1/32,no-resolve'");
+
+    // Loon: DEST-PORT, IP-CIDR6
+    const plain = emitPlain(lines);
+    expect(plain.text).toContain("DEST-PORT,22");
+    expect(plain.text).toContain("DEST-PORT,6881-6889");
+    expect(plain.text).toContain("SRC-PORT,1000-2000");
+    expect(plain.text).toContain("IP-CIDR6,240e::/18,no-resolve");
+    expect(plain.text).toContain("IP-CIDR,1.1.1.1/32,no-resolve");
+  });
+
+  test("Adult.yaml 完整保留三条嵌套逻辑规则", () => {
+    const raw = readFileSync("config/rules/custom/Adult.yaml", "utf-8");
+    const lines = parseYamlToRuleLines(raw);
+    expect(lines.some((l) => l.includes("123av") || l.includes("assets-"))).toBe(true);
+    expect(lines.some((l) => l.includes("trendcart"))).toBe(true);
+    expect(lines.some((l) => l.includes("radiantflow"))).toBe(true);
+
+    const singbox = emitSingbox(lines);
+    const parsed = JSON.parse(singbox.text) as { rules: Record<string, unknown>[] };
+    const logicalRules = parsed.rules.filter((r) => r.type === "logical");
+    expect(logicalRules.length).toBe(3);
   });
 });

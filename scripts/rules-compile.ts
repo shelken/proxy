@@ -301,12 +301,21 @@ export function parseYamlToRuleLines(yamlText: string): string[] {
         else if (key === "port") lines.push(`DST-PORT,${val}`);
         else if (key === "port_range") lines.push(`DST-PORT-RANGE,${String(val).replace("-", ":")}`);
         else if (key === "source_port") lines.push(`SRC-PORT,${val}`);
+        else if (key === "source_port_range") lines.push(`SRC-PORT-RANGE,${String(val).replace("-", ":")}`);
         else if (key === "process_name") lines.push(`PROCESS-NAME,${val}`);
+        else if (key === "logical") lines.push(String(val));
         else lines.push(`${type},${val}`);
       }
     }
   }
   return lines;
+}
+
+export function readRuleLines(content: string, sourcePath?: string): string[] {
+  const isYaml = sourcePath
+    ? sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml")
+    : content.trimStart().startsWith("rules:");
+  return isYaml ? parseYamlToRuleLines(content) : normalizeRuleLines(content);
 }
 
 // ---------------------------------------------------------------- 解析
@@ -376,9 +385,13 @@ export function classifySimpleRule(line: string): Classified {
     return { kind: "special", ref: { kind: ruleType.toLowerCase(), value: value.toLowerCase() } };
   }
   if (UNSUPPORTED_TYPES.has(ruleType)) return { kind: "unsupported" };
-
   const field = SUPPORTED_FIELDS[ruleType];
   if (!field) return { kind: "unsupported" };
+
+  if (field === "ip_cidr") {
+    const cidrOnly = value.split(",")[0].trim();
+    return { kind: "rule", field, value: cidrOnly };
+  }
 
   if (field === "port" || field === "source_port") {
     if (value.includes("-") || value.includes(":")) {
@@ -591,7 +604,28 @@ export function clashRuleLine(stripped: string): string | null {
       ? `DOMAIN-SUFFIX,${stripped.slice(1)}`
       : `DOMAIN,${stripped}`;
   }
-  const ruleType = stripped.split(",", 1)[0].trim().toUpperCase();
+  const parts = stripped.split(",");
+  const ruleType = parts[0].trim().toUpperCase();
+  const value = parts[1]?.trim() ?? "";
+  const extra = parts.slice(2).join(",");
+
+  // 范围端口
+  if (
+    ruleType === "DST-PORT-RANGE" ||
+    ruleType === "DEST-PORT-RANGE" ||
+    (ruleType === "DST-PORT" && (value.includes("-") || value.includes(":")))
+  ) {
+    const range = value.replace(":", "-");
+    return extra ? `DST-PORT,${range},${extra}` : `DST-PORT,${range}`;
+  }
+  if (
+    ruleType === "SRC-PORT-RANGE" ||
+    (ruleType === "SRC-PORT" && (value.includes("-") || value.includes(":")))
+  ) {
+    const range = value.replace(":", "-");
+    return extra ? `SRC-PORT,${range},${extra}` : `SRC-PORT,${range}`;
+  }
+
   if (!CLASH_SUPPORTED.has(ruleType)) return null;
   const renamed = CLASH_RENAMES[ruleType] ?? ruleType;
   return renamed + stripped.slice(ruleType.length);
@@ -614,9 +648,38 @@ export function emitClash(ruleLines: string[]): Emission {
   return { text: kept.length > 0 ? `payload:\n${body}\n` : "payload: []\n", skipped, specialRefs: [] };
 }
 
-/** Loon / Surge 的行格式与源格式一致，原样输出。 */
+/** Loon 单行规整：单/范围端口统一为 DEST-PORT，IPv6 CIDR 统一为 IP-CIDR6。 */
+export function plainRuleLine(line: string): string {
+  const stripped = line.trim();
+  if (!stripped.includes(",")) return stripped;
+  const parts = stripped.split(",");
+  const ruleType = parts[0].trim().toUpperCase();
+  const value = parts[1]?.trim() ?? "";
+  const extra = parts.slice(2).join(",");
+
+  if (
+    ruleType === "DST-PORT" ||
+    ruleType === "DEST-PORT" ||
+    ruleType === "DST-PORT-RANGE" ||
+    ruleType === "DEST-PORT-RANGE"
+  ) {
+    const portVal = value.replace(":", "-");
+    return extra ? `DEST-PORT,${portVal},${extra}` : `DEST-PORT,${portVal}`;
+  }
+  if (ruleType === "SRC-PORT-RANGE" || ruleType === "SRC-PORT") {
+    const portVal = value.replace(":", "-");
+    return extra ? `SRC-PORT,${portVal},${extra}` : `SRC-PORT,${portVal}`;
+  }
+  if (ruleType === "IP-CIDR" && value.includes(":")) {
+    return extra ? `IP-CIDR6,${value},${extra}` : `IP-CIDR6,${value}`;
+  }
+  return stripped;
+}
+
+/** Loon / Surge 文本产物输出。 */
 export function emitPlain(ruleLines: string[]): Emission {
-  return { text: `${ruleLines.join("\n")}\n`, skipped: [], specialRefs: [] };
+  const lines = ruleLines.map((l) => plainRuleLine(l));
+  return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
 }
 
 export const CLIENT_EMITTERS: Record<Client, (lines: string[]) => Emission> = {
@@ -941,7 +1004,7 @@ function cmdConvert(args: string[]): number {
   }
 
   const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
-  const lines = normalizeRuleLines(raw);
+  const lines = readRuleLines(raw, input === "-" ? undefined : input);
   const dnsOnly = args.includes("--dns-only");
   const emission = dnsOnly ? emitSingboxDns(lines) : CLIENT_EMITTERS[client](lines);
 

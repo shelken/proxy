@@ -63,6 +63,6 @@ rules:
       - zerotier-one
       - parsecd
   - ip_cidr:
-      - 240e::/18
-      - 2409:8000::/20
-      - 2408:8000::/20
+      - 240e::/18,no-resolve
+      - 2409:8000::/20,no-resolve
+      - 2408:8000::/20,no-resolve

@@ -41,6 +41,6 @@ rules:
       - bybit
       - miaona
   - ip_cidr:
-      - 1.1.1.1/32
-      - 8.8.8.8/32
-      - 8.8.4.4/32
+      - 1.1.1.1/32,no-resolve
+      - 8.8.8.8/32,no-resolve
+      - 8.8.4.4/32,no-resolve
