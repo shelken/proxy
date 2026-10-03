@@ -416,12 +416,18 @@ describe("YAML 规则 AST 解析与多端方言发射", () => {
     expect(lines.some((l) => l.includes("trendcart"))).toBe(true);
     expect(lines.some((l) => l.includes("radiantflow"))).toBe(true);
 
-    const singbox = emitSingbox(lines);
+    const { ast } = parseSourceToAst(raw, "Adult.yaml");
+    const singbox = emitSingbox(ast);
     const parsed = JSON.parse(singbox.text) as { rules: Record<string, unknown>[] };
     const logicalRules = parsed.rules.filter((r) => r.type === "logical");
     expect(logicalRules.length).toBe(3);
-  });
 
+    const clash = emitClash(ast);
+    expect(clash.text).toContain("AND,((OR,((DOMAIN-SUFFIX,online)");
+
+    const plain = emitPlain(ast);
+    expect(plain.text).toContain("AND,((OR,((DOMAIN-SUFFIX,online)");
+  });
   test("ptcg.yaml 导出时保留 IP-ASN 的 no-resolve 选项", () => {
     const raw = readFileSync("config/rules/custom/ptcg.yaml", "utf-8");
     const lines = parseYamlToRuleLines(raw);

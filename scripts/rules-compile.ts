@@ -200,7 +200,7 @@ export function formatLogicalRule(r: Record<string, unknown>): string {
     const type = k.toUpperCase().replace(/_/g, "-");
     return `(${type},${v})`;
   });
-  return `${mode},${children.join(",")}`;
+  return `${mode},(${children.join(",")})`;
 }
 
 export function parseSourceToAst(content: string, sourcePath?: string): {
@@ -282,7 +282,6 @@ export function parseSourceToAst(content: string, sourcePath?: string): {
     }
 
     if (/^(AND|OR|NOT),/i.test(stripped)) {
-      // 解析单行 logical 表达式为简易树
       const comma = stripped.indexOf(",");
       const mode = stripped.slice(0, comma).toLowerCase();
       const rest = stripped.slice(comma + 1);
@@ -296,7 +295,12 @@ export function parseSourceToAst(content: string, sourcePath?: string): {
           subRules.push({ [k]: v.trim() });
         }
       }
-      (ast.logical ??= []).push({ mode, rules: subRules });
+      if (subRules.length > 0) {
+        (ast.logical ??= []).push({ mode, rules: subRules });
+      } else {
+        (ast.raw_unsupported ??= []).push(stripped);
+        skipped.push(stripped);
+      }
       continue;
     }
 
@@ -411,22 +415,21 @@ export function emitSingbox(input: RuleAST | string[]): Emission {
       }
     }
   }
-  function normalizeSingboxLogical(node: Record<string, unknown>): Record<string, unknown> {
+  function normalizeSingboxLogical(node: Record<string, unknown>): SingBoxRule {
     if ("mode" in node && Array.isArray(node.rules)) {
       if (node.mode === "not" && node.rules.length === 1) {
-        const sub = node.rules[0] as Record<string, unknown>;
-        const [k, v] = Object.entries(sub)[0];
-        return { [k]: Array.isArray(v) ? v : [v], invert: true };
+        const sub = normalizeSingboxLogical(node.rules[0] as Record<string, unknown>);
+        return { ...sub, invert: true };
       }
       return {
         type: "logical",
-        mode: node.mode,
+        mode: String(node.mode),
         rules: (node.rules as Record<string, unknown>[]).map(normalizeSingboxLogical),
       };
     }
-    const res: Record<string, unknown> = {};
+    const res: SingBoxRule = {};
     for (const [k, v] of Object.entries(node)) {
-      res[k] = Array.isArray(v) ? v : [v];
+      res[k] = (Array.isArray(v) ? v : [v]) as JsonValue;
     }
     return res;
   }
@@ -534,6 +537,7 @@ export function emitPlain(input: RuleAST | string[]): Emission {
   for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
   for (const n of ast.network ?? []) lines.push(`NETWORK,${n}`);
   for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
+  for (const s of ast.special ?? []) lines.push(s);
   for (const u of ast.raw_unsupported ?? []) lines.push(u);
 
   return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
@@ -872,9 +876,11 @@ function cmdConvert(args: string[]): number {
   }
 
   const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
-  const { ast } = parseSourceToAst(raw, input === "-" ? undefined : input);
+  const { ast, specialRefs, skipped } = parseSourceToAst(raw, input === "-" ? undefined : input);
   const dnsOnly = args.includes("--dns-only");
   const emission = dnsOnly ? emitSingboxDns(ast) : CLIENT_EMITTERS[client](ast);
+  if (specialRefs.length > 0) emission.specialRefs = specialRefs;
+  if (skipped.length > 0) emission.skipped = [...new Set([...emission.skipped, ...skipped])];
 
   const output = argValue(args, "--output") ?? "-";
   if (output === "-") process.stdout.write(emission.text);
