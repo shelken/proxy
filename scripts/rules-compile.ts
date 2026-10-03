@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 /**
- * 规则编译器：`config/rules/index.yaml` 清单 → 各客户端规则产物 + `sing-box` 二进制规则集。
+ * 规则编译器：`config/rules/index.yaml` 清单 → 各客户端规则产物。
  *
- * 三种产物形态，同一份源规则各自表达：
- *   - singbox  源规则 JSON，再用官方 `sing-box rule-set compile` 编成 `.srs`
- *   - clash    mihomo rule-provider 的 payload 文本
- *   - plain    原样文本，供 Loon / Surge 直接按 URL 引用
+ * 两种源、各自最短路径：
+ *   - geosite:x / geoip:x  外部原生引用：直接下载 MetaCubeX/meta-rules-dat 的
+ *                          三端同源产物（.srs / mihomo yaml / .list），零解析。
+ *   - custom/*.yaml        内部结构化规则：YAML → AST → 三端发射，
+ *                          sing-box 端再经官方 `rule-set compile` 编成 .srs。
  *
- * 另有 `-dns` 伴生规则集：DNS 规则在拿到响应前只能按查询名判定，IP 类条目在 1.14 起废弃、
- * 1.16 移除，所以被 DNS 规则引用的清单要有一份只含域名条目的副本。
+ * 另有 `-dns` 伴生规则集：DNS 规则在拿到响应前只能按查询名判定，IP 类条目在
+ * 1.14 起废弃、1.16 移除，所以被 DNS 规则引用的清单要有一份只含域名条目的副本。
  *
  * 不做的事：不解析订阅、不装配节点（那是 sbtools 服务端的职责）、不写 template.json
  * （底模是手写的单一配置源，这里只校验它与清单是否漂移）。
@@ -22,9 +23,9 @@ const ROOT = resolve(import.meta.dir, "..");
 const MANIFEST_PATH = join(ROOT, "config/rules/index.yaml");
 const GENERATED_DIR = join(ROOT, "config/rules/generated");
 const TEMPLATE_PATH = join(ROOT, "config/sing-box/template.json");
-const SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
-const SING_GEOSITE_PREFIX =
-  "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
+
+const META_RULES_SING = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo";
+const META_RULES_MIHOMO = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo";
 
 const DNS_RULE_FIELDS = [
   "domain",
@@ -62,12 +63,6 @@ export type Client = "singbox" | "clash" | "plain";
 type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 export type SingBoxRule = Record<string, JsonValue>;
 
-export interface Emission {
-  text: string;
-  skipped: string[];
-  specialRefs: { kind: string; value: string }[];
-}
-
 export interface ManifestItem {
   tag: string;
   source: string;
@@ -82,44 +77,17 @@ export interface BuildResult {
 
 // ---------------------------------------------------------------- 源读取
 
-/** 清单 source：http(s) 联网拉取，否则按仓库相对路径读本地文件。 */
-function readSource(source: string): string {
-  if (source.startsWith("http://") || source.startsWith("https://")) {
-    const res = fetchSync(source);
-    if (!res.ok) throw new Error(`拉取失败 ${res.status}: ${source}`);
-    return res.text;
-  }
-  const path = join(ROOT, source);
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    throw new Error(`规则源不存在: ${source}`);
-  }
-}
-
-/** Bun 的同步 fetch：生成器要保持顺序执行，避免并发改写的复杂度。 */
-function fetchSync(url: string): { ok: boolean; status: number; text: string } {
-  const proc = spawnSync(
-    "curl",
-    ["-fsSL", "--max-time", "60", "-A", "singbox-rule-builder/2.0", url],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  if (proc.status !== 0) {
-    return { ok: false, status: proc.status ?? 1, text: "" };
-  }
-  return { ok: true, status: 200, text: proc.stdout };
-}
-
-/** 下载上游预编译 .srs（GEOIP/GEOSITE 退化形态）。 */
+/** 下载远端产物（文本或二进制）。生成器保持顺序执行，避免并发改写的复杂度。 */
 function fetchBytes(url: string): Buffer {
   const proc = spawnSync(
     "curl",
     ["-fsSL", "--max-time", "60", "-A", "singbox-rule-builder/2.0", url],
     { maxBuffer: 64 * 1024 * 1024 },
   );
-  if (proc.status !== 0) throw new Error(`下载规则集失败: ${url}`);
+  if (proc.status !== 0) throw new Error(`下载失败: ${url}`);
   return proc.stdout;
 }
+
 
 /**
  * `custom/` 下存在但没被清单引用的列表。
@@ -171,7 +139,7 @@ export function outputName(tag: string): string {
   return safe || "rule";
 }
 
-// ---------------------------------------------------------------- AST 统一解析
+// ---------------------------------------------------------------- 源解析
 
 export interface RuleAST {
   domain?: string[];
@@ -188,10 +156,57 @@ export interface RuleAST {
   process_name?: string[];
   network?: string[];
   logical?: Array<Record<string, unknown>>;
-  raw_unsupported?: string[];
-  special?: string[];
 }
 
+/** 外部原生引用：geosite:x / geoip:x → meta-rules-dat 三端同源 URL。 */
+export function externalUrls(source: string): Record<Client, string> | null {
+  const m = source.match(/^(geosite|geoip):([a-z0-9_-]+)$/);
+  if (!m) return null;
+  const [, kind, name] = m;
+  return {
+    singbox: `${META_RULES_SING}/${kind}/${name}.srs`,
+    clash: `${META_RULES_MIHOMO}/${kind}/${name}.yaml`,
+    plain: `${META_RULES_MIHOMO}/${kind}/${name}.list`,
+  };
+}
+
+/**
+ * 内部 custom YAML → AST。未知字段直接抛错（fail fast）：
+ * 结构化源的形态应该确定，静默跳过等于悄悄丢规则。
+ */
+export function parseYamlAst(content: string): RuleAST {
+  const parsed = Bun.YAML.parse(content) as { rules?: Record<string, unknown>[] } | null;
+  const ast: RuleAST = {};
+  const add = (key: keyof RuleAST, val: unknown): void => {
+    const target = (ast[key] ??= [] as unknown[]) as unknown[];
+    if (!target.includes(val)) target.push(val);
+  };
+
+  for (const item of parsed?.rules ?? []) {
+    for (const [rawKey, rawValues] of Object.entries(item)) {
+      const key = rawKey.replace(/-/g, "_");
+      if (key === "logical") {
+        for (const l of Array.isArray(rawValues) ? rawValues : [rawValues]) {
+          if (typeof l === "object" && l !== null) (ast.logical ??= []).push(l as Record<string, unknown>);
+        }
+        continue;
+      }
+      if (!FIELD_ORDER.includes(key as keyof RuleAST) && key !== "ip_asn") {
+        throw new Error(
+          `未知的规则字段: ${rawKey}（可用: ${[...FIELD_ORDER, "ip_asn", "logical"].join(", ")}）`,
+        );
+      }
+      for (const val of Array.isArray(rawValues) ? rawValues : [rawValues]) {
+        if (key === "port" || key === "source_port") add(key, Number(val));
+        else if (key === "port_range" || key === "source_port_range") add(key, String(val).replace("-", ":"));
+        else add(key, String(val));
+      }
+    }
+  }
+  return ast;
+}
+
+/** 逻辑规则树 → Mihomo/Loon 的单行文本形态。 */
 export function formatLogicalRule(r: Record<string, unknown>): string {
   const mode = String(r.mode ?? "and").toUpperCase();
   const children = ((r.rules as Record<string, unknown>[]) ?? []).map((sub) => {
@@ -203,277 +218,58 @@ export function formatLogicalRule(r: Record<string, unknown>): string {
   return `${mode},(${children.join(",")})`;
 }
 
-export function parseSourceToAst(content: string, sourcePath?: string): {
-  ast: RuleAST;
-  specialRefs: { kind: string; value: string }[];
-  skipped: string[];
-} {
-  const firstNonComment = content
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l && !l.startsWith("#"));
+// ---------------------------------------------------------------- 各端发射器（内部 AST 专用）
 
-  const isRulesYaml = firstNonComment?.startsWith("rules:");
-  const isPayloadYaml = firstNonComment === "payload:";
-  const isYamlFile = sourcePath
-    ? sourcePath.endsWith(".yaml") || sourcePath.endsWith(".yml")
-    : false;
-
-  const ast: RuleAST = {};
-  const specialRefs: { kind: string; value: string }[] = [];
-  const skipped: string[] = [];
-
-  const add = (key: keyof RuleAST, val: unknown): void => {
-    const target = (ast[key] ??= [] as unknown[]) as unknown[];
-    if (!target.includes(val)) target.push(val);
-  };
-
-  // 1. 结构化 custom rules YAML
-  if (isRulesYaml || (isYamlFile && !isPayloadYaml)) {
-    const parsed = Bun.YAML.parse(content) as { rules?: Record<string, unknown>[] };
-    for (const item of parsed?.rules ?? []) {
-      for (const [rawKey, rawValues] of Object.entries(item)) {
-        const key = rawKey.replace(/-/g, "_");
-        if (key === "logical") {
-          const list = Array.isArray(rawValues) ? rawValues : [rawValues];
-          for (const l of list) {
-            if (typeof l === "object" && l !== null) {
-              (ast.logical ??= []).push(l as Record<string, unknown>);
-            }
-          }
-          continue;
-        }
-        const values = Array.isArray(rawValues) ? rawValues : [rawValues];
-        for (const val of values) {
-          if (key === "port" || key === "source_port") {
-            add(key, Number(val));
-          } else if (key === "port_range" || key === "source_port_range") {
-            add(key, String(val).replace("-", ":"));
-          } else if (key === "ip_asn") {
-            add("ip_asn", String(val));
-          } else if (FIELD_ORDER.includes(key as keyof RuleAST)) {
-            add(key as keyof RuleAST, String(val));
-          } else {
-            skipped.push(`${key},${val}`);
-          }
-        }
-      }
+/** sing-box 逻辑规则树规范化：NOT 单子节点折叠为 invert，叶字段值转数组。 */
+function normalizeSingboxLogical(node: Record<string, unknown>): SingBoxRule {
+  if ("mode" in node && Array.isArray(node.rules)) {
+    if (node.mode === "not" && node.rules.length === 1) {
+      const sub = normalizeSingboxLogical(node.rules[0] as Record<string, unknown>);
+      const nextInvert = !sub.invert;
+      if (nextInvert) return { ...sub, invert: true };
+      const copy = { ...sub };
+      delete copy.invert;
+      return copy;
     }
-    return { ast, specialRefs, skipped };
-  }
-
-  // 2. 外部纯文本行或 Classical Payload
-  let rawLines: string[] = [];
-  if (isPayloadYaml) {
-    const parsed = Bun.YAML.parse(content) as { payload?: string[] };
-    rawLines = parsed?.payload ?? [];
-  } else {
-    rawLines = content.split("\n");
-  }
-
-  for (const rawLine of rawLines) {
-    const stripped = rawLine.trim();
-    if (!stripped || stripped.startsWith("#")) continue;
-
-    if (!stripped.includes(",")) {
-      if (stripped.startsWith(".")) add("domain_suffix", stripped.slice(1));
-      else add("domain", stripped);
-      continue;
-    }
-
-    if (/^(AND|OR|NOT),/i.test(stripped)) {
-      const comma = stripped.indexOf(",");
-      const mode = stripped.slice(0, comma).toLowerCase();
-      const rest = stripped.slice(comma + 1);
-      const subRules: Record<string, unknown>[] = [];
-      const re = /\(([^()]+)\)/g;
-      let m;
-      while ((m = re.exec(rest)) !== null) {
-        const [t, v] = m[1].split(",");
-        if (t && v) {
-          const k = t.trim().toLowerCase().replace(/-/g, "_");
-          subRules.push({ [k]: v.trim() });
-        }
-      }
-      if (subRules.length > 0) {
-        (ast.logical ??= []).push({ mode, rules: subRules });
-      } else {
-        (ast.raw_unsupported ??= []).push(stripped);
-        skipped.push(stripped);
-      }
-      continue;
-    }
-
-    const parts = stripped.split(",").map((s) => s.trim());
-    const type = parts[0].toUpperCase();
-    const val = parts[1];
-    const extra = parts.slice(2).join(",");
-
-    if (type === "GEOIP" || type === "GEOSITE") {
-      specialRefs.push({ kind: type.toLowerCase(), value: val.toLowerCase() });
-      (ast.special ??= []).push(stripped);
-    } else if (type === "DOMAIN") add("domain", val);
-    else if (type === "DOMAIN-SUFFIX") add("domain_suffix", val);
-    else if (type === "DOMAIN-KEYWORD") add("domain_keyword", val);
-    else if (type === "DOMAIN-REGEX") add("domain_regex", val);
-    else if (type === "IP-CIDR" || type === "IP-CIDR6") add("ip_cidr", extra ? `${val},${extra}` : val);
-    else if (type === "SRC-IP-CIDR") add("source_ip_cidr", val);
-    else if (type === "IP-ASN") add("ip_asn", extra ? `${val},${extra}` : val);
-    else if (type === "PROCESS-NAME") add("process_name", val);
-    else if (type === "NETWORK") add("network", val);
-    else if (type === "DST-PORT" || type === "DEST-PORT" || type === "PORT") {
-      if (val.includes("-") || val.includes(":")) add("port_range", val.replace("-", ":"));
-      else add("port", Number(val));
-    } else if (type === "DST-PORT-RANGE" || type === "DEST-PORT-RANGE" || type === "PORT-RANGE") {
-      add("port_range", val.replace("-", ":"));
-    } else if (type === "SRC-PORT") {
-      if (val.includes("-") || val.includes(":")) add("source_port_range", val.replace("-", ":"));
-      else add("source_port", Number(val));
-    } else if (type === "SRC-PORT-RANGE") {
-      add("source_port_range", val.replace("-", ":"));
-    } else {
-      (ast.raw_unsupported ??= []).push(stripped);
-      skipped.push(stripped);
-    }
-  }
-
-  return { ast, specialRefs, skipped };
-}
-
-export function readRuleLines(content: string, sourcePath?: string): string[] {
-  const { ast } = parseSourceToAst(content, sourcePath);
-  return emitPlain(ast).text.split("\n").filter(Boolean);
-}
-
-export function normalizeRuleLines(text: string): string[] {
-  const rawLines = text.split("\n");
-  const firstNonComment = rawLines.map((l) => l.trim()).find((l) => l && !l.startsWith("#"));
-  if (firstNonComment === "payload:") {
-    const parsed = Bun.YAML.parse(text) as { payload?: string[] };
-    return parsed?.payload ?? [];
-  }
-  return rawLines.map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-}
-
-export function parseYamlToRuleLines(yamlText: string): string[] {
-  const { ast } = parseSourceToAst(yamlText, "custom.yaml");
-  const lines: string[] = [];
-  for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
-  for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
-  for (const d of ast.domain ?? []) lines.push(`DOMAIN,${d}`);
-  for (const d of ast.domain_regex ?? []) lines.push(`DOMAIN-REGEX,${d}`);
-  for (const p of ast.process_name ?? []) lines.push(`PROCESS-NAME,${p}`);
-  for (const c of ast.ip_cidr ?? []) lines.push(`IP-CIDR,${c}`);
-  for (const a of ast.ip_asn ?? []) lines.push(`IP-ASN,${a}`);
-  for (const p of ast.port ?? []) lines.push(`DST-PORT,${p}`);
-  for (const r of ast.port_range ?? []) lines.push(`DST-PORT-RANGE,${r}`);
-  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
-  return lines;
-}
-
-// ---------------------------------------------------------------- 各端纯净发射器
-
-export type EmitterInput =
-  | RuleAST
-  | string[]
-  | { ast: RuleAST; specialRefs?: { kind: string; value: string }[]; skipped?: string[] };
-
-export function unpackInput(input: EmitterInput): {
-  ast: RuleAST;
-  specialRefs: { kind: string; value: string }[];
-  skipped: string[];
-} {
-  if (Array.isArray(input)) {
-    return parseSourceToAst(input.join("\n"));
-  }
-  if ("ast" in input && typeof input.ast === "object") {
     return {
-      ast: input.ast,
-      specialRefs: input.specialRefs ?? [],
-      skipped: input.skipped ?? [],
+      type: "logical",
+      mode: String(node.mode),
+      rules: (node.rules as Record<string, unknown>[]).map(normalizeSingboxLogical),
     };
   }
-  return {
-    ast: input as RuleAST,
-    specialRefs: [],
-    skipped: [],
-  };
+  const res: SingBoxRule = {};
+  for (const [k, v] of Object.entries(node)) {
+    res[k] = (Array.isArray(v) ? v : [v]) as JsonValue;
+  }
+  return res;
 }
 
-export function emitSingbox(input: EmitterInput): Emission {
-  const { ast, specialRefs, skipped } = unpackInput(input);
-
-  const hasContentRules =
-    FIELD_ORDER.some((f) => (ast[f as keyof RuleAST] as unknown[])?.length) ||
-    (ast.logical?.length ?? 0) > 0;
-
+export function emitSingbox(ast: RuleAST): string {
   const rules: SingBoxRule[] = [];
-  const finalSkipped = [...skipped];
+  // sing-box 1.12 起移除行内 IP-ASN 匹配，只能放弃并提示（mihomo/Loon 端仍保留）
   if (ast.ip_asn?.length) {
-    for (const a of ast.ip_asn) finalSkipped.push(`IP-ASN,${a}`);
-  }
-
-  if (specialRefs.length > 0 && !hasContentRules) {
-    return {
-      text: `${JSON.stringify({
-        version: 1,
-        kind: "external_rule_set",
-        references: specialRefs.map((ref) => ({
-          type: ref.kind,
-          value: ref.value,
-          tag: `${ref.kind}-${ref.value}`,
-          url: specialRefToUrl(ref),
-        })),
-      }, null, 2)}\n`,
-      skipped: finalSkipped,
-      specialRefs,
-    };
+    console.warn(`WARN: IP-ASN 无法在 sing-box 规则集中表达，已忽略 ${ast.ip_asn.length} 条`);
   }
 
   for (const field of FIELD_ORDER) {
     const vals = ast[field as keyof RuleAST];
     if (vals && vals.length > 0) {
       if (field === "ip_cidr") {
+        // 剥离 mihomo/Loon 专用的 no-resolve 选项，sing-box 规则集无此概念
         rules.push({ [field]: (vals as string[]).map((v) => v.split(",")[0].trim()) });
       } else {
         rules.push({ [field]: vals as JsonValue });
       }
     }
   }
-  function normalizeSingboxLogical(node: Record<string, unknown>): SingBoxRule {
-    if ("mode" in node && Array.isArray(node.rules)) {
-      if (node.mode === "not" && node.rules.length === 1) {
-        const sub = normalizeSingboxLogical(node.rules[0] as Record<string, unknown>);
-        const nextInvert = !sub.invert;
-        if (nextInvert) {
-          return { ...sub, invert: true };
-        }
-        const copy = { ...sub };
-        delete copy.invert;
-        return copy;
-      }
-      return {
-        type: "logical",
-        mode: String(node.mode),
-        rules: (node.rules as Record<string, unknown>[]).map(normalizeSingboxLogical),
-      };
-    }
-    const res: SingBoxRule = {};
-    for (const [k, v] of Object.entries(node)) {
-      res[k] = (Array.isArray(v) ? v : [v]) as JsonValue;
-    }
-    return res;
-  }
-
   for (const l of ast.logical ?? []) {
     rules.push(normalizeSingboxLogical(l));
   }
-  return { text: `${JSON.stringify({ version: 3, rules }, null, 2)}\n`, skipped: finalSkipped, specialRefs };
+  return `${JSON.stringify({ version: 3, rules }, null, 2)}\n`;
 }
 
-export function emitSingboxDns(input: EmitterInput): Emission {
-  const { ast, skipped } = unpackInput(input);
-
+/** 只保留按查询名匹配的字段，产出 DNS 规则专用的规则集。 */
+export function emitSingboxDns(ast: RuleAST): string {
   const rules: SingBoxRule[] = [];
   for (const field of DNS_RULE_FIELDS) {
     const vals = ast[field as keyof RuleAST];
@@ -481,12 +277,10 @@ export function emitSingboxDns(input: EmitterInput): Emission {
       rules.push({ [field]: vals as JsonValue });
     }
   }
-  return { text: `${JSON.stringify({ version: 3, rules }, null, 2)}\n`, skipped, specialRefs: [] };
+  return `${JSON.stringify({ version: 3, rules }, null, 2)}\n`;
 }
 
-export function emitClash(input: EmitterInput): Emission {
-  const { ast, skipped, specialRefs } = unpackInput(input);
-
+export function emitClash(ast: RuleAST): string {
   const payload: string[] = [];
   for (const d of ast.domain_suffix ?? []) payload.push(`DOMAIN-SUFFIX,${d}`);
   for (const d of ast.domain_keyword ?? []) payload.push(`DOMAIN-KEYWORD,${d}`);
@@ -501,52 +295,15 @@ export function emitClash(input: EmitterInput): Emission {
   for (const p of ast.source_port ?? []) payload.push(`SRC-PORT,${p}`);
   for (const r of ast.source_port_range ?? []) payload.push(`SRC-PORT,${r.replace(":", "-")}`);
   for (const n of ast.network ?? []) payload.push(`NETWORK,${n}`);
-  for (const s of ast.special ?? []) payload.push(s);
   for (const l of ast.logical ?? []) payload.push(formatLogicalRule(l));
 
-  const text = payload.length > 0
-    ? `payload:\n` + payload.map((line) => `  - '${line}'`).join("\n") + "\n"
+  return payload.length > 0
+    ? `payload:\n${payload.map((line) => `  - '${line}'`).join("\n")}\n`
     : "payload: []\n";
-  return { text, skipped, specialRefs };
 }
 
-export function plainRuleLine(line: string): string {
-  const stripped = line.trim();
-  if (!stripped.includes(",")) return stripped;
-  const parts = stripped.split(",");
-  const ruleType = parts[0].trim().toUpperCase();
-  const value = parts[1]?.trim() ?? "";
-  const extra = parts.slice(2).join(",");
-
-  const isDstPort =
-    ruleType === "DST-PORT" ||
-    ruleType === "DEST-PORT" ||
-    ruleType === "PORT" ||
-    ruleType === "DST-PORT-RANGE" ||
-    ruleType === "DEST-PORT-RANGE" ||
-    ruleType === "PORT-RANGE";
-
-  if (isDstPort) {
-    const portVal = value.replace(":", "-");
-    return extra ? `DEST-PORT,${portVal},${extra}` : `DEST-PORT,${portVal}`;
-  }
-  if (ruleType === "SRC-PORT-RANGE" || ruleType === "SRC-PORT") {
-    const portVal = value.replace(":", "-");
-    return extra ? `SRC-PORT,${portVal},${extra}` : `SRC-PORT,${portVal}`;
-  }
-  if (ruleType === "IP-CIDR" && value.includes(":")) {
-    return extra ? `IP-CIDR6,${value},${extra}` : `IP-CIDR6,${value}`;
-  }
-  return stripped;
-}
-
-export function emitPlain(input: EmitterInput): Emission {
-  if (Array.isArray(input)) {
-    const lines = input.map(plainRuleLine);
-    return { text: `${lines.join("\n")}\n`, skipped: [], specialRefs: [] };
-  }
-
-  const { ast, skipped, specialRefs } = unpackInput(input);
+/** Loon / Surge 文本产物：DEST-PORT 拼写、连字符端口范围、IPv6 用 IP-CIDR6。 */
+export function emitPlain(ast: RuleAST): string {
   const lines: string[] = [];
   for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
   for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
@@ -564,24 +321,14 @@ export function emitPlain(input: EmitterInput): Emission {
   for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
   for (const n of ast.network ?? []) lines.push(`NETWORK,${n}`);
   for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
-  for (const s of ast.special ?? []) lines.push(s);
-  for (const u of ast.raw_unsupported ?? []) lines.push(u);
-
-  return { text: `${lines.join("\n")}\n`, skipped, specialRefs };
+  return `${lines.join("\n")}\n`;
 }
 
-export const CLIENT_EMITTERS: Record<Client, (input: EmitterInput) => Emission> = {
+export const CLIENT_EMITTERS: Record<Client, (ast: RuleAST) => string> = {
   singbox: emitSingbox,
   clash: emitClash,
   plain: emitPlain,
 };
-
-export function specialRefToUrl(ref: { kind: string; value: string }): string {
-  const suffix = `${ref.kind}-${ref.value}.srs`;
-  return ref.kind === "geoip"
-    ? `${SING_GEOIP_PREFIX}/${suffix}`
-    : `${SING_GEOSITE_PREFIX}/${suffix}`;
-}
 
 // ---------------------------------------------------------------- 模板契约
 
@@ -733,78 +480,87 @@ export function compileSrs(binary: string, sourcePath: string, outputPath: strin
   }
 }
 
+function writeBytes(path: string, data: Buffer): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, data);
+}
+
 function writeText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, "utf8");
 }
 
-/** 为单个 tag 产出全部客户端产物。 */
+function readLocalSource(source: string): string {
+  try {
+    return readFileSync(join(ROOT, source), "utf8");
+  } catch {
+    throw new Error(`规则源不存在: ${source}`);
+  }
+}
+
+/** 为单个 tag 产出全部客户端产物：外部镜像下载或内部 AST 发射。 */
 export function buildOne(
   item: ManifestItem,
   binary: string,
   dnsCompanion: boolean,
 ): BuildResult[] {
-  const rawSource = readSource(item.source);
-  const { ast, specialRefs, skipped } = parseSourceToAst(rawSource, item.source);
   const name = outputName(item.tag);
+  const ext = externalUrls(item.source);
   const results: BuildResult[] = [];
+
+  // 外部原生引用：三端直接下载同源产物，零解析、零编译
+  if (ext) {
+    const srsPath = join(GENERATED_DIR, "singbox", `${name}.srs`);
+    writeBytes(srsPath, fetchBytes(ext.singbox));
+    results.push({ client: "singbox", path: srsPath, total: 0, skipped: 0 });
+    for (const client of ["clash", "plain"] as const) {
+      const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
+      writeBytes(path, fetchBytes(ext[client]));
+      results.push({ client, path, total: 0, skipped: 0 });
+    }
+    if (dnsCompanion) {
+      // geosite 上游本就只含域名条目，-dns 伴生直接复用同一份 .srs
+      const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.srs`);
+      writeBytes(dnsPath, fetchBytes(ext.singbox));
+      results.push({ client: "singbox", path: dnsPath, total: 0, skipped: 0 });
+    }
+    return results;
+  }
+
+  // 内部 custom YAML → AST → 三端发射
+  const ast = parseYamlAst(readLocalSource(item.source));
   const totalCount = Object.values(ast).reduce(
     (acc, v) => acc + (Array.isArray(v) ? v.length : 0),
     0,
   );
 
   for (const client of Object.keys(CLIENT_EMITTERS) as Client[]) {
-    const emission = CLIENT_EMITTERS[client]({ ast, specialRefs, skipped });
     const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
-    writeText(path, emission.text);
-
+    writeText(path, CLIENT_EMITTERS[client](ast));
     if (client === "singbox") {
-      const srs = path.replace(/\.json$/, ".srs");
-      if (emission.specialRefs.length === 1) {
-        writeFileSync(srs, fetchBytes(specialRefToUrl(emission.specialRefs[0])));
-      } else if (emission.specialRefs.length > 1) {
-        throw new Error(`${item.tag}: 暂不支持同时引用多个 GEOIP/GEOSITE 规则集`);
-      } else {
-        compileSrs(binary, path, srs);
-      }
+      compileSrs(binary, path, path.replace(/\.json$/, ".srs"));
     }
-
-    const report = join(GENERATED_DIR, "unsupported", client, `${name}.txt`);
-    if (emission.skipped.length > 0) {
-      writeText(report, `${emission.skipped.join("\n")}\n`);
-    } else {
-      rmSync(report, { force: true });
-    }
-    results.push({
-      client,
-      path,
-      total: totalCount,
-      skipped: emission.skipped.length,
-    });
+    results.push({ client, path, total: totalCount, skipped: 0 });
   }
 
   if (dnsCompanion) {
-    const dns = emitSingboxDns(ast);
+    // 每个 tag 都产出 `-dns` 伴生：设备 overlay 的运行期引用无法在构建期枚举，
+    // 缺哪份都会让内核启动 FATAL。底模仍只需声明自己真正引用的伴生。
     const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.json`);
-    writeText(dnsPath, dns.text);
+    writeText(dnsPath, emitSingboxDns(ast));
     compileSrs(binary, dnsPath, dnsPath.replace(/\.json$/, ".srs"));
     results.push({ client: "singbox", path: dnsPath, total: totalCount, skipped: 0 });
   }
   return results;
 }
 
-function jsonPretty(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
 export interface BuildOptions {
   all?: boolean;
   tag?: string;
-  manifest?: string;
 }
 
 export function runBuild(options: BuildOptions): number {
-  const items = loadManifest(options.manifest ?? MANIFEST_PATH);
+  const items = loadManifest();
   const template = loadTemplate();
 
   const orphans = orphanCustomLists(items);
@@ -827,37 +583,17 @@ export function runBuild(options: BuildOptions): number {
 
   let built = 0;
   for (const item of targets) {
-    // 每个 tag 都产出 `-dns` 伴生，而不是只产底模引用到的那几个：
-    // 设备 overlay 的运行期引用无法在构建期枚举，缺哪份都会让内核启动 FATAL。
-    // 底模仍只需声明自己真正引用的伴生，校验语义（validateTemplate）不变。
     const results = buildOne(item, binary, true);
-    const parts = results.map((r) => `${r.client}=${r.total - r.skipped}/${r.total}`);
-    console.log(`built ${item.tag} -> ${parts.join(", ")}`);
+    if (externalUrls(item.source)) {
+      console.log(`mirrored ${item.tag} <- ${item.source}`);
+    } else {
+      const parts = results.map((r) => `${r.client}=${r.total}`);
+      console.log(`built ${item.tag} -> ${parts.join(", ")}`);
+    }
     built++;
   }
-
-  const reports = listReports();
-  if (reports.length > 0) {
-    console.log(`skipped reports (${reports.length}):`);
-    for (const r of reports) console.log(`  ${r}`);
-  }
-  console.log(`done: built=${built}, dns_companions=${built}`);
+  console.log(`done: built=${built}`);
   return 0;
-}
-
-function listReports(): string[] {
-  const out: string[] = [];
-  const root = join(GENERATED_DIR, "unsupported");
-  const walk = (dir: string): void => {
-    const proc = spawnSync("sh", ["-c", `ls -1d '${dir}'/* 2>/dev/null`], { encoding: "utf8" });
-    const entries = (proc.stdout ?? "").split("\n").filter(Boolean).sort().reverse();
-    for (const entry of entries) {
-      if (entry.endsWith(".txt")) out.push(entry.replace(`${ROOT}/`, ""));
-      else walk(entry);
-    }
-  };
-  walk(root);
-  return out.sort();
 }
 
 export function findItem(items: ManifestItem[], target: string): ManifestItem {
@@ -876,53 +612,20 @@ function usage(): string {
     "rules-compile — 规则清单 → 各端产物",
     "",
     "用法:",
-    "  bun scripts/rules-compile.ts build --all              全量构建",
-    "  bun scripts/rules-compile.ts build <tag>              只构建单个 tag",
-    "  bun scripts/rules-compile.ts convert --input <文件|-> --client <singbox|clash|plain> [--output <文件|->] [--dns-only] [--report <文件>]",
-    "  bun scripts/rules-compile.ts check                    只校验底模与清单有无漂移",
+    "  bun scripts/rules-compile.ts build --all    全量构建",
+    "  bun scripts/rules-compile.ts build <tag>    只构建单个 tag",
+    "  bun scripts/rules-compile.ts check          只校验底模与清单有无漂移",
   ].join("\n");
 }
 
-function argValue(args: string[], flag: string): string | undefined {
-  const i = args.indexOf(flag);
-  return i >= 0 ? args[i + 1] : undefined;
-}
-
-function cmdConvert(args: string[]): number {
-  const input = argValue(args, "--input");
-  const client = argValue(args, "--client") as Client | undefined;
-  if (!input || !client) {
-    console.error(usage());
-    return 2;
-  }
-  if (!["singbox", "clash", "plain"].includes(client)) {
-    console.error(`未知客户端: ${client}`);
-    return 2;
-  }
-
-  const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
-  const parsed = parseSourceToAst(raw, input === "-" ? undefined : input);
-  const dnsOnly = args.includes("--dns-only");
-  const emission = dnsOnly ? emitSingboxDns(parsed) : CLIENT_EMITTERS[client](parsed);
-
-  const output = argValue(args, "--output") ?? "-";
-  if (output === "-") process.stdout.write(emission.text);
-  else writeText(resolve(output), emission.text);
-
-  const report = argValue(args, "--report");
-  if (report) writeText(resolve(report), `${emission.skipped.join("\n")}\n`);
-  return 0;
-}
-
 function cmdBuild(args: string[]): number {
-  const manifest = argValue(args, "--manifest");
-  if (args.includes("--all")) return runBuild({ all: true, manifest });
+  if (args.includes("--all")) return runBuild({ all: true });
   const tag = args.find((a) => !a.startsWith("-") && a !== "build");
   if (!tag) {
     console.error(usage());
     return 2;
   }
-  return runBuild({ tag, manifest });
+  return runBuild({ tag });
 }
 
 function cmdCheck(): number {
@@ -945,8 +648,6 @@ function main(): number {
   switch (command) {
     case "build":
       return cmdBuild(rest);
-    case "convert":
-      return cmdConvert(rest);
     case "check":
       return cmdCheck();
     default:

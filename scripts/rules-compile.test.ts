@@ -12,13 +12,11 @@ import {
   emitPlain,
   emitSingbox,
   emitSingboxDns,
+  externalUrls,
   loadManifest,
-  normalizeRuleLines,
   orphanCustomLists,
   outputName,
-  parseSourceToAst,
-  parseYamlToRuleLines,
-  readRuleLines,
+  parseYamlAst,
   validateTemplate,
   type ManifestItem,
   type RuleAST,
@@ -30,9 +28,10 @@ function fieldValues(rules: SingBoxRule[], field: string): unknown[] {
   return rules.flatMap((rule) => (rule[field] as unknown[]) ?? []);
 }
 
-function singboxRules(input: string): SingBoxRule[] {
-  return JSON.parse(emitSingbox([input]).text).rules;
+function singboxRules(ast: RuleAST): SingBoxRule[] {
+  return JSON.parse(emitSingbox(ast)).rules;
 }
+
 /** 把清单内容写到临时文件，返回路径。测试只读不写仓库目录。 */
 function writeManifest(content: string): string {
   const path = `/tmp/rules-manifest-${Math.random().toString(36).slice(2)}.yaml`;
@@ -40,167 +39,118 @@ function writeManifest(content: string): string {
   return path;
 }
 
-describe("AST 解析与归一化", () => {
-  test("丢掉注释、空行与 YAML payload 外壳", () => {
-    const { ast } = parseSourceToAst(
-      ["payload:", "  - 'DOMAIN,a.test'", "  - 'DOMAIN,b.test'"].join("\n"),
+describe("外部原生引用", () => {
+  test("geosite:/geoip: 展开为三端同源 URL", () => {
+    const urls = externalUrls("geosite:telegram")!;
+    expect(urls.singbox).toBe(
+      "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/telegram.srs",
     );
-    expect(ast.domain).toEqual(["a.test", "b.test"]);
+    expect(urls.clash).toBe(
+      "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/telegram.yaml",
+    );
+    expect(urls.plain).toBe(
+      "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/telegram.list",
+    );
+
+    const geoip = externalUrls("geoip:cn")!;
+    expect(geoip.singbox).toContain("/geoip/cn.srs");
   });
 
-  test("普通列表只去注释与空白，不加解释", () => {
-    const { ast } = parseSourceToAst(["# 注释", "", "DOMAIN,a.test", "  "].join("\n"));
-    expect(ast.domain).toEqual(["a.test"]);
+  test("本地路径与非引用格式返回 null", () => {
+    expect(externalUrls("config/rules/custom/Adult.yaml")).toBeNull();
+    expect(externalUrls("geosite:")).toBeNull();
+    expect(externalUrls("geosite:Bad_Name!")).toBeNull();
+    expect(externalUrls("http://example.com/x.list")).toBeNull();
   });
 });
 
-describe("单行判定与特殊引用", () => {
-  test("省略写法还原：.domain 是 DOMAIN-SUFFIX，裸域名是 DOMAIN", () => {
-    const { ast: ast1 } = parseSourceToAst(".example.com");
-    expect(ast1.domain_suffix).toEqual(["example.com"]);
-
-    const { ast: ast2 } = parseSourceToAst("example.com");
-    expect(ast2.domain).toEqual(["example.com"]);
-  });
-
-  test("端口类转成数字，范围端口转冒号", () => {
-    const { ast } = parseSourceToAst(["DST-PORT,443", "DST-PORT-RANGE,6881-6889"].join("\n"));
-    expect(ast.port).toEqual([443]);
+describe("内部 YAML AST 解析", () => {
+  test("紧凑字典展开为各字段数组，连字符键名归一化", () => {
+    const yaml = `
+rules:
+  - domain_suffix:
+      - example.com
+  - domain-keyword:
+      - ads
+  - port: 8080
+  - port_range:
+      - 6881:6889
+`;
+    const ast = parseYamlAst(yaml);
+    expect(ast.domain_suffix).toEqual(["example.com"]);
+    expect(ast.domain_keyword).toEqual(["ads"]);
+    expect(ast.port).toEqual([8080]);
     expect(ast.port_range).toEqual(["6881:6889"]);
   });
 
-  test("GEOIP/GEOSITE 单独成类，不被当成无法表达", () => {
-    const { specialRefs } = parseSourceToAst("GEOIP,CN,DIRECT");
-    expect(specialRefs).toEqual([{ kind: "geoip", value: "cn" }]);
-  });
-});
-
-describe("convert --client singbox", () => {
-  test("每种受支持类型都映射到对应字段", () => {
-    const rules = singboxRules(
-      [
-        "DOMAIN,a.test",
-        "DOMAIN-SUFFIX,b.test",
-        "DOMAIN-KEYWORD,keyword",
-        "DOMAIN-REGEX,^regex\\..+",
-        "IP-CIDR,10.0.0.0/8,no-resolve",
-        "IP-CIDR6,2001:db8::/32,no-resolve",
-        "SRC-IP-CIDR,10.1.0.0/16",
-        "SRC-PORT,1234",
-        "DST-PORT,443",
-        "PROCESS-NAME,curl",
-      ].join("\n"),
-    );
-
-    expect(fieldValues(rules, "domain")).toEqual(["a.test"]);
-    expect(fieldValues(rules, "domain_suffix")).toEqual(["b.test"]);
-    expect(fieldValues(rules, "domain_keyword")).toEqual(["keyword"]);
-    expect(fieldValues(rules, "domain_regex")).toEqual(["^regex\\..+"]);
-    expect((fieldValues(rules, "ip_cidr") as string[]).sort()).toEqual([
-      "10.0.0.0/8",
-      "2001:db8::/32",
-    ]);
-    expect(fieldValues(rules, "source_ip_cidr")).toEqual(["10.1.0.0/16"]);
-    expect(fieldValues(rules, "source_port")).toEqual([1234]);
-    expect(fieldValues(rules, "port")).toEqual([443]);
-    expect(fieldValues(rules, "process_name")).toEqual(["curl"]);
+  test("同字段跨条目去重合并", () => {
+    const ast = parseYamlAst(`
+rules:
+  - domain_suffix: [a.test]
+  - domain_suffix: [b.test]
+  - domain_suffix: [a.test]
+`);
+    expect(ast.domain_suffix).toEqual(["a.test", "b.test"]);
   });
 
-  test("注释、空行与 no-resolve 后缀都不进产物", () => {
-    const rules = singboxRules(
-      ["# 注释", "", "IP-CIDR,1.1.1.1/32,no-resolve", "  ", "DOMAIN,a.test"].join("\n"),
-    );
-    expect(rules).toEqual([{ domain: ["a.test"] }, { ip_cidr: ["1.1.1.1/32"] }]);
-  });
-
-  test("同字段重复值合并进一条规则", () => {
-    const rules = singboxRules(
-      ["DOMAIN-SUFFIX,a.test", "DOMAIN-SUFFIX,b.test", "DOMAIN-SUFFIX,c.test"].join("\n"),
-    );
-    const suffixRules = rules.filter((rule) => rule.domain_suffix);
-    expect(suffixRules).toHaveLength(1);
-    expect(suffixRules[0].domain_suffix).toEqual(["a.test", "b.test", "c.test"]);
-  });
-
-  test("sing-box 无法表达的类型被跳过，且不留痕", () => {
-    const emission = emitSingbox(
-      normalizeRuleLines(
-        ["DOMAIN,a.test", "IP-ASN,396982,no-resolve", "USER-AGENT,SomeApp*", "URL-REGEX,^https?://ads"].join(
-          "\n",
-        ),
-      ),
-    );
-    const rules = JSON.parse(emission.text).rules as SingBoxRule[];
-    expect(fieldValues(rules, "domain")).toEqual(["a.test"]);
-    // 跳过项不得以任何形式出现在产物里。
-    expect(emission.text).not.toContain("396982");
-    expect(emission.text).not.toContain("SomeApp");
-    expect(emission.skipped).toHaveLength(3);
-  });
-
-  test("纯 GEOIP 列表退化为对上游预编译规则集的引用", () => {
-    // cn.list 全文只有 GEOIP,cn。行内 geoip 匹配已在 1.12.0 移除，
-    // 但整份列表只有这一条时可以退化为对 sing-geoip 的引用。
-    const payload = JSON.parse(emitSingbox(normalizeRuleLines("GEOIP,cn,DIRECT")).text);
-    expect(payload.kind).toBe("external_rule_set");
-    expect(payload.references[0].tag).toBe("geoip-cn");
-    expect(payload.references[0].url).toContain("sing-geoip");
-
-    const fromAst = JSON.parse(emitSingbox(parseSourceToAst("GEOIP,cn,DIRECT")).text);
-    expect(fromAst.kind).toBe("external_rule_set");
-  });
-  test("空输入产出空的规则列表", () => {
-    expect(JSON.parse(emitSingbox([]).text)).toEqual({ version: 3, rules: [] });
-  });
-
-  test("逻辑规则（AND/OR/NOT）转成 logical 表达式", () => {
-    const rules = singboxRules("AND,(DOMAIN,a.test),(DST-PORT,443)");
-    expect(rules).toHaveLength(1);
-    expect(rules[0].type).toBe("logical");
-    expect(rules[0].mode).toBe("and");
-    expect((rules[0].rules as SingBoxRule[]).length).toBe(2);
-  });
-
-  test("NOT 转成 invert", () => {
-    const rules = singboxRules("NOT,(DOMAIN,a.test)");
-    expect(rules[0]).toEqual({ domain: ["a.test"], invert: true });
-  });
-
-  test("NOT 嵌套时正确翻转 invert", () => {
-    const yaml = `rules:
-  - logical:
-      - mode: not
-        rules:
-          - mode: not
-            rules:
-              - domain: a.test
-`;
-    const { ast } = parseSourceToAst(yaml, "custom.yaml");
-    const rules = JSON.parse(emitSingbox(ast).text).rules as SingBoxRule[];
-    expect(rules[0]).toEqual({ domain: ["a.test"] });
-  });
-
-  test("纯 GEOIP 输入中无法表达的条目仍保留在 skipped 诊断里", () => {
-    const emission = emitSingbox(normalizeRuleLines(["GEOIP,cn,DIRECT", "USER-AGENT,SomeApp*", "IP-ASN,396982"].join("\n")));
-    const payload = JSON.parse(emission.text) as { kind?: string };
-    expect(payload.kind).toBe("external_rule_set");
-    expect(emission.skipped).toHaveLength(2);
-  });
-
-  test("结构化逻辑规则（AND 内含 OR）完整保留在 singbox 规则树中", () => {
-    const yaml = `rules:
+  test("logical 节点原样进树", () => {
+    const ast = parseYamlAst(`
+rules:
   - logical:
       - mode: and
         rules:
-          - mode: or
-            rules:
-              - domain_suffix: online
-              - domain_suffix: site
-          - domain_keyword: assets-
-`;
-    const { ast } = parseSourceToAst(yaml, "custom.yaml");
-    const emission = emitSingbox(ast);
-    const rules = JSON.parse(emission.text).rules as SingBoxRule[];
+          - domain_suffix: online
+          - domain_keyword: ads-
+`);
+    expect(ast.logical).toHaveLength(1);
+    expect(ast.logical![0].mode).toBe("and");
+  });
+
+  test("未知字段直接抛错，不静默丢规则", () => {
+    expect(() => parseYamlAst("rules:\n  - user-agent:\n      - SomeApp*\n")).toThrow(
+      /未知的规则字段/,
+    );
+  });
+});
+
+describe("emitSingbox", () => {
+  test("字段映射：域名/IP/端口/进程各自成规则，值合并去重", () => {
+    const rules = singboxRules({
+      domain: ["a.test"],
+      domain_suffix: ["b.test", "c.test"],
+      domain_keyword: ["keyword"],
+      domain_regex: ["^regex\\..+"],
+      ip_cidr: ["10.0.0.0/8,no-resolve", "2001:db8::/32"],
+      source_ip_cidr: ["10.1.0.0/16"],
+      port: [443],
+      source_port: [1234],
+      process_name: ["curl"],
+    });
+
+    expect(fieldValues(rules, "domain")).toEqual(["a.test"]);
+    expect(fieldValues(rules, "domain_suffix")).toEqual(["b.test", "c.test"]);
+    expect(fieldValues(rules, "domain_keyword")).toEqual(["keyword"]);
+    expect(fieldValues(rules, "domain_regex")).toEqual(["^regex\\..+"]);
+    // no-resolve 是 mihomo/Loon 专用选项，sing-box 规则集剥离
+    expect(fieldValues(rules, "ip_cidr")).toEqual(["10.0.0.0/8", "2001:db8::/32"]);
+    expect(fieldValues(rules, "source_ip_cidr")).toEqual(["10.1.0.0/16"]);
+    expect(fieldValues(rules, "port")).toEqual([443]);
+    expect(fieldValues(rules, "source_port")).toEqual([1234]);
+    expect(fieldValues(rules, "process_name")).toEqual(["curl"]);
+  });
+
+  test("结构化逻辑规则完整保留为 logical 树", () => {
+    const rules = singboxRules({
+      logical: [
+        {
+          mode: "and",
+          rules: [
+            { mode: "or", rules: [{ domain_suffix: "online" }, { domain_suffix: "site" }] },
+            { domain_keyword: "assets-" },
+          ],
+        },
+      ],
+    });
     expect(rules).toHaveLength(1);
     expect(rules[0].type).toBe("logical");
     expect(rules[0].mode).toBe("and");
@@ -209,63 +159,79 @@ describe("convert --client singbox", () => {
     expect((sub.rules as SingBoxRule[]).length).toBe(2);
   });
 
-  test("DNS 伴生只保留按查询名匹配的字段", () => {
+  test("NOT 单子节点折叠为 invert，双重否定还原", () => {
+    const not = singboxRules({ logical: [{ mode: "not", rules: [{ domain: "a.test" }] }] });
+    expect(not[0]).toEqual({ domain: ["a.test"], invert: true });
+
+    const double = singboxRules({
+      logical: [{ mode: "not", rules: [{ mode: "not", rules: [{ domain: "a.test" }] }] }],
+    });
+    expect(double[0]).toEqual({ domain: ["a.test"] });
+  });
+
+  test("空 AST 产出空规则集", () => {
+    expect(JSON.parse(emitSingbox({}))).toEqual({ version: 3, rules: [] });
+  });
+});
+
+describe("emitSingboxDns", () => {
+  test("只保留按查询名匹配的字段", () => {
     // DNS 规则在拿到响应前只能按查询名判定，IP 类条目在 DNS 规则里没有可判定语义。
-    const emission = emitSingboxDns(
-      normalizeRuleLines(
-        ["DOMAIN,a.test", "DOMAIN-SUFFIX,cn", "IP-CIDR,10.0.0.0/8,no-resolve", "GEOIP,cn,DIRECT"].join("\n"),
-      ),
+    const dns = JSON.parse(
+      emitSingboxDns({
+        domain: ["a.test"],
+        domain_suffix: ["cn"],
+        ip_cidr: ["10.0.0.0/8"],
+        port: [443],
+      }),
     );
-    expect(JSON.parse(emission.text).rules).toEqual([
-      { domain: ["a.test"] },
-      { domain_suffix: ["cn"] },
-    ]);
+    expect(dns.rules).toEqual([{ domain: ["a.test"] }, { domain_suffix: ["cn"] }]);
   });
 
   test("没有域名条目的列表产出空规则集，而不是构建失败", () => {
     // 空规则集是合法的（内核接受 rules: []），且任何清单都可能被设备 overlay 的
     // DNS 规则引用；构建期无法预知谁会被引用，所以这里不能抛错。
-    const emission = emitSingboxDns(normalizeRuleLines("IP-CIDR,10.0.0.0/8"));
-    expect(JSON.parse(emission.text)).toEqual({ version: 3, rules: [] });
+    expect(JSON.parse(emitSingboxDns({ ip_cidr: ["10.0.0.0/8"] }))).toEqual({
+      version: 3,
+      rules: [],
+    });
   });
 });
 
-describe("convert --client clash", () => {
-  test("mihomo 能表达的类型原样保留", () => {
-    const { text } = emitClash(
-      normalizeRuleLines(["DOMAIN,a.test", "IP-ASN,396982,no-resolve", "GEOIP,CN,DIRECT"].join("\n")),
-    );
+describe("emitClash（mihomo classical）", () => {
+  test("字段展开为 classical 行，端口范围转连字符，no-resolve 保留", () => {
+    const text = emitClash({
+      domain: ["a.test"],
+      ip_cidr: ["1.1.1.1/32,no-resolve"],
+      ip_asn: ["396982,no-resolve"],
+      port: [22],
+      port_range: ["6881:6889"],
+      source_port_range: ["1000:2000"],
+    });
     expect(text).toContain("- 'DOMAIN,a.test'");
+    expect(text).toContain("- 'IP-CIDR,1.1.1.1/32,no-resolve'");
     expect(text).toContain("- 'IP-ASN,396982,no-resolve'");
-    expect(text).toContain("- 'GEOIP,CN,DIRECT'");
-  });
-
-  test("Loon 的 DEST-PORT 改名成 mihomo 的 DST-PORT，省略写法还原", () => {
-    const { text } = emitClash(["DEST-PORT,22", ".example.com", "example.com"]);
     expect(text).toContain("- 'DST-PORT,22'");
-    expect(text).toContain("- 'DOMAIN-SUFFIX,example.com'");
-    expect(text).toContain("- 'DOMAIN,example.com'");
+    expect(text).toContain("- 'DST-PORT,6881-6889'");
+    expect(text).toContain("- 'SRC-PORT,1000-2000'");
   });
 
-  test("USER-AGENT 与 URL-REGEX 被跳过", () => {
-    const { text, skipped } = emitClash(
-      normalizeRuleLines(["DOMAIN,a.test", "USER-AGENT,SomeApp*", "URL-REGEX,^https?://ads"].join("\n")),
-    );
-    expect(text).not.toContain("USER-AGENT");
-    expect(text).not.toContain("URL-REGEX");
-    expect(skipped).toHaveLength(2);
-  });
-
-  test("空输入产出空 payload", () => {
-    expect(emitClash([]).text).toBe("payload: []\n");
+  test("空 AST 产出空 payload", () => {
+    expect(emitClash({})).toBe("payload: []\n");
   });
 });
 
-describe("convert --client plain", () => {
-  test("全部行原样输出，含无法表达的类型", () => {
-    // plain 供 Loon / Surge 直接按 URL 引用，行格式与源格式一致。
-    const input = ["DOMAIN,a.test", "IP-ASN,396982,no-resolve", "USER-AGENT,SomeApp*", "DEST-PORT,22"];
-    expect(emitPlain(input).text).toBe(`${input.join("\n")}\n`);
+describe("emitPlain（Loon / Surge）", () => {
+  test("DEST-PORT 拼写、连字符范围、IPv6 用 IP-CIDR6", () => {
+    const text = emitPlain({
+      port: [22],
+      port_range: ["6881:6889"],
+      ip_cidr: ["240e::/18,no-resolve", "1.1.1.1/32,no-resolve"],
+    });
+    expect(text).toContain("DEST-PORT,22");
+    expect(text).toContain("DEST-PORT,6881-6889");
+    expect(text).toContain("IP-CIDR6,240e::/18,no-resolve");
+    expect(text).toContain("IP-CIDR,1.1.1.1/32,no-resolve");
   });
 });
 
@@ -391,105 +357,27 @@ describe("底模契约校验", () => {
   });
 });
 
-describe("YAML 规则 AST 解析与多端方言发射", () => {
-  test("parseYamlToRuleLines 正确展开紧凑字典 YAML", () => {
-    const yaml = `rules:\n  - domain_suffix:\n      - example.com\n  - port:\n      - 8080\n  - port_range:\n      - 6881:6889\n`;
-    const lines = parseYamlToRuleLines(yaml);
-    expect(lines).toContain("DOMAIN-SUFFIX,example.com");
-    expect(lines).toContain("DST-PORT,8080");
-    expect(lines).toContain("DST-PORT-RANGE,6881:6889");
+describe("真实 custom 文件端到端", () => {
+  test("Adult.yaml 三条嵌套逻辑规则在三端完整保留", () => {
+    const ast = parseYamlAst(readFileSync("config/rules/custom/Adult.yaml", "utf-8"));
+    expect(ast.domain_keyword).toContain("123av");
 
-    const emission = emitSingbox(lines);
-    const parsed = JSON.parse(emission.text) as { rules: Record<string, unknown>[] };
-    expect(parsed.rules.some((r) => Array.isArray(r.domain_suffix) && r.domain_suffix.includes("example.com"))).toBe(true);
-    expect(parsed.rules.some((r) => Array.isArray(r.port) && r.port.includes(8080))).toBe(true);
-    expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("6881:6889"))).toBe(true);
+    const parsed = JSON.parse(emitSingbox(ast)) as { rules: Record<string, unknown>[] };
+    expect(parsed.rules.filter((r) => r.type === "logical")).toHaveLength(3);
+
+    expect(emitClash(ast)).toContain("AND,((OR,((DOMAIN-SUFFIX,online)");
+    expect(emitPlain(ast)).toContain("AND,((OR,((DOMAIN-SUFFIX,online)");
   });
 
-  test("emitClash 和 emitPlain 正确转换目标端口、范围端口与 IPv6 CIDR", () => {
-    const lines = [
-      "DST-PORT,22",
-      "DST-PORT-RANGE,6881:6889",
-      "SRC-PORT-RANGE,1000:2000",
-      "IP-CIDR,240e::/18,no-resolve",
-      "IP-CIDR,1.1.1.1/32,no-resolve"
-    ];
-
-    // Mihomo: DST-PORT, 连字符范围
-    const clash = emitClash(lines);
-    expect(clash.text).toContain("'DST-PORT,22'");
-    expect(clash.text).toContain("'DST-PORT,6881-6889'");
-    expect(clash.text).toContain("'SRC-PORT,1000-2000'");
-    expect(clash.text).toContain("'IP-CIDR,240e::/18,no-resolve'");
-    expect(clash.text).toContain("'IP-CIDR,1.1.1.1/32,no-resolve'");
-
-    // Loon: DEST-PORT, IP-CIDR6
-    const plain = emitPlain(lines);
-    expect(plain.text).toContain("DEST-PORT,22");
-    expect(plain.text).toContain("DEST-PORT,6881-6889");
-    expect(plain.text).toContain("SRC-PORT,1000-2000");
-    expect(plain.text).toContain("IP-CIDR6,240e::/18,no-resolve");
-    expect(plain.text).toContain("IP-CIDR,1.1.1.1/32,no-resolve");
+  test("ptcg.yaml 的 IP-ASN 在 mihomo/Loon 端保留 no-resolve", () => {
+    const ast = parseYamlAst(readFileSync("config/rules/custom/ptcg.yaml", "utf-8"));
+    expect(emitClash(ast)).toContain("'IP-ASN,396982,no-resolve'");
+    expect(emitPlain(ast)).toContain("IP-ASN,396982,no-resolve");
   });
 
-  test("Adult.yaml 完整保留三条嵌套逻辑规则", () => {
-    const raw = readFileSync("config/rules/custom/Adult.yaml", "utf-8");
-    const lines = parseYamlToRuleLines(raw);
-    expect(lines.some((l) => l.includes("123av") || l.includes("assets-"))).toBe(true);
-    expect(lines.some((l) => l.includes("trendcart"))).toBe(true);
-    expect(lines.some((l) => l.includes("radiantflow"))).toBe(true);
-
-    const { ast } = parseSourceToAst(raw, "Adult.yaml");
-    const singbox = emitSingbox(ast);
-    const parsed = JSON.parse(singbox.text) as { rules: Record<string, unknown>[] };
-    const logicalRules = parsed.rules.filter((r) => r.type === "logical");
-    expect(logicalRules.length).toBe(3);
-
-    const clash = emitClash(ast);
-    expect(clash.text).toContain("AND,((OR,((DOMAIN-SUFFIX,online)");
-
-    const plain = emitPlain(ast);
-    expect(plain.text).toContain("AND,((OR,((DOMAIN-SUFFIX,online)");
-  });
-  test("ptcg.yaml 导出时保留 IP-ASN 的 no-resolve 选项", () => {
-    const raw = readFileSync("config/rules/custom/ptcg.yaml", "utf-8");
-    const lines = parseYamlToRuleLines(raw);
-    expect(lines).toContain("IP-ASN,396982,no-resolve");
-
-    const clash = emitClash(lines);
-    expect(clash.text).toContain("'IP-ASN,396982,no-resolve'");
-
-    const plain = emitPlain(lines);
-    expect(plain.text).toContain("IP-ASN,396982,no-resolve");
-  });
-
-  test("readRuleLines 正确识别带头部注释与空行的 classical payload 与 rules YAML", () => {
-    const payloadYaml = "# upstream source comment\n\n# another comment\npayload:\n  - 'DOMAIN-SUFFIX,example.com'\n";
-    const linesFromPayload = readRuleLines(payloadYaml, "external.yaml");
-    expect(linesFromPayload).toContain("DOMAIN-SUFFIX,example.com");
-
-    const customYaml = "# custom rule comment\n\nrules:\n  - domain_suffix:\n      - internal.com\n";
-    const linesFromCustom = readRuleLines(customYaml, "custom.yaml");
-    expect(linesFromCustom).toContain("DOMAIN-SUFFIX,internal.com");
-
-    // stdin 且带头部注释的 rules 识别
-    const linesFromStdin = readRuleLines(customYaml);
-    expect(linesFromStdin).toContain("DOMAIN-SUFFIX,internal.com");
-  });
-
-  test("PORT-RANGE 与 DEST-PORT 范围别名在三端均能正确映射", () => {
-    const lines = ["PORT-RANGE,6881:6889", "DEST-PORT,8000:9000"];
-    const clash = emitClash(lines);
-    expect(clash.text).toContain("'DST-PORT,6881-6889'");
-    expect(clash.text).toContain("'DST-PORT,8000-9000'");
-
-    const plain = emitPlain(lines);
-    expect(plain.text).toContain("DEST-PORT,6881-6889");
-    expect(plain.text).toContain("DEST-PORT,8000-9000");
-
-    const singbox = emitSingbox(lines);
-    const parsed = JSON.parse(singbox.text) as { rules: Record<string, unknown>[] };
-    expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("6881:6889"))).toBe(true);
-    expect(parsed.rules.some((r) => Array.isArray(r.port_range) && r.port_range.includes("8000:9000"))).toBe(true);
+  test("Lan.yaml 保留私网 IP 段与本地域名", () => {
+    const ast = parseYamlAst(readFileSync("config/rules/custom/Lan.yaml", "utf-8"));
+    expect(ast.ip_cidr).toContain("192.168.0.0/16,no-resolve");
+    expect(ast.domain_suffix).toContain("home.arpa");
   });
 });
