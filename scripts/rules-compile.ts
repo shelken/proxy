@@ -201,7 +201,7 @@ export function parseYamlAst(content: string): RuleAST {
           if (node === null || typeof node !== "object" || Array.isArray(node) || !("mode" in node) || !Array.isArray(node.rules)) {
             throw new Error(`logical 条目必须包含 mode 与 rules 数组: ${JSON.stringify(l)}`);
           }
-          (ast.logical ??= []).push(node);
+          (ast.logical ??= []).push(normalizeLogical(node));
         }
         continue;
       }
@@ -210,14 +210,53 @@ export function parseYamlAst(content: string): RuleAST {
           `未知的规则字段: ${rawKey}（可用: ${[...FIELD_ORDER, "ip_asn", "logical"].join(", ")}）`,
         );
       }
-      for (const val of Array.isArray(rawValues) ? rawValues : [rawValues]) {
-        if (key === "port" || key === "source_port") add(key, Number(val));
-        else if (key === "port_range" || key === "source_port_range") add(key, String(val).replace("-", ":"));
-        else add(key, String(val));
+      for (const val of scalarList(rawKey, rawValues)) {
+        if (key === "port" || key === "source_port") {
+          const num = Number(val);
+          if (!Number.isFinite(num)) throw new Error(`字段 ${rawKey} 必须是数字: ${JSON.stringify(val)}`);
+          add(key, num);
+        } else if (key === "port_range" || key === "source_port_range") {
+          add(key, String(val).replace("-", ":"));
+        } else {
+          add(key, String(val));
+        }
       }
     }
   }
   return ast;
+}
+
+/** 字段值只能是字符串或数字（或它们的数组）；null、映射对象、嵌套数组一律报错。 */
+function scalarList(field: string, raw: unknown): unknown[] {
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const one of list) {
+    if (typeof one !== "string" && typeof one !== "number") {
+      throw new Error(`字段 ${field} 的值必须是字符串或数字: ${JSON.stringify(one)}`);
+    }
+  }
+  return list;
+}
+
+/**
+ * 校验 logical 子树：键名归一化，叶节点必须是白名单内的单字段标量。
+ * 多字段与数组叶子未被任何规则使用，且端上方言展开语义复杂，明确拒绝而非静默畸形输出。
+ */
+function normalizeLogical(node: Record<string, unknown>): Record<string, unknown> {
+  const rules = (node.rules as unknown[]).map((sub) => {
+    if (sub === null || typeof sub !== "object" || Array.isArray(sub)) {
+      throw new Error(`logical 子规则必须是对象: ${JSON.stringify(sub)}`);
+    }
+    const child = sub as Record<string, unknown>;
+    if ("mode" in child) return normalizeLogical(child);
+    const keys = Object.keys(child);
+    if (keys.length !== 1) throw new Error(`logical 叶节点必须恰好一个字段: ${JSON.stringify(child)}`);
+    const k = keys[0].replace(/-/g, "_");
+    if (!FIELD_ORDER.includes(k as keyof RuleAST)) throw new Error(`logical 未知字段: ${keys[0]}`);
+    const vals = scalarList(keys[0], child[keys[0]]);
+    if (vals.length !== 1) throw new Error(`logical 叶节点值必须是单个标量: ${JSON.stringify(child)}`);
+    return { [k]: vals[0] };
+  });
+  return { mode: node.mode, rules };
 }
 
 /** 逻辑规则树 → Mihomo/Loon 的单行文本形态。 */
@@ -290,7 +329,19 @@ export function emitSingboxDns(ast: RuleAST): string {
       rules.push({ [field]: vals as JsonValue });
     }
   }
+  // 叶子全为域名字段的逻辑树在 DNS 阶段同样按查询名可判定，保留；混合树无法部分重写
+  for (const l of ast.logical ?? []) {
+    if (dnsOnlyLogical(l)) rules.push(normalizeSingboxLogical(l));
+  }
   return `${JSON.stringify({ version: 3, rules }, null, 2)}\n`;
+}
+
+/** 逻辑树所有叶字段都属于 DNS 可判定字段（域名类）时为真。 */
+function dnsOnlyLogical(node: Record<string, unknown>): boolean {
+  if (Array.isArray(node.rules)) {
+    return (node.rules as Record<string, unknown>[]).every(dnsOnlyLogical);
+  }
+  return Object.keys(node).every((k) => (DNS_RULE_FIELDS as readonly string[]).includes(k));
 }
 
 export function emitClash(ast: RuleAST): string {
@@ -332,7 +383,7 @@ export function emitPlain(ast: RuleAST): string {
   for (const r of ast.port_range ?? []) lines.push(`DEST-PORT,${r.replace(":", "-")}`);
   for (const p of ast.source_port ?? []) lines.push(`SRC-PORT,${p}`);
   for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
-  for (const n of ast.network ?? []) lines.push(`NETWORK,${n}`);
+  for (const n of ast.network ?? []) lines.push(`PROTOCOL,${String(n).toUpperCase()}`);
   for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
   return `${lines.join("\n")}\n`;
 }

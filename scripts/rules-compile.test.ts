@@ -123,6 +123,33 @@ rules:
       /未知的规则字段/,
     );
   });
+
+  test("非标量字段值（null/映射对象/嵌套数组）构建期报错，不字符串化", () => {
+    expect(() => parseYamlAst("rules:\n  - domain_suffix:\n      domains:\n        - example.com\n")).toThrow(
+      /必须是字符串或数字/,
+    );
+    expect(() => parseYamlAst("rules:\n  - domain_suffix: null\n")).toThrow(/必须是字符串或数字/);
+    expect(() => parseYamlAst("rules:\n  - domain_suffix:\n      - - a.test\n")).toThrow(
+      /必须是字符串或数字/,
+    );
+    expect(() => parseYamlAst("rules:\n  - port: not-a-number\n")).toThrow(/必须是数字/);
+  });
+
+  test("logical 叶节点必须是白名单内的单字段标量，连字符键名归一化", () => {
+    expect(() =>
+      parseYamlAst("rules:\n  - logical:\n      - mode: and\n        rules:\n          - user-agent: X\n"),
+    ).toThrow(/logical 未知字段/);
+    expect(() =>
+      parseYamlAst("rules:\n  - logical:\n      - mode: and\n        rules:\n          - domain_suffix: [a.test, b.test]\n"),
+    ).toThrow(/单个标量/);
+    expect(() =>
+      parseYamlAst("rules:\n  - logical:\n      - mode: and\n        rules:\n          - domain_suffix: a.test\n            port: 443\n"),
+    ).toThrow(/恰好一个字段/);
+    const ast = parseYamlAst(
+      "rules:\n  - logical:\n      - mode: and\n        rules:\n          - domain-suffix: a.test\n",
+    );
+    expect(ast.logical![0].rules).toEqual([{ domain_suffix: "a.test" }]);
+  });
 });
 
 describe("emitSingbox", () => {
@@ -208,6 +235,20 @@ describe("emitSingboxDns", () => {
       rules: [],
     });
   });
+
+  test("叶子全为域名字段的逻辑树保留，混合树丢弃", () => {
+    const dns = JSON.parse(
+      emitSingboxDns({
+        logical: [
+          { mode: "and", rules: [{ domain_suffix: "online" }, { domain_keyword: "assets-" }] },
+          { mode: "and", rules: [{ domain_suffix: "x" }, { port: 443 }] },
+        ],
+      }),
+    );
+    expect(dns.rules).toEqual([
+      { type: "logical", mode: "and", rules: [{ domain_suffix: ["online"] }, { domain_keyword: ["assets-"] }] },
+    ]);
+  });
 });
 
 describe("emitClash（mihomo classical）", () => {
@@ -244,6 +285,11 @@ describe("emitPlain（Loon / Surge）", () => {
     expect(text).toContain("DEST-PORT,6881-6889");
     expect(text).toContain("IP-CIDR6,240e::/18,no-resolve");
     expect(text).toContain("IP-CIDR,1.1.1.1/32,no-resolve");
+  });
+
+  test("network 映射为 Loon / Surge 的 PROTOCOL 并大写", () => {
+    expect(emitPlain({ network: ["udp"] })).toContain("PROTOCOL,UDP");
+    expect(emitClash({ network: ["udp"] })).toContain("- 'NETWORK,udp'");
   });
 });
 
