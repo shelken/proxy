@@ -1,0 +1,5 @@
+rules:
+  - domain_suffix:
+      - z.ai
+      - zcode-ai.com
+      - dimagent.cn

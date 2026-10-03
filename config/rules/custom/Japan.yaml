@@ -1,0 +1,5 @@
+rules:
+  - domain_suffix:
+      - dmm.co.jp
+      - dmm.com
+      - jp

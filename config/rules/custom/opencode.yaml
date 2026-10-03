@@ -1,0 +1,3 @@
+rules:
+  - domain_suffix:
+      - opencode.ai

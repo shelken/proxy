@@ -1,0 +1,23 @@
+rules:
+  - domain_keyword:
+      - "analytics."
+      - "app-analytics"
+      - "app-log."
+      - "applog."
+      - "fzlm"
+      - "ios-log."
+      - "ioslog."
+      - "pc-log."
+      - "pclog."
+  - ip_cidr:
+      - "0.0.0.1/32,no-resolve"
+      - "109.123.233.251/32,no-resolve"
+      - "157.148.47.204/32,no-resolve"
+      - "185.193.38.148/32,no-resolve"
+      - "219.143.187.136/32,no-resolve"
+      - "34.215.155.61/32,no-resolve"
+      - "35.194.26.233/32,no-resolve"
+      - "35.239.57.233/32,no-resolve"
+      - "44.228.85.26/32,no-resolve"
+      - "45.32.105.134/32,no-resolve"
+      - "77.162.125.199/32,no-resolve"

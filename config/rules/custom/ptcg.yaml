@@ -1,0 +1,12 @@
+rules:
+  - domain_suffix:
+      - pokemontcgpocket.com
+      - nintendo.com
+      - nintendo.net
+      - nintendo.co.jp
+      - nintendoswitch.com
+      - akamaized.net
+  - domain_keyword:
+      - player-api-prod
+  - ip-asn:
+      - 396982,no-resolve

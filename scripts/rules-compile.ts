@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 /**
- * 规则编译器：`config/rules/index.yaml` 清单 → 各客户端规则产物 + `sing-box` 二进制规则集。
+ * 规则编译器：`config/rules/index.yaml` 清单 → 各客户端规则产物。
  *
- * 三种产物形态，同一份源规则各自表达：
- *   - singbox  源规则 JSON，再用官方 `sing-box rule-set compile` 编成 `.srs`
- *   - clash    mihomo rule-provider 的 payload 文本
- *   - plain    原样文本，供 Loon / Surge 直接按 URL 引用
+ * 两种源、各自最短路径：
+ *   - geosite:x / geoip:x  外部原生引用：直接下载 MetaCubeX/meta-rules-dat 的
+ *                          三端同源产物（.srs / mihomo yaml / .list），零解析。
+ *   - custom/*.yaml        内部结构化规则：YAML → AST → 三端发射，
+ *                          sing-box 端再经官方 `rule-set compile` 编成 .srs。
  *
- * 另有 `-dns` 伴生规则集：DNS 规则在拿到响应前只能按查询名判定，IP 类条目在 1.14 起废弃、
- * 1.16 移除，所以被 DNS 规则引用的清单要有一份只含域名条目的副本。
+ * 另有 `-dns` 伴生规则集：DNS 规则在拿到响应前只能按查询名判定，IP 类条目在
+ * 1.14 起废弃、1.16 移除，所以被 DNS 规则引用的清单要有一份只含域名条目的副本。
  *
  * 不做的事：不解析订阅、不装配节点（那是 sbtools 服务端的职责）、不写 template.json
  * （底模是手写的单一配置源，这里只校验它与清单是否漂移）。
@@ -22,65 +23,9 @@ const ROOT = resolve(import.meta.dir, "..");
 const MANIFEST_PATH = join(ROOT, "config/rules/index.yaml");
 const GENERATED_DIR = join(ROOT, "config/rules/generated");
 const TEMPLATE_PATH = join(ROOT, "config/sing-box/template.json");
-const SING_GEOIP_PREFIX = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set";
-const SING_GEOSITE_PREFIX =
-  "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set";
 
-/** 源语法 → sing-box 字段。未列出的类型一律跳过并记录。 */
-const SUPPORTED_FIELDS: Record<string, string> = {
-  DOMAIN: "domain",
-  "DOMAIN-SUFFIX": "domain_suffix",
-  "DOMAIN-KEYWORD": "domain_keyword",
-  "DOMAIN-REGEX": "domain_regex",
-  "IP-CIDR": "ip_cidr",
-  "IP-CIDR6": "ip_cidr",
-  "SRC-IP-CIDR": "source_ip_cidr",
-  "SRC-PORT": "source_port",
-  "DST-PORT": "port",
-  "DEST-PORT": "port",
-  PORT: "port",
-  "PROCESS-NAME": "process_name",
-  NETWORK: "network",
-};
-
-/**
- * sing-box 路由没有对应表达、只能跳过的类型。
- *
- * USER-AGENT / URL-REGEX：单靠 TLS 嗅探拿不到这两个维度。
- * IP-ASN / SRC-GEOIP / SRC-IP-ASN：geoip 族行内匹配已在 1.12.0 移除，源侧无等价表达。
- * IN-PORT：sing-box 用 inbound tag 区分入口，不是端口号。
- * PROTOCOL：Loon 取值（TCP/UDP/QUIC/HTTP）与 sing-box 的 protocol/network 两套语义交叉，
- *           无法一一映射，宁可跳过也不猜。
- *
- * GEOIP / GEOSITE 不在此列：整份列表只剩这类引用时，退化为对上游预编译规则集的引用。
- */
-const UNSUPPORTED_TYPES = new Set([
-  "USER-AGENT",
-  "URL-REGEX",
-  "IP-ASN",
-  "SRC-GEOIP",
-  "SRC-IP-ASN",
-  "IN-PORT",
-  "PROTOCOL",
-]);
-
-/** mihomo 的 classical provider 能原生吃下这些行。 */
-const CLASH_SUPPORTED = new Set([
-  ...Object.keys(SUPPORTED_FIELDS),
-  "IP-ASN",
-  "GEOIP",
-  "GEOSITE",
-  "SRC-GEOIP",
-  "SRC-IP-ASN",
-  "SRC-IP-SUFFIX",
-  "IP-SUFFIX",
-  "AND",
-  "OR",
-  "NOT",
-]);
-
-/** Loon 用 DEST-PORT，mihomo 用 DST-PORT，同一语义两种拼写。 */
-const CLASH_RENAMES: Record<string, string> = { "DEST-PORT": "DST-PORT" };
+const META_RULES_SING = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo";
+const META_RULES_MIHOMO = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo";
 
 const DNS_RULE_FIELDS = [
   "domain",
@@ -101,7 +46,9 @@ const FIELD_ORDER = [
   "ip_cidr",
   "source_ip_cidr",
   "port",
+  "port_range",
   "source_port",
+  "source_port_range",
   "network",
 ];
 
@@ -115,12 +62,6 @@ export type Client = "singbox" | "clash" | "plain";
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 export type SingBoxRule = Record<string, JsonValue>;
-
-export interface Emission {
-  text: string;
-  skipped: string[];
-  specialRefs: { kind: string; value: string }[];
-}
 
 export interface ManifestItem {
   tag: string;
@@ -136,44 +77,17 @@ export interface BuildResult {
 
 // ---------------------------------------------------------------- 源读取
 
-/** 清单 source：http(s) 联网拉取，否则按仓库相对路径读本地文件。 */
-function readSource(source: string): string {
-  if (source.startsWith("http://") || source.startsWith("https://")) {
-    const res = fetchSync(source);
-    if (!res.ok) throw new Error(`拉取失败 ${res.status}: ${source}`);
-    return res.text;
-  }
-  const path = join(ROOT, source);
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    throw new Error(`规则源不存在: ${source}`);
-  }
-}
-
-/** Bun 的同步 fetch：生成器要保持顺序执行，避免并发改写的复杂度。 */
-function fetchSync(url: string): { ok: boolean; status: number; text: string } {
-  const proc = spawnSync(
-    "curl",
-    ["-fsSL", "--max-time", "60", "-A", "singbox-rule-builder/2.0", url],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  if (proc.status !== 0) {
-    return { ok: false, status: proc.status ?? 1, text: "" };
-  }
-  return { ok: true, status: 200, text: proc.stdout };
-}
-
-/** 下载上游预编译 .srs（GEOIP/GEOSITE 退化形态）。 */
+/** 下载远端产物（文本或二进制）。生成器保持顺序执行，避免并发改写的复杂度。 */
 function fetchBytes(url: string): Buffer {
   const proc = spawnSync(
     "curl",
     ["-fsSL", "--max-time", "60", "-A", "singbox-rule-builder/2.0", url],
     { maxBuffer: 64 * 1024 * 1024 },
   );
-  if (proc.status !== 0) throw new Error(`下载规则集失败: ${url}`);
+  if (proc.status !== 0) throw new Error(`下载失败: ${url}`);
   return proc.stdout;
 }
+
 
 /**
  * `custom/` 下存在但没被清单引用的列表。
@@ -191,7 +105,7 @@ export function orphanCustomLists(items: ManifestItem[]): string[] {
     return [];
   }
   return entries
-    .filter((name) => name.endsWith(".list"))
+    .filter((name) => name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".list"))
     .map((name) => `config/rules/custom/${name}`)
     .filter((rel) => !referenced.has(rel))
     .sort();
@@ -225,360 +139,256 @@ export function outputName(tag: string): string {
   return safe || "rule";
 }
 
-// ---------------------------------------------------------------- 归一化
+// ---------------------------------------------------------------- 源解析
 
-/**
- * provider 的 YAML payload 形态：只取 `payload:` 列表里的条目。
- * 上游 blackmatrix7 的 Clash 列表就是这个格式。
- */
-function parsePayloadYaml(lines: string[]): string[] {
-  const payload: string[] = [];
-  let inPayload = false;
-  for (const rawLine of lines) {
-    const stripped = rawLine.trim();
-    if (!stripped || stripped.startsWith("#")) continue;
-    if (stripped === "payload:") {
-      inPayload = true;
-      continue;
-    }
-    if (!inPayload) continue;
-    if (rawLine.replace(/^\s+/, "").startsWith("- ")) {
-      payload.push(
-        rawLine
-          .replace(/^\s+/, "")
-          .slice(2)
-          .trim()
-          .replace(/^['"]|['"]$/g, ""),
-      );
-      continue;
-    }
-    // payload 段结束：遇到一个顶格的新键
-    if (!rawLine.startsWith(" ")) break;
-  }
-  return payload;
+export interface RuleAST {
+  domain?: string[];
+  domain_suffix?: string[];
+  domain_keyword?: string[];
+  domain_regex?: string[];
+  ip_cidr?: string[];
+  source_ip_cidr?: string[];
+  ip_asn?: string[];
+  port?: number[];
+  port_range?: string[];
+  source_port?: number[];
+  source_port_range?: string[];
+  process_name?: string[];
+  network?: string[];
+  logical?: Array<Record<string, unknown>>;
 }
 
-/** 去掉注释与空行，并把 YAML payload 还原成纯规则行。 */
-export function normalizeRuleLines(text: string): string[] {
-  const rawLines = text.split("\n");
-  const firstNonComment = rawLines
-    .map((l) => l.trim())
-    .find((l) => l && !l.startsWith("#"));
-  if (firstNonComment === "payload:") return parsePayloadYaml(rawLines);
-
-  const lines: string[] = [];
-  for (const rawLine of rawLines) {
-    const stripped = rawLine.trim();
-    if (!stripped || stripped.startsWith("#")) continue;
-    lines.push(stripped);
-  }
-  return lines;
-}
-
-// ---------------------------------------------------------------- 解析
-
-/** 剥掉最外层括号，但仅当它真的包住整串（`(a),(b)` 不能剥）。 */
-export function stripOuterParens(text: string): string {
-  const stripped = text.trim();
-  if (!stripped.startsWith("(") || !stripped.endsWith(")")) return stripped;
-  let depth = 0;
-  for (let i = 0; i < stripped.length; i++) {
-    if (stripped[i] === "(") depth++;
-    else if (stripped[i] === ")") {
-      depth--;
-      if (depth === 0 && i !== stripped.length - 1) return stripped;
-    }
-  }
-  return stripped.slice(1, -1).trim();
-}
-
-/** 按顶层逗号切分，括号内的逗号不算。 */
-export function splitTopLevel(text: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let depth = 0;
-  for (const char of text) {
-    if (char === "," && depth === 0) {
-      const part = current.trim();
-      if (part) parts.push(part);
-      current = "";
-      continue;
-    }
-    if (char === "(") depth++;
-    else if (char === ")") depth--;
-    current += char;
-  }
-  const tail = current.trim();
-  if (tail) parts.push(tail);
-  return parts;
-}
-
-type Classified =
-  | { kind: "rule"; field: string; value: string | number }
-  | { kind: "special"; ref: { kind: string; value: string } }
-  | { kind: "unsupported" };
-
-/**
- * 判定一行源规则。
- *
- * 省略写法：`.domain.com` 等同 DOMAIN-SUFFIX，裸域名等同 DOMAIN。
- * 这在 Surge/Loon 的列表里很常见（如 Apple_Domain.list）。
- */
-export function classifySimpleRule(line: string): Classified {
-  const stripped = line.trim();
-  if (!stripped.includes(",")) {
-    if (stripped.startsWith(".")) {
-      return { kind: "rule", field: "domain_suffix", value: stripped.slice(1) };
-    }
-    return { kind: "rule", field: "domain", value: stripped };
-  }
-
-  const parts = stripped.split(",").map((p) => p.trim());
-  if (parts.length < 2) return { kind: "unsupported" };
-  const ruleType = parts[0].toUpperCase();
-  const value = parts[1];
-
-  if (ruleType === "GEOIP" || ruleType === "GEOSITE") {
-    return { kind: "special", ref: { kind: ruleType.toLowerCase(), value: value.toLowerCase() } };
-  }
-  if (UNSUPPORTED_TYPES.has(ruleType)) return { kind: "unsupported" };
-
-  const field = SUPPORTED_FIELDS[ruleType];
-  if (!field) return { kind: "unsupported" };
-
-  if (field === "port" || field === "source_port") {
-    const port = Number.parseInt(value, 10);
-    if (!Number.isFinite(port)) return { kind: "unsupported" };
-    return { kind: "rule", field, value: port };
-  }
-  return { kind: "rule", field, value };
-}
-
-export function specialRefToUrl(ref: { kind: string; value: string }): string {
-  const suffix = `${ref.kind}-${ref.value}.srs`;
-  return ref.kind === "geoip"
-    ? `${SING_GEOIP_PREFIX}/${suffix}`
-    : `${SING_GEOSITE_PREFIX}/${suffix}`;
-}
-
-export interface ConvertResult {
-  rules: SingBoxRule[];
-  specialRefs: { kind: string; value: string }[];
-  unsupported: string[];
+/** 外部原生引用：geosite:x / geoip:x → meta-rules-dat 三端同源 URL。 */
+export function externalUrls(source: string): Record<Client, string> | null {
+  const m = source.match(/^(geosite|geoip):([a-z0-9_-]+)$/);
+  if (!m) return null;
+  const [, kind, name] = m;
+  return {
+    singbox: `${META_RULES_SING}/${kind}/${name}.srs`,
+    clash: `${META_RULES_MIHOMO}/${kind}/${name}.yaml`,
+    plain: `${META_RULES_MIHOMO}/${kind}/${name}.list`,
+  };
 }
 
 /**
- * 源规则行 → sing-box 源规则集 rules。
- *
- * 同字段的值合并进一条规则（内核语义相同，合并后体积更小）。
- * GEOIP/GEOSITE 单独收集：整份列表只有它们时退化为上游预编译规则集的引用。
+ * 内部 custom YAML → AST。未知字段直接抛错（fail fast）：
+ * 结构化源的形态应该确定，静默跳过等于悄悄丢规则。
  */
-export function convertRuleLines(ruleLines: string[]): ConvertResult {
-  // 字段名来自固定表，值去重要保序：Record 做字段表，Set 做值集合（都是插入序）。
-  const grouped: Record<string, Set<string>> = {};
-  const logicalRules: SingBoxRule[] = [];
-  const specialRefs: { kind: string; value: string }[] = [];
-  const unsupported: string[] = [];
-
-  const addValue = (field: string, value: string): void => {
-    (grouped[field] ??= new Set()).add(value);
+export function parseYamlAst(content: string): RuleAST {
+  const parsed = Bun.YAML.parse(content) as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("rules YAML 顶层必须是对象（rules: [...]）");
+  }
+  const { rules } = parsed as { rules?: unknown };
+  if (!Array.isArray(rules)) {
+    throw new Error("rules YAML 缺少 rules: 列表（或形态不是数组）");
+  }
+  const ast: RuleAST = {};
+  const add = (key: keyof RuleAST, val: unknown): void => {
+    const target = (ast[key] ??= [] as unknown[]) as unknown[];
+    if (!target.includes(val)) target.push(val);
   };
 
-  for (const line of ruleLines) {
-    const stripped = line.trim();
-    if (/^(AND|OR|NOT),/i.test(stripped)) {
-      const parsed = parseLogicalRule(stripped);
-      if (parsed.rule) logicalRules.push(parsed.rule);
-      unsupported.push(...parsed.unsupported);
-      continue;
+  for (const item of rules) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`rules 条目必须是对象: ${JSON.stringify(item)}`);
     }
-
-    const classified = classifySimpleRule(stripped);
-    if (classified.kind === "unsupported") {
-      unsupported.push(stripped);
-      continue;
-    }
-    if (classified.kind === "special") {
-      specialRefs.push(classified.ref);
-      continue;
-    }
-    addValue(classified.field, String(classified.value));
-  }
-
-  const rules: SingBoxRule[] = [];
-  for (const [field, values] of Object.entries(grouped)) {
-    const list: JsonValue[] =
-      field === "port" || field === "source_port"
-        ? [...values].map((v) => Number.parseInt(v, 10))
-        : [...values];
-    rules.push({ [field]: list });
-  }
-  rules.push(...logicalRules);
-  return { rules, specialRefs, unsupported: [...new Set(unsupported)].sort() };
-}
-
-interface LogicalParse {
-  rule: SingBoxRule | null;
-  unsupported: string[];
-}
-
-/** `AND,(...),(...)` / `OR,(...)` / `NOT,(...)`，子表达式可嵌套。 */
-export function parseLogicalRule(line: string): LogicalParse {
-  const comma = line.indexOf(",");
-  const op = line.slice(0, comma).toUpperCase();
-  // 括号有两种形态，都要能吃下：
-  //   AND,(a),(b)      → 顶层逗号直接切
-  //   AND,((a),(OR,...)) → 多包了一层，先剥掉才能按顶层逗号切
-  // NOT 的子表达式同理，但它只有一个，剥不剥都能交给 parseRuleExpression。
-  const rest = stripOuterParens(line.slice(comma + 1).trim());
-  const unsupported: string[] = [];
-
-  if (op === "AND" || op === "OR") {
-    const parts = splitTopLevel(rest);
-    const children: SingBoxRule[] = [];
-    for (const part of parts) {
-      const child = parseRuleExpression(stripOuterParens(part));
-      unsupported.push(...child.unsupported);
-      if (!child.rule) {
-        unsupported.push(line);
-        return { rule: null, unsupported: [...new Set(unsupported)].sort() };
+    for (const [rawKey, rawValues] of Object.entries(item)) {
+      const key = rawKey.replace(/-/g, "_");
+      if (key === "logical") {
+        for (const l of Array.isArray(rawValues) ? rawValues : [rawValues]) {
+          const node = l as Record<string, unknown> | null;
+          if (node === null || typeof node !== "object" || Array.isArray(node) || !("mode" in node) || !Array.isArray(node.rules)) {
+            throw new Error(`logical 条目必须包含 mode 与 rules 数组: ${JSON.stringify(l)}`);
+          }
+          (ast.logical ??= []).push(normalizeLogical(node));
+        }
+        continue;
       }
-      children.push(child.rule);
+      if (!FIELD_ORDER.includes(key as keyof RuleAST) && key !== "ip_asn") {
+        throw new Error(
+          `未知的规则字段: ${rawKey}（可用: ${[...FIELD_ORDER, "ip_asn", "logical"].join(", ")}）`,
+        );
+      }
+      for (const val of scalarList(rawKey, rawValues)) {
+        if (key === "port" || key === "source_port") {
+          const num = Number(val);
+          if (!Number.isFinite(num)) throw new Error(`字段 ${rawKey} 必须是数字: ${JSON.stringify(val)}`);
+          add(key, num);
+        } else if (key === "port_range" || key === "source_port_range") {
+          add(key, String(val).replace("-", ":"));
+        } else {
+          add(key, String(val));
+        }
+      }
     }
-    return {
-      rule: { type: "logical", mode: op.toLowerCase(), rules: children },
-      unsupported: [...new Set(unsupported)].sort(),
-    };
   }
-
-  if (op === "NOT") {
-    const child = parseRuleExpression(rest);
-    unsupported.push(...child.unsupported);
-    if (!child.rule) {
-      unsupported.push(line);
-      return { rule: null, unsupported: [...new Set(unsupported)].sort() };
-    }
-    return {
-      rule: { ...child.rule, invert: true },
-      unsupported: [...new Set(unsupported)].sort(),
-    };
-  }
-
-  return { rule: null, unsupported: [line] };
+  return ast;
 }
 
-function parseRuleExpression(line: string): LogicalParse {
-  const stripped = line.trim();
-  if (/^(AND|OR|NOT),/i.test(stripped)) return parseLogicalRule(stripped);
-  const classified = classifySimpleRule(stripped);
-  if (classified.kind !== "rule") return { rule: null, unsupported: [stripped] };
-  return { rule: { [classified.field]: [classified.value] }, unsupported: [] };
+/** 字段值只能是字符串或数字（或它们的数组）；null、映射对象、嵌套数组一律报错。 */
+function scalarList(field: string, raw: unknown): unknown[] {
+  const list = Array.isArray(raw) ? raw : [raw];
+  for (const one of list) {
+    if (typeof one !== "string" && typeof one !== "number") {
+      throw new Error(`字段 ${field} 的值必须是字符串或数字: ${JSON.stringify(one)}`);
+    }
+  }
+  return list;
 }
 
-/** 把 rules 按字段稳定排序后包成源规则集文档。 */
-export function toSourceJson(rules: SingBoxRule[]): { version: number; rules: SingBoxRule[] } {
-  // 字段排序只影响「单字段规则」的相对位置；带 type/invert 等结构字段的规则
-  // （logical、invert）没有可排序的字段名，必须原样保留在末位。
-  const isPlainFieldRule = (rule: SingBoxRule): boolean =>
-    !("type" in rule) && !("invert" in rule) && Object.keys(rule).length === 1;
+/**
+ * 校验 logical 子树：键名归一化，叶节点必须是白名单内的单字段标量。
+ * 多字段与数组叶子未被任何规则使用，且端上方言展开语义复杂，明确拒绝而非静默畸形输出。
+ */
+function normalizeLogical(node: Record<string, unknown>): Record<string, unknown> {
+  const rules = (node.rules as unknown[]).map((sub) => {
+    if (sub === null || typeof sub !== "object" || Array.isArray(sub)) {
+      throw new Error(`logical 子规则必须是对象: ${JSON.stringify(sub)}`);
+    }
+    const child = sub as Record<string, unknown>;
+    if ("mode" in child) return normalizeLogical(child);
+    const keys = Object.keys(child);
+    if (keys.length !== 1) throw new Error(`logical 叶节点必须恰好一个字段: ${JSON.stringify(child)}`);
+    const k = keys[0].replace(/-/g, "_");
+    if (!FIELD_ORDER.includes(k as keyof RuleAST)) throw new Error(`logical 未知字段: ${keys[0]}`);
+    const vals = scalarList(keys[0], child[keys[0]]);
+    if (vals.length !== 1) throw new Error(`logical 叶节点值必须是单个标量: ${JSON.stringify(child)}`);
+    return { [k]: vals[0] };
+  });
+  return { mode: node.mode, rules };
+}
 
-  const ordered: SingBoxRule[] = [];
+/** 逻辑规则树 → Mihomo/Loon 的单行文本形态。 */
+export function formatLogicalRule(r: Record<string, unknown>): string {
+  const mode = String(r.mode ?? "and").toUpperCase();
+  const children = ((r.rules as Record<string, unknown>[]) ?? []).map((sub) => {
+    if ("mode" in sub) return `(${formatLogicalRule(sub)})`;
+    const [k, v] = Object.entries(sub)[0];
+    return `(${k.toUpperCase().replace(/_/g, "-")},${v})`;
+  });
+  return `${mode},(${children.join(",")})`;
+}
+
+// ---------------------------------------------------------------- 各端发射器（内部 AST 专用）
+
+/** sing-box 逻辑规则树规范化：NOT 单子节点折叠为 invert，叶字段值转数组。 */
+function normalizeSingboxLogical(node: Record<string, unknown>): SingBoxRule {
+  if ("mode" in node && Array.isArray(node.rules)) {
+    if (node.mode === "not" && node.rules.length === 1) {
+      const sub = normalizeSingboxLogical(node.rules[0] as Record<string, unknown>);
+      const nextInvert = !sub.invert;
+      if (nextInvert) return { ...sub, invert: true };
+      const copy = { ...sub };
+      delete copy.invert;
+      return copy;
+    }
+    return {
+      type: "logical",
+      mode: String(node.mode),
+      rules: (node.rules as Record<string, unknown>[]).map(normalizeSingboxLogical),
+    };
+  }
+  const res: SingBoxRule = {};
+  for (const [k, v] of Object.entries(node)) {
+    res[k] = (Array.isArray(v) ? v : [v]) as JsonValue;
+  }
+  return res;
+}
+
+export function emitSingbox(ast: RuleAST): string {
+  const rules: SingBoxRule[] = [];
+  // sing-box 1.12 起移除行内 IP-ASN 匹配，只能放弃并提示（mihomo/Loon 端仍保留）
+  if (ast.ip_asn?.length) {
+    console.warn(`WARN: IP-ASN 无法在 sing-box 规则集中表达，已忽略 ${ast.ip_asn.length} 条`);
+  }
+
   for (const field of FIELD_ORDER) {
-    for (const rule of rules) {
-      if (isPlainFieldRule(rule) && field in rule) ordered.push(rule);
+    const vals = ast[field as keyof RuleAST];
+    if (vals && vals.length > 0) {
+      if (field === "ip_cidr") {
+        // 剥离 mihomo/Loon 专用的 no-resolve 选项，sing-box 规则集无此概念
+        rules.push({ [field]: (vals as string[]).map((v) => v.split(",")[0].trim()) });
+      } else {
+        rules.push({ [field]: vals as JsonValue });
+      }
     }
   }
-  for (const rule of rules) {
-    if (!isPlainFieldRule(rule)) ordered.push(rule);
+  for (const l of ast.logical ?? []) {
+    rules.push(normalizeSingboxLogical(l));
   }
-  return { version: 3, rules: ordered };
-}
-
-// ---------------------------------------------------------------- 各端产物
-
-export function emitSingbox(ruleLines: string[]): Emission {
-  const { rules, specialRefs, unsupported } = convertRuleLines(ruleLines);
-  // 整份列表只有 GEOIP/GEOSITE 时，行内表达为空 → 退化为对上游预编译规则集的引用
-  if (specialRefs.length > 0 && rules.length === 0 && unsupported.length === 0) {
-    return {
-      text: `${jsonPretty({
-        version: 1,
-        kind: "external_rule_set",
-        references: specialRefs.map((ref) => ({
-          type: ref.kind,
-          value: ref.value,
-          tag: `${ref.kind}-${ref.value}`,
-          url: specialRefToUrl(ref),
-        })),
-      })}\n`,
-      skipped: [],
-      specialRefs,
-    };
-  }
-  return { text: `${jsonPretty(toSourceJson(rules))}\n`, skipped: unsupported, specialRefs };
+  return `${JSON.stringify({ version: 3, rules }, null, 2)}\n`;
 }
 
 /** 只保留按查询名匹配的字段，产出 DNS 规则专用的规则集。 */
-export function emitSingboxDns(ruleLines: string[]): Emission {
-  const base = emitSingbox(ruleLines);
-  const payload = JSON.parse(base.text) as {
-    kind?: string;
-    rules?: SingBoxRule[];
-  };
-  // 纯 GEOIP/GEOSITE 列表退化成 external_rule_set 形态，没有可过滤的 rules，
-  // 与「没有域名条目」是同一个结局：产不出 DNS 版。
-  const rules = payload.kind === "external_rule_set" ? [] : (payload.rules ?? []);
-
-  const kept: SingBoxRule[] = [];
-  for (const rule of rules) {
-    const domainFields: SingBoxRule = {};
-    for (const field of DNS_RULE_FIELDS) {
-      if (field in rule) domainFields[field] = rule[field];
+export function emitSingboxDns(ast: RuleAST): string {
+  const rules: SingBoxRule[] = [];
+  for (const field of DNS_RULE_FIELDS) {
+    const vals = ast[field as keyof RuleAST];
+    if (vals && vals.length > 0) {
+      rules.push({ [field]: vals as JsonValue });
     }
-    if (Object.keys(domainFields).length > 0) kept.push(domainFields);
   }
-  // 没有域名条目时产出空规则集而不是报错：空规则集是合法的（内核接受 rules: []），
-  // 而任何清单都可能被设备 overlay 的 DNS 规则引用，构建期无法预知谁会被引用。
-  // 之前在这里抛错，等于把「谁会被引用」这个运行期的决定提前到构建期猜。
-  return { text: `${jsonPretty(toSourceJson(kept))}\n`, skipped: base.skipped, specialRefs: [] };
-}
-
-/** 一行源规则 → mihomo classical provider 的行；无法表达时返回 null。 */
-export function clashRuleLine(stripped: string): string | null {
-  if (!stripped.includes(",")) {
-    return stripped.startsWith(".")
-      ? `DOMAIN-SUFFIX,${stripped.slice(1)}`
-      : `DOMAIN,${stripped}`;
+  // 叶子全为域名字段的逻辑树在 DNS 阶段同样按查询名可判定，保留；混合树无法部分重写
+  for (const l of ast.logical ?? []) {
+    if (dnsOnlyLogical(l)) rules.push(normalizeSingboxLogical(l));
   }
-  const ruleType = stripped.split(",", 1)[0].trim().toUpperCase();
-  if (!CLASH_SUPPORTED.has(ruleType)) return null;
-  const renamed = CLASH_RENAMES[ruleType] ?? ruleType;
-  return renamed + stripped.slice(ruleType.length);
+  return `${JSON.stringify({ version: 3, rules }, null, 2)}\n`;
 }
 
-export function emitClash(ruleLines: string[]): Emission {
-  const kept: string[] = [];
-  const skipped: string[] = [];
-  for (const line of ruleLines) {
-    const stripped = line.trim();
-    if (!stripped) continue;
-    const converted = clashRuleLine(stripped);
-    if (converted === null) {
-      skipped.push(stripped);
-      continue;
-    }
-    kept.push(converted);
+/** 逻辑树所有叶字段都属于 DNS 可判定字段（域名类）时为真。 */
+function dnsOnlyLogical(node: Record<string, unknown>): boolean {
+  if (Array.isArray(node.rules)) {
+    return (node.rules as Record<string, unknown>[]).every(dnsOnlyLogical);
   }
-  const body = kept.map((line) => `  - '${line}'`).join("\n");
-  return { text: kept.length > 0 ? `payload:\n${body}\n` : "payload: []\n", skipped, specialRefs: [] };
+  return Object.keys(node).every((k) => (DNS_RULE_FIELDS as readonly string[]).includes(k));
 }
 
-/** Loon / Surge 的行格式与源格式一致，原样输出。 */
-export function emitPlain(ruleLines: string[]): Emission {
-  return { text: `${ruleLines.join("\n")}\n`, skipped: [], specialRefs: [] };
+export function emitClash(ast: RuleAST): string {
+  const payload: string[] = [];
+  for (const d of ast.domain_suffix ?? []) payload.push(`DOMAIN-SUFFIX,${d}`);
+  for (const d of ast.domain_keyword ?? []) payload.push(`DOMAIN-KEYWORD,${d}`);
+  for (const d of ast.domain ?? []) payload.push(`DOMAIN,${d}`);
+  for (const d of ast.domain_regex ?? []) payload.push(`DOMAIN-REGEX,${d}`);
+  for (const p of ast.process_name ?? []) payload.push(`PROCESS-NAME,${p}`);
+  for (const c of ast.ip_cidr ?? []) payload.push(`IP-CIDR,${c}`);
+  for (const c of ast.source_ip_cidr ?? []) payload.push(`SRC-IP-CIDR,${c}`);
+  for (const a of ast.ip_asn ?? []) payload.push(`IP-ASN,${a}`);
+  for (const p of ast.port ?? []) payload.push(`DST-PORT,${p}`);
+  for (const r of ast.port_range ?? []) payload.push(`DST-PORT,${r.replace(":", "-")}`);
+  for (const p of ast.source_port ?? []) payload.push(`SRC-PORT,${p}`);
+  for (const r of ast.source_port_range ?? []) payload.push(`SRC-PORT,${r.replace(":", "-")}`);
+  for (const n of ast.network ?? []) payload.push(`NETWORK,${n}`);
+  for (const l of ast.logical ?? []) payload.push(formatLogicalRule(l));
+
+  return payload.length > 0
+    ? `payload:\n${payload.map((line) => `  - '${line}'`).join("\n")}\n`
+    : "payload: []\n";
 }
 
-export const CLIENT_EMITTERS: Record<Client, (lines: string[]) => Emission> = {
+/** Loon / Surge 文本产物：DEST-PORT 拼写、连字符端口范围、IPv6 用 IP-CIDR6。 */
+export function emitPlain(ast: RuleAST): string {
+  const lines: string[] = [];
+  for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
+  for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
+  for (const d of ast.domain ?? []) lines.push(`DOMAIN,${d}`);
+  for (const d of ast.domain_regex ?? []) lines.push(`DOMAIN-REGEX,${d}`);
+  for (const p of ast.process_name ?? []) lines.push(`PROCESS-NAME,${p}`);
+  for (const c of ast.ip_cidr ?? []) {
+    lines.push(c.includes(":") ? `IP-CIDR6,${c}` : `IP-CIDR,${c}`);
+  }
+  for (const c of ast.source_ip_cidr ?? []) lines.push(`SRC-IP-CIDR,${c}`);
+  for (const a of ast.ip_asn ?? []) lines.push(`IP-ASN,${a}`);
+  for (const p of ast.port ?? []) lines.push(`DEST-PORT,${p}`);
+  for (const r of ast.port_range ?? []) lines.push(`DEST-PORT,${r.replace(":", "-")}`);
+  for (const p of ast.source_port ?? []) lines.push(`SRC-PORT,${p}`);
+  for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
+  for (const n of ast.network ?? []) lines.push(`PROTOCOL,${String(n).toUpperCase()}`);
+  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
+  return `${lines.join("\n")}\n`;
+}
+
+export const CLIENT_EMITTERS: Record<Client, (ast: RuleAST) => string> = {
   singbox: emitSingbox,
   clash: emitClash,
   plain: emitPlain,
@@ -734,73 +544,88 @@ export function compileSrs(binary: string, sourcePath: string, outputPath: strin
   }
 }
 
+function writeBytes(path: string, data: Buffer): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, data);
+}
+
 function writeText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, "utf8");
 }
 
-/** 为单个 tag 产出全部客户端产物。 */
+function readLocalSource(source: string): string {
+  try {
+    return readFileSync(join(ROOT, source), "utf8");
+  } catch {
+    throw new Error(`规则源不存在: ${source}`);
+  }
+}
+
+/** 为单个 tag 产出全部客户端产物：外部镜像下载或内部 AST 发射。 */
 export function buildOne(
   item: ManifestItem,
   binary: string,
   dnsCompanion: boolean,
 ): BuildResult[] {
-  const ruleLines = normalizeRuleLines(readSource(item.source));
   const name = outputName(item.tag);
+  const ext = externalUrls(item.source);
   const results: BuildResult[] = [];
 
+  // 外部原生引用：三端直接下载同源产物，零解析、零编译
+  if (ext) {
+    const srsPath = join(GENERATED_DIR, "singbox", `${name}.srs`);
+    writeBytes(srsPath, fetchBytes(ext.singbox));
+    results.push({ client: "singbox", path: srsPath, total: 0, skipped: 0 });
+    for (const client of ["clash", "plain"] as const) {
+      const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
+      writeBytes(path, fetchBytes(ext[client]));
+      results.push({ client, path, total: 0, skipped: 0 });
+    }
+    if (dnsCompanion && item.source.startsWith("geosite:")) {
+      // geosite 上游本就只含域名条目，-dns 伴生直接复用同一份 .srs；
+      // geoip 是 IP 集合，DNS 规则无法按查询名判定，不产 -dns 伴生
+      const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.srs`);
+      writeBytes(dnsPath, fetchBytes(ext.singbox));
+      results.push({ client: "singbox", path: dnsPath, total: 0, skipped: 0 });
+    }
+    return results;
+  }
+
+  // 内部 custom YAML → AST → 三端发射
+  const ast = parseYamlAst(readLocalSource(item.source));
+  const totalCount = Object.values(ast).reduce(
+    (acc, v) => acc + (Array.isArray(v) ? v.length : 0),
+    0,
+  );
+
   for (const client of Object.keys(CLIENT_EMITTERS) as Client[]) {
-    const emission = CLIENT_EMITTERS[client](ruleLines);
     const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
-    writeText(path, emission.text);
-
+    writeText(path, CLIENT_EMITTERS[client](ast));
     if (client === "singbox") {
-      const srs = path.replace(/\.json$/, ".srs");
-      if (emission.specialRefs.length === 1) {
-        writeFileSync(srs, fetchBytes(specialRefToUrl(emission.specialRefs[0])));
-      } else if (emission.specialRefs.length > 1) {
-        throw new Error(`${item.tag}: 暂不支持同时引用多个 GEOIP/GEOSITE 规则集`);
-      } else {
-        compileSrs(binary, path, srs);
-      }
+      compileSrs(binary, path, path.replace(/\.json$/, ".srs"));
     }
-
-    const report = join(GENERATED_DIR, "unsupported", client, `${name}.txt`);
-    if (emission.skipped.length > 0) {
-      writeText(report, `${emission.skipped.join("\n")}\n`);
-    } else {
-      rmSync(report, { force: true });
-    }
-    results.push({
-      client,
-      path,
-      total: ruleLines.length,
-      skipped: emission.skipped.length,
-    });
+    results.push({ client, path, total: totalCount, skipped: 0 });
   }
 
   if (dnsCompanion) {
-    const dns = emitSingboxDns(ruleLines);
+    // 每个 tag 都产出 `-dns` 伴生：设备 overlay 的运行期引用无法在构建期枚举，
+    // 缺哪份都会让内核启动 FATAL。底模仍只需声明自己真正引用的伴生。
     const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.json`);
-    writeText(dnsPath, dns.text);
+    writeText(dnsPath, emitSingboxDns(ast));
     compileSrs(binary, dnsPath, dnsPath.replace(/\.json$/, ".srs"));
-    results.push({ client: "singbox", path: dnsPath, total: ruleLines.length, skipped: 0 });
+    results.push({ client: "singbox", path: dnsPath, total: totalCount, skipped: 0 });
   }
   return results;
-}
-
-function jsonPretty(value: unknown): string {
-  return JSON.stringify(value, null, 2);
 }
 
 export interface BuildOptions {
   all?: boolean;
   tag?: string;
-  manifest?: string;
 }
 
 export function runBuild(options: BuildOptions): number {
-  const items = loadManifest(options.manifest ?? MANIFEST_PATH);
+  const items = loadManifest();
   const template = loadTemplate();
 
   const orphans = orphanCustomLists(items);
@@ -823,37 +648,17 @@ export function runBuild(options: BuildOptions): number {
 
   let built = 0;
   for (const item of targets) {
-    // 每个 tag 都产出 `-dns` 伴生，而不是只产底模引用到的那几个：
-    // 设备 overlay 的运行期引用无法在构建期枚举，缺哪份都会让内核启动 FATAL。
-    // 底模仍只需声明自己真正引用的伴生，校验语义（validateTemplate）不变。
     const results = buildOne(item, binary, true);
-    const parts = results.map((r) => `${r.client}=${r.total - r.skipped}/${r.total}`);
-    console.log(`built ${item.tag} -> ${parts.join(", ")}`);
+    if (externalUrls(item.source)) {
+      console.log(`mirrored ${item.tag} <- ${item.source}`);
+    } else {
+      const parts = results.map((r) => `${r.client}=${r.total}`);
+      console.log(`built ${item.tag} -> ${parts.join(", ")}`);
+    }
     built++;
   }
-
-  const reports = listReports();
-  if (reports.length > 0) {
-    console.log(`skipped reports (${reports.length}):`);
-    for (const r of reports) console.log(`  ${r}`);
-  }
-  console.log(`done: built=${built}, dns_companions=${built}`);
+  console.log(`done: built=${built}`);
   return 0;
-}
-
-function listReports(): string[] {
-  const out: string[] = [];
-  const root = join(GENERATED_DIR, "unsupported");
-  const walk = (dir: string): void => {
-    const proc = spawnSync("sh", ["-c", `ls -1d '${dir}'/* 2>/dev/null`], { encoding: "utf8" });
-    const entries = (proc.stdout ?? "").split("\n").filter(Boolean).sort().reverse();
-    for (const entry of entries) {
-      if (entry.endsWith(".txt")) out.push(entry.replace(`${ROOT}/`, ""));
-      else walk(entry);
-    }
-  };
-  walk(root);
-  return out.sort();
 }
 
 export function findItem(items: ManifestItem[], target: string): ManifestItem {
@@ -872,53 +677,20 @@ function usage(): string {
     "rules-compile — 规则清单 → 各端产物",
     "",
     "用法:",
-    "  bun scripts/rules-compile.ts build --all              全量构建",
-    "  bun scripts/rules-compile.ts build <tag>              只构建单个 tag",
-    "  bun scripts/rules-compile.ts convert --input <文件|-> --client <singbox|clash|plain> [--output <文件|->] [--dns-only] [--report <文件>]",
-    "  bun scripts/rules-compile.ts check                    只校验底模与清单有无漂移",
+    "  bun scripts/rules-compile.ts build --all    全量构建",
+    "  bun scripts/rules-compile.ts build <tag>    只构建单个 tag",
+    "  bun scripts/rules-compile.ts check          只校验底模与清单有无漂移",
   ].join("\n");
 }
 
-function argValue(args: string[], flag: string): string | undefined {
-  const i = args.indexOf(flag);
-  return i >= 0 ? args[i + 1] : undefined;
-}
-
-function cmdConvert(args: string[]): number {
-  const input = argValue(args, "--input");
-  const client = argValue(args, "--client") as Client | undefined;
-  if (!input || !client) {
-    console.error(usage());
-    return 2;
-  }
-  if (!["singbox", "clash", "plain"].includes(client)) {
-    console.error(`未知客户端: ${client}`);
-    return 2;
-  }
-
-  const raw = input === "-" ? readFileSync(0, "utf8") : readFileSync(input, "utf8");
-  const lines = normalizeRuleLines(raw);
-  const dnsOnly = args.includes("--dns-only");
-  const emission = dnsOnly ? emitSingboxDns(lines) : CLIENT_EMITTERS[client](lines);
-
-  const output = argValue(args, "--output") ?? "-";
-  if (output === "-") process.stdout.write(emission.text);
-  else writeText(resolve(output), emission.text);
-
-  const report = argValue(args, "--report");
-  if (report) writeText(resolve(report), `${emission.skipped.join("\n")}\n`);
-  return 0;
-}
-
 function cmdBuild(args: string[]): number {
-  const manifest = argValue(args, "--manifest");
-  if (args.includes("--all")) return runBuild({ all: true, manifest });
+  if (args.includes("--all")) return runBuild({ all: true });
   const tag = args.find((a) => !a.startsWith("-") && a !== "build");
   if (!tag) {
     console.error(usage());
     return 2;
   }
-  return runBuild({ tag, manifest });
+  return runBuild({ tag });
 }
 
 function cmdCheck(): number {
@@ -941,8 +713,6 @@ function main(): number {
   switch (command) {
     case "build":
       return cmdBuild(rest);
-    case "convert":
-      return cmdConvert(rest);
     case "check":
       return cmdCheck();
     default:
