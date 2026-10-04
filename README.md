@@ -50,8 +50,9 @@ sbtools encode -s https://sub.example.com
 
 ```yaml
 "1024proxy": config/rules/custom/1024proxy.yaml
-Apple-AI: config/rules/custom/Apple-AI.yaml
 ChinaMax: geosite:cn
+Apple-AI: config/rules/custom/Apple-AI.yaml
+MyReject: config/rules/custom/MyReject.yaml
 ```
 
 `source` 为仓库相对路径或 `http` 开头的 URL；出站去向由底模单方面决定。
