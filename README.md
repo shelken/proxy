@@ -4,7 +4,7 @@
 
 ## 功能
 
-- **权威分流规则源**：上游清单（blackmatrix7 等）与个人规则在 `config/rules/index.yaml` 统一声明，编译为 sing-box `.srs`、Clash yaml 等产物并由 CI 发布到 `sing-box-rules` 分支供远程引用
+- **权威分流规则源**：上游原生 `geosite:`/`geoip:` 引用（MetaCubeX/meta-rules-dat）与个人规则在 `config/rules/index.yaml` 统一声明，编译为 sing-box `.srs`、Clash yaml 等产物并由 CI 发布到 `sing-box-rules` 分支供远程引用
 - **标准化 sing-box 底模**：双入站、FakeIP DNS、分流策略组与内网穿透的完整骨架，策略组清单见底模自身
 - **设备侧订阅交付（sbtools）**：本机订阅与节点加密成一条 URL，服务端装配后由 SFM 按间隔自动拉取，凭据零外泄
 - **Loon 插件**：移动端与 macOS 端插件（去广告、自动化签到等），独立开关与幂等保证
@@ -41,7 +41,7 @@ sbtools encode -s https://sub.example.com
 
 `config/rules/index.yaml` 是规则清单，`config/sing-box/template.json` 是完整配置骨架，
 它通过 `rule_set` 远程引用 `sing-box-rules` 分支上编译好的 `.srs`、按天自动更新
-自用场景直接套用即可，换自己的规则产物时才需改这些地址；增删域名改 `config/rules/custom/*.list`，
+自用场景直接套用即可，换自己的规则产物时才需改这些地址；增删域名改 `config/rules/custom/*.yaml`，
 或直接在 `index.yaml` 追加一项。开发环境搭建与测试命令见[贡献](#贡献)
 
 ## 核心配置
@@ -49,9 +49,9 @@ sbtools encode -s https://sub.example.com
 `config/rules/index.yaml` 是唯一需要手工维护的规则清单，顶层是 `tag: source` 映射：
 
 ```yaml
-MyReject: config/rules/custom/MyReject.list
-Apple-AI: https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Apple_AI/Apple_AI.list
-"1024proxy": config/rules/custom/1024proxy.list
+"1024proxy": config/rules/custom/1024proxy.yaml
+Apple-AI: config/rules/custom/Apple-AI.yaml
+ChinaMax: geosite:cn
 ```
 
 `source` 为仓库相对路径或 `http` 开头的 URL；出站去向由底模单方面决定。
