@@ -268,11 +268,11 @@ flowchart LR
 | 必须是合法 JSON 且顶层为 Object | 恶意或损坏内容不得进入装配 |
 | 无 `certificate_path` 等路径字段 | 底模同样进 `sing-box merge`，会内联服务器文件 |
 
-前三条在客户端 `encode` 阶段也会先跑一遍，配置写错时本地立刻报错，不浪费一次网络往返
+`https` 与内网 IP 两条在 `encode` 阶段就先对 `template_url` 校验，JSON Object 与路径字段两条先对 overlay 校验，响应大小限制只在服务端生效。配置写错时本地立刻报错，不浪费一次网络往返
 
 ### 7.5 本地观测命令的配置来源
 
-`config`、`logs` 与 `trace` 共用 `config::load_effective` 加载配置，路径发现顺序为显式 `config --path`、`~/.config/sing-box/config.yaml`、`~/.config/sing-box/singbox.json`
+`config` 用 `config::load_effective`、`logs` 与 `trace` 用宽松版 `config::load_effective_lenient` 加载配置，路径发现顺序为显式 `config --path`、`~/.config/sing-box/config.yaml`、`~/.config/sing-box/singbox.json`
 
 - controller 决议由 `clashapi::resolve_controller` 统一处理，顺序为 `trace --api`、已加载配置顶层、overlay、缺省 `127.0.0.1:9090`
 - 非回环 controller 被拒绝时，`trace` 与 `logs -f` 报错退出，`config` 保留脱敏输出并跳过运行时摘要；`trace --api` 也受同一守卫约束
