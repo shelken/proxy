@@ -35,4 +35,4 @@ HTTPS reject 返回 REFUSED，无法证明它是正确的隐私策略。未设�
 - 配置修改同时跑 check 和 run，就绪后再发查询，不能只比较字段
 - 引用社区建议时标明其来源与适用版本；默认行为用官方文档及锁定版本内核交叉验证
 - 更改 DNS 查询类型处理前记录兼容性代价；查询出口问题优先评估出口策略
-- 复现脚本不得写死结论文本代替断言；生产模板行为验证入口见 `docs/research/template-audit.md`
+- 复现脚本不得写死结论文本代替断言；生产模板行为验证入口见 [ARCH.md 的沙箱闭环](../docs/ARCH.md) 与 `.agents/skills/verify-rules-compiler/SKILL.md`
