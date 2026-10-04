@@ -243,8 +243,62 @@ sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo 
   return results;
 }
 
+/**
+ * D4 DNS 伴生产物：internal 先发射域名版 JSON 再编译；geosite 直接复用主产物字节；
+ * geoip 不产伴生；域名版只含 domain 类字段（Lan 作对照，主产物确含 ip_cidr）。
+ */
+export function driveDns(outDir) {
+  const results = [];
+  const add = (id, ok, detail) => {
+    results.push({ id, ok, detail });
+    log(`${ok ? "PASS" : "FAIL"}  ${id}  ${detail}`);
+  };
+  const srs = (tag) => join(GENERATED, "singbox", `${tag}-dns.srs`);
+  const dnsJson = (tag) => join(GENERATED, "singbox", `${tag}-dns.json`);
+  const main = (tag) => join(GENERATED, "singbox", `${tag}.srs`);
+
+  add("D4/internal", existsSync(srs("Lan")) && statSync(srs("Lan")).size > 0, "internal 产出 Lan-dns.srs");
+  add("D4/internal-json", existsSync(dnsJson("Lan")), "internal 先发射域名版 JSON 再编译");
+  add("D4/geosite", existsSync(srs("ChinaMax")) && statSync(srs("ChinaMax")).size > 0, "geosite 产出 ChinaMax-dns.srs");
+  add("D4/geosite-reuse", sha256(main("ChinaMax")) === sha256(srs("ChinaMax")), "geosite 伴生与主产物字节相同（复用上游，不重编译）");
+  add("D4/geosite-no-json", !existsSync(dnsJson("ChinaMax")), "geosite 无中间 JSON");
+  add("D4/geoip-skip", !existsSync(srs("geoip-cn")), "geoip 不产伴生（IP 集合无 DNS 判定语义）");
+
+  const DNS_KEYS = new Set(["type", "mode", "rules", "invert", "domain", "domain_suffix", "domain_keyword", "domain_regex"]);
+  const foreignKeys = (node) => {
+    const bad = [];
+    const visit = (n) => {
+      for (const [k, v] of Object.entries(n)) {
+        if (Array.isArray(v)) {
+          if (k === "rules") v.forEach((x) => x && typeof x === "object" && visit(x));
+          else if (!DNS_KEYS.has(k)) bad.push(k);
+        } else if (v && typeof v === "object") visit(v);
+        else if (!DNS_KEYS.has(k)) bad.push(k);
+      }
+    };
+    visit(node);
+    return bad;
+  };
+
+  const decomp = join(outDir, "decompiled");
+  mkdirSync(decomp, { recursive: true });
+  for (const tag of ["Lan-dns", "Lan"]) {
+    const r = guest(`${GUEST_SB} rule-set decompile ${GUEST_REPO}/config/rules/generated/singbox/${tag}.srs -o /tmp/vrc-${tag}.json && cat /tmp/vrc-${tag}.json`);
+    if (r.code !== 0) {
+      add(`D4/${tag}`, false, `decompile 失败：${r.err.trim().slice(0, 160)}`);
+      continue;
+    }
+    writeFileSync(join(decomp, `${tag}.json`), r.out);
+    const j = JSON.parse(r.out);
+    const bad = [...new Set(j.rules.flatMap(foreignKeys))];
+    if (tag === "Lan-dns") add("D4/dns-only-fields", bad.length === 0, bad.length ? `域名版混入非域名字段：${bad.join(",")}` : "域名版仅含 domain 类字段");
+    else add("D4/filter-control", bad.includes("ip_cidr"), "对照组：Lan 主产物确含 ip_cidr");
+  }
+  return results;
+}
+
 export function drive(outDir) {
-  const results = [...driveArtifacts(outDir), ...driveKernel(outDir)];
+  const results = [...driveArtifacts(outDir), ...driveDns(outDir), ...driveKernel(outDir)];
   writeFileSync(join(outDir, "results.json"), JSON.stringify({ results }, null, 2));
   const failed = results.filter((r) => !r.ok);
   log(`[drive] ${results.length - failed.length}/${results.length} 通过`);
