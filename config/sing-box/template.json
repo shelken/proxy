@@ -759,6 +759,7 @@
       "outbounds": [
         "selfhost",
         "proxy",
+        "direct",
         ".*"
       ],
       "default": "selfhost",
