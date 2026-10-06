@@ -776,6 +776,7 @@ mod tests {
                 "japansite",
                 "opencode",
                 "zai",
+                "download",
                 "microsoft",
                 "apple",
                 "paypal",

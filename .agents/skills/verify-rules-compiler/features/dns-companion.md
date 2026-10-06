@@ -11,7 +11,7 @@
 
 ## How to get to it (user POV)
 
-- 凡是 internal 或 geosite 的 tag 都会自动获得伴生；被底模实际消费的是 `config/sing-box/modules/10-dns.json` 引用的 `Lan-dns` / `MyDirect-dns` / `ChinaMax-dns` / `Download-dns`。
+- 凡是 internal 或 geosite 的 tag 都会自动获得伴生；被底模实际消费的是 `config/sing-box/modules/10-dns.json` 引用的 `Lan-dns` / `MyDirect-dns` / `ChinaMax-dns` / `torrent-dns`。
 - 产物：`config/rules/generated/singbox/<tag>-dns.srs`（internal 另有 `-dns.json` 中间产物）。
 - 发布：`https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/<tag>-dns.srs`。
 

@@ -34,6 +34,7 @@ Apple-AI: config/rules/custom/Apple-AI.yaml
 cftunnel: config/rules/custom/cftunnel.yaml
 dev: config/rules/custom/dev.yaml
 Download: config/rules/custom/Download.yaml
+torrent: config/rules/custom/torrent.yaml
 Gemini: config/rules/custom/Gemini.yaml
 grok: config/rules/custom/grok.yaml
 Japan: config/rules/custom/Japan.yaml

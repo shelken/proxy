@@ -223,12 +223,12 @@ describe("template.json structural verification", () => {
     const btRule = rules.find((r) => r.protocol === "bittorrent");
     expect(btRule?.outbound).toBe("direct");
 
-    const dlRule = rules.find((r) => r.rule_set?.includes("Download"));
+    const dlRule = rules.find((r) => r.rule_set?.includes("torrent"));
     expect(dlRule?.outbound).toBe("direct");
 
-    // Download-dns 应在 FakeIP 之前由直连 DNS 解析真实 IP
+    // torrent-dns 应在 FakeIP 之前由直连 DNS 解析真实 IP
     const dnsRules = template.dns?.rules ?? [];
-    const dlDnsRule = dnsRules.find((r) => r.rule_set?.includes("Download-dns"));
+    const dlDnsRule = dnsRules.find((r) => r.rule_set?.includes("torrent-dns"));
     expect(dlDnsRule?.server).toBe("dns-direct-cn");
 
     const fakeipIndex = dnsRules.findIndex((r) => r.server === "dns-fakeip");

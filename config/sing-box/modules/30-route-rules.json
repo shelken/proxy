@@ -56,10 +56,17 @@
       },
       {
         "rule_set": [
-          "Download"
+          "torrent"
         ],
         "action": "route",
         "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Download"
+        ],
+        "action": "route",
+        "outbound": "download"
       },
       {
         "rule_set": [
