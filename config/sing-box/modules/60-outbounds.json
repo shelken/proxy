@@ -150,6 +150,17 @@
       "interrupt_exist_connections": true
     },
     {
+      "type": "selector",
+      "tag": "download",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        ".*"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    },
+    {
       "type": "urltest",
       "tag": "hk",
       "outbounds": [

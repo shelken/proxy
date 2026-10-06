@@ -99,7 +99,7 @@
       {
         "rule_set": [
           "ChinaMax-dns",
-          "Download-dns"
+          "torrent-dns"
         ],
         "server": "dns-direct-cn"
       },
@@ -171,10 +171,17 @@
       },
       {
         "rule_set": [
-          "Download"
+          "torrent"
         ],
         "action": "route",
         "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Download"
+        ],
+        "action": "route",
+        "outbound": "download"
       },
       {
         "rule_set": [
@@ -548,6 +555,13 @@
       },
       {
         "type": "remote",
+        "tag": "torrent",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
         "tag": "zai",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/zai.srs",
@@ -562,9 +576,9 @@
       },
       {
         "type": "remote",
-        "tag": "Download-dns",
+        "tag": "torrent-dns",
         "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download-dns.srs",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
         "update_interval": "1d"
       },
       {
@@ -737,6 +751,17 @@
         ".*"
       ],
       "default": "proxy",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "download",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        ".*"
+      ],
+      "default": "selfhost",
       "interrupt_exist_connections": true
     },
     {

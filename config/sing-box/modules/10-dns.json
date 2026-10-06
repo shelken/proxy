@@ -75,7 +75,7 @@
       {
         "rule_set": [
           "ChinaMax-dns",
-          "Download-dns"
+          "torrent-dns"
         ],
         "server": "dns-direct-cn"
       },
