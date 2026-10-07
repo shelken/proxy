@@ -1,13 +1,18 @@
 # proxy
 
-个人自维护的代理配置/插件/脚本仓库
+个人自维护的代理软件配置/插件/脚本集合
 
-## 隐私红线（任何任务适用）
+## 布局
 
-- 不读取任何隐私配置；读到 订阅链接/密码 立即停止并报告（如 `~/.config/sing-box/config.yaml` 含节点）
-- 读 mac.lcf（`~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf`）时只读 `[Proxy]`、`[Remote Proxy]`、`[Mitm]` 之外的配置块
+- `config/loon/plugins/`: Loon 插件，每插件一个目录，插件规范见其中的 `AGENTS.md`
+- `config/sing-box/`: 底模 `template.json`（由 `modules/` 装配生成）与沙箱行为测试 `tests/`
+- `config/rules/`: 自定义规则源，`index.yaml` 为清单
+- `scripts/sbtools-rs/`: sbtools 源码，文档见 `docs/sbtools.md`
+- `docs/`: 入口 `ARCH.md`（全局架构）、`adr/`（设计决策）、`sbtools.md`、`user-guide/`
+- `GLOSSARY.md`: 共享领域词汇
 
-## 分支规范
+## 约束
 
-- 编码/测试/发布规范见 `CODING_STANDARDS.md`，按节首触发词选读：Loon 插件 / sing-box 底模 / 沙箱与规则测试 / 发布
-- 领域术语（底模、DNS 出口、业务出口等）见 `GLOSSARY.md`
+- 读取 mac 端 Loon 配置 `~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf` 前，先滤掉 `[Proxy]`、`[Remote Proxy]`、`[Mitm]` 三个敏感配置块
+- 不读取任何私有节点配置与凭据（如 `~/.config/sing-box/config.yaml`），一旦看到订阅链接或密码立即停止并报告
+- 编码、测试与 sing-box/规则集变更前先读 `CODING_STANDARDS.md`
