@@ -15,4 +15,4 @@
 
 - 读取 mac 端 Loon 配置 `~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf` 前，先滤掉 `[Proxy]`、`[Remote Proxy]`、`[Mitm]` 三个敏感块
 - 只读仓库内配置与公开文档；遇到订阅链接或密码立即停止并报告（如 `~/.config/sing-box/config.yaml` 含节点，不读取）
-- 改 sing-box 底模、规则集，或写、跑测试前，先读 `CODING_STANDARDS.md`
+- 改 Loon 插件、sing-box 底模、规则集，或写、跑测试前，先读 `CODING_STANDARDS.md`
