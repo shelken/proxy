@@ -4,45 +4,15 @@
 
 ## 布局
 
-- `config/loon/`: Loon 配置与插件（移动端 + macOS 桌面端），含 `plugins/` 插件目录与各端 `.conf` 配置
-- `config/clash/`、`config/surge/`: 备用客户端配置
-- `scripts/`: 构建等脚本
-- `scripts/sbtools-rs/`: sbtools源码(`docs/sbtools.md`文档介绍)
-- `docs/adr/`: 架构决策记录（编号递增，一个决策一篇）
-- `docs/`: 架构与使用文档（`ARCH.md` 全局架构、`sbtools.md` 实现细节、`user-guide/` 用户指南）
-- `postmortems/`: 事故与踩坑记录（编号递增，索引见 `postmortems/README.md`）
-- `.github/workflows/`: CI 工作流
-- `RELEASE.md`: 发布说明
+- `config/loon/plugins/`: Loon 插件，每插件一个目录，规范见其中的 `AGENTS.md`
+- `config/sing-box/`: 底模 `template.json` 与沙箱行为测试 `tests/`
+- `config/rules/`: 自定义规则源，`index.yaml` 为清单
+- `scripts/sbtools-rs/`: sbtools 源码，文档见 `docs/sbtools.md`
+- `docs/`: 入口 `ARCH.md`（全局架构）、`adr/`、`user-guide/`
+- `GLOSSARY.md`: 共享领域词汇
 
-## 基本原则
+## 约束
 
-- 优先从github进行搜索类似需求的代码, 参考实现, 根据用户需求进行规划
-- 任何代理软件的配置必须阅读最新文档, 禁止使用被任何标记为废弃的配置项
-- 禁止读取任何隐私配置, 读取到任何 订阅链接/密码 必须停止(例如`~/.config/sing-box/config.yaml`有节点)
-
-## 开发约束
-
-- 项目开源, 在不暴露隐私且脚本插件正常运行的前提下进行代码编写
-- 优先 使用新的API/新的语法/新的特性
-- 对于目标网站的接口调用, 除非用户允许, 否则不要使用穷举探测的方式进行处理
-- 测试统一用 bun 运行，入口为 `justfile`：`just test` 跑全部，`just run-test <关键字>` 按名过滤，`just test-sign` 为指定插件快捷方式；运行 `just test` 前确保 `bun test` 可用
-- 所有网络rule的测试, 必须在沙箱/容器中进行测试; 不准直接修改本地任何实际在用的规则
-- 禁止在本地或容器中执行任何临时`安装包`的操作
-
-## 提醒
-
-- 更新最新template后,注意`raw.githubusercontent.com`至少距离上次更新同文件要有5分钟间隔(缓存)
-
-## Loon
-
-- mac下的loon配置在`~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf`; 读取时必须过滤掉`[Proxy]`,`[Remote Proxy]`,`[Mitm]` 三个敏感的配置块
-
-## sing-box
-
-- template.json 的变更, 必须使用沙盒使用真实数据进行测试; 重点检查当前用户实际节点和规则的 出口/速度/延迟/变化
-
-## 参考项目
-
-- `https://github.com/chavyleung/scripts/`: 各种脚本参考
-- `https://sing-box.sagernet.org/configuration/`: sing-box配置文档
-- `https://sing-box.sagernet.org/changelog`: sing-box更新日志
+- 读取 mac 端 Loon 配置 `~/Library/Mobile Documents/iCloud~com~ruikq~decar/Documents/mac/mac.lcf` 前，先滤掉 `[Proxy]`、`[Remote Proxy]`、`[Mitm]` 三个敏感块
+- 只读仓库内配置与公开文档；遇到订阅链接或密码立即停止并报告（如 `~/.config/sing-box/config.yaml` 含节点，不读取）
+- 改 Loon 插件、sing-box 底模、规则集，或写、跑测试前，先读 `CODING_STANDARDS.md`
