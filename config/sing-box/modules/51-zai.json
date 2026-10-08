@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "zai"
+        ],
+        "action": "route",
+        "outbound": "zai"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "zai",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/zai.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "zai",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        ".*"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

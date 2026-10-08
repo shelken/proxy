@@ -5,6 +5,14 @@ import { SING_BOX } from "./lib/sandbox.ts";
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
 
+// 内核 merge 的输出会把单元素数组写成标量、省略默认值 `action: "route"`、
+// 把 default_domain_resolver 收成字符串，断言要对两种形态都成立。
+const asArray = <T>(v: T | T[] | undefined): T[] =>
+  v === undefined ? [] : Array.isArray(v) ? v : [v];
+const actionOf = (rule: { action?: string }): string => rule.action ?? "route";
+const resolverServer = (v: unknown): string | undefined =>
+  typeof v === "string" ? v : (v as { server?: string } | undefined)?.server;
+
 describe("template.json structural verification", () => {
   test("passes sing-box check", () => {
     const proc = Bun.spawnSync([SING_BOX, "check", "-c", TEMPLATE_PATH]);
@@ -38,7 +46,7 @@ describe("template.json structural verification", () => {
   test("routes private IP addresses to direct outbound", () => {
     const rules = template.route?.rules ?? [];
     const privateRule = rules.find(
-      (r) => r.ip_is_private === true && r.action === "route" && r.outbound === "direct",
+      (r) => r.ip_is_private === true && actionOf(r) === "route" && r.outbound === "direct",
     );
     expect(privateRule).toBeDefined();
   });
@@ -116,9 +124,9 @@ describe("template.json structural verification", () => {
       (r) => r.domain_suffix?.includes(".int.ooooo.space"),
     );
     expect(wildcard).toBeDefined();
-    expect(wildcard.query_type).toContain("A");
+    expect(asArray(wildcard.query_type)).toContain("A");
     expect(wildcard.action).toBe("predefined");
-    expect(wildcard.answer[0]).toContain("192.168.69.46");
+    expect(asArray(wildcard.answer).join(" ")).toContain("192.168.69.46");
 
     // 不带点：同时兜住根名与子域的非 A 查询
     const emptyRule = rules.find(
@@ -142,10 +150,10 @@ describe("template.json structural verification", () => {
     // 实测：dns.rules 里给 test.internal 配了 dns-local-system 也拦不住拨号，
     // 内核直接 lookup → NXDOMAIN。必须在这里指到 dns-local-system（type:local，
     // 跟随 DHCP）：局域网内打路由器拿内网 IP，在外面打运营商 DNS。
-    expect(template.route?.default_domain_resolver?.server).toBe("dns-local-system");
+    expect(resolverServer(template.route?.default_domain_resolver)).toBe("dns-local-system");
     // 指向的 server 必须在 dns.servers 里真实存在，否则内核启动 FATAL
     const tags = (template.dns?.servers ?? []).map((s) => s.tag);
-    expect(tags).toContain(template.route.default_domain_resolver.server);
+    expect(tags).toContain(resolverServer(template.route.default_domain_resolver));
   });
 
   test("TUN 网段与排除段、FakeIP 池三方互斥", () => {
@@ -228,9 +236,6 @@ describe("template.json structural verification", () => {
 
   test("v4 解析规则排除了所有走 direct 的规则集", () => {
     const rules = template.route?.rules ?? [];
-    const asArray = (v: unknown): string[] =>
-      Array.isArray(v) ? v : v === undefined ? [] : [v as string];
-
     const resolveRule = rules.find((r) => r.action === "resolve");
     expect(resolveRule.invert).toBe(true);
     const excluded: Record<string, true> = {};

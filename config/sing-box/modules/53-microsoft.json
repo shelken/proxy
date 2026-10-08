@@ -1,0 +1,34 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Microsoft"
+        ],
+        "action": "route",
+        "outbound": "microsoft"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Microsoft",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Microsoft.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "microsoft",
+      "outbounds": [
+        "direct",
+        "proxy"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

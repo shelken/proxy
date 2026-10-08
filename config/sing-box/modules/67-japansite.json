@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Japan"
+        ],
+        "action": "route",
+        "outbound": "japansite"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Japan",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Japan.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "japansite",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        "(?i)(日本|川日|东京|大阪|JP|Japan)"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

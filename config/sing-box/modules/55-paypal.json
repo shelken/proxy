@@ -1,0 +1,34 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "PayPal"
+        ],
+        "action": "route",
+        "outbound": "paypal"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "PayPal",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/PayPal.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "paypal",
+      "outbounds": [
+        "direct",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

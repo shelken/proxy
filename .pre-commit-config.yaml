@@ -18,7 +18,7 @@ repos:
         name: sing-box 底模检查
         entry: just check-template
         language: system
-        files: ^(config/sing-box/|scripts/template-build(\.test)?\.ts$)
+        files: ^(config/sing-box/|justfile$)
         pass_filenames: false
       # 清单与底模的 tag 契约（编译器改动会改变这份契约）
       - id: rules-check

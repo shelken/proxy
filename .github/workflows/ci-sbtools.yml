@@ -11,8 +11,6 @@ on:
       - "Cargo.lock"
       - "config/sing-box/template.json"
       - "config/sing-box/modules/**"
-      - "scripts/template-build.ts"
-      - "scripts/template-build.test.ts"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -59,12 +57,6 @@ jobs:
         with:
           bun-version: latest
 
-      - name: verify template modules consistency
-        run: |
-          bun scripts/template-build.ts --check
-          bun test scripts/template-build.test.ts
-        working-directory: .
-
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
@@ -78,6 +70,15 @@ jobs:
         with:
           cache: false
           install_args: sing-box
+
+      # 与 just template-check 同口径（CI 里没装 just，就地展开）
+      - name: verify template modules consistency
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp)
+          mise exec -- sing-box merge "$tmp" -C config/sing-box/modules
+          diff -u config/sing-box/template.json "$tmp"
+        working-directory: .
 
       - name: cargo test
         run: cargo test --locked --all-targets
