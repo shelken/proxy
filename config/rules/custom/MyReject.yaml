@@ -10,6 +10,7 @@ rules:
       - mumu.nie.netease.com
       - pingma.qq.com
       - sentry.io
+      - statsigapi.net
       - spider-tracker.xiaohongshu.com
       - apm-native.xiaohongshu.com
       - unityads.unity3d.com
@@ -19,5 +20,6 @@ rules:
       - upc.zztfly.com
   - domain:
       - msmp.abchina.com.cn
+      - browser-intake-us5-datadoghq.com
   - domain_keyword:
       - analytics-api

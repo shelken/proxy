@@ -2,11 +2,17 @@ rules:
   - domain:
       - cdn.usefathom.com
       - servd-anthropic-website.b-cdn.net
+      - anthropic.auth0.com
+      - anthropic.com.cdn.cloudflare.net
   - domain_suffix:
       - anthropic.com
       - clau.de
       - claude.ai
       - claude.com
+      - claude.dev
       - claudemcpclient.com
       - claudemcpcontent.com
       - claudeusercontent.com
+  - ip_cidr:
+      - 160.79.104.0/21,no-resolve
+      - 2607:6bc0::/32,no-resolve
