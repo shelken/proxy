@@ -79,6 +79,20 @@
       },
       {
         "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn",
+          "torrent"
+        ],
+        "invert": true,
+        "action": "resolve",
+        "server": "dns-proxy",
+        "strategy": "ipv4_only"
+      },
+      {
+        "rule_set": [
           "Gemini"
         ],
         "action": "route",

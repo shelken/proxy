@@ -206,13 +206,27 @@ describe("template.json structural verification", () => {
     }
   });
 
-  test("supports dual-stack IPv6 (tun address, exclude link-local, fakeip inet6_range)", () => {
+  test("tun 保持双栈，fakeip 只发 v4（无 inet6_range）", () => {
     const tun = template.inbounds.find((i) => i.type === "tun");
     expect(tun.address.some((addr: string) => addr.includes(":"))).toBe(true);
     expect(tun.route_exclude_address).toContain("fe80::/10");
 
     const fakeip = (template.dns?.servers ?? []).find((s) => s.type === "fakeip");
-    expect(fakeip?.inet6_range).toBe("fc00::/18");
+    expect(fakeip?.inet4_range).toBe("198.18.0.0/15");
+    // 去掉 v6 池后 AAAA 拿不到假地址，应用只会用 v4 连接
+    expect(fakeip?.inet6_range).toBeUndefined();
+  });
+
+  test("代理流量在路由阶段按 v4 解析后再交给节点", () => {
+    const rules = template.route?.rules ?? [];
+    const resolveRule = rules.find((r) => r.action === "resolve");
+    expect(resolveRule).toBeDefined();
+    // 必须显式指定 dns-proxy：否则内部查询被 dns.rules 的 fakeip 接住，返回假 IP
+    expect(resolveRule.server).toBe("dns-proxy");
+    expect(resolveRule.strategy).toBe("ipv4_only");
+    // 直连规则集要排除在外，直连仍走 prefer_ipv4
+    expect(resolveRule.invert).toBe(true);
+    expect(resolveRule.rule_set).toContain("geoip-cn");
   });
 
   test("routes bittorrent and download tools directly without proxy", () => {
