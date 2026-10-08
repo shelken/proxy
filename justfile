@@ -82,6 +82,18 @@ template-build:
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
+# 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败
+check-deprecated:
+    #!/usr/bin/env bash
+    out=$({{sing_box_cmd}} check -C config/sing-box/modules 2>&1)
+    rc=$?
+    printf '%s\n' "$out"
+    [ "$rc" -eq 0 ] || exit "$rc"
+    if printf '%s\n' "$out" | grep -qi deprecated; then
+        echo "❌ config/sing-box/modules 存在废弃写法（见上方 WARN）"
+        exit 1
+    fi
+
 
 # --- 规则产物 ---
 # 编译全部规则产物（联网拉上游清单，需 sing-box 编译 .srs）
@@ -98,16 +110,22 @@ rules-check:
     @bun scripts/rules-compile.ts check
 
 
-# --- 提交全检（pre-commit 钩子调用，手动跑同样可以） ---
-# 与 ci-sbtools.yml 同口径，另加宿主机安全的模板测试。
-# 沙箱网络行为测试（TUN/netns）不在这里跑：宿主机上会破坏在用的网络，
-# 走 just test-sandbox 在 VM 内执行。
-verify: check-singbox rules-check
-    @bun scripts/template-build.ts --check
+# --- 提交前检查：按改动范围分组，pre-commit 用 files 只触发相关那组 ---
+# Rust workspace：格式化 + 严格 lint + 全量测试
+check-rust:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
+
+# sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
+check-template:
+    @bun scripts/template-build.ts --check
+    @just check-singbox
+    @just check-deprecated
     SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts
+
+# 全量检查（手动跑 / CI 同口径）
+verify: check-rust check-template rules-check
 
 
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点
