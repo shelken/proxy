@@ -224,9 +224,25 @@ describe("template.json structural verification", () => {
     // 必须显式指定 dns-proxy：否则内部查询被 dns.rules 的 fakeip 接住，返回假 IP
     expect(resolveRule.server).toBe("dns-proxy");
     expect(resolveRule.strategy).toBe("ipv4_only");
-    // 直连规则集要排除在外，直连仍走 prefer_ipv4
+  });
+
+  test("v4 解析规则排除了所有走 direct 的规则集", () => {
+    const rules = template.route?.rules ?? [];
+    const asArray = (v: unknown): string[] =>
+      Array.isArray(v) ? v : v === undefined ? [] : [v as string];
+
+    const resolveRule = rules.find((r) => r.action === "resolve");
     expect(resolveRule.invert).toBe(true);
-    expect(resolveRule.rule_set).toContain("geoip-cn");
+    const excluded: Record<string, true> = {};
+    for (const tag of asArray(resolveRule.rule_set)) excluded[tag] = true;
+
+    // 漏掉一个直连组，该组流量会先被 dns-proxy 解析成海外 IP 再直连（国内站点拿到海外 CDN
+    // 地址）。新增走 direct 的规则集时必须同步这份排除清单，这里拦住漏项。
+    const directRuleSets = rules
+      .filter((r) => r.outbound === "direct")
+      .flatMap((r) => asArray(r.rule_set));
+    expect(directRuleSets.length).toBeGreaterThan(0);
+    expect(directRuleSets.filter((tag) => !excluded[tag])).toEqual([]);
   });
 
   test("routes bittorrent and download tools directly without proxy", () => {

@@ -75,7 +75,7 @@ flowchart LR
     LEAF -->|Index 1..N (备选)| N_AIRPORT["机场专线节点"]
 ```
 
-DNS 查询先匹配本地与国内规则，未匹配的 A/AAAA 使用 FakeIP，其余查询经代理加密 DNS 解析，不拒绝 HTTPS 记录。FakeIP 映射持久化以跨正常重启保留客户端缓存的地址含义
+DNS 查询先匹配本地与国内规则，未匹配的 A 查询使用 FakeIP（fakeip 只配 v4 池，AAAA 不再取得假地址，应用因此只用 v4 建立连接），其余查询经代理加密 DNS 解析，不拒绝 HTTPS 记录。FakeIP 映射持久化以跨正常重启保留客户端缓存的地址含义
 
 进入内核的明文 DNS 由路由规则接管；TUN 排除段和前置终结规则仍然优先，不能据此宣称接管全部系统 DNS。
 
