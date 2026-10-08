@@ -2,11 +2,21 @@ rules:
   - domain:
       - cdn.usefathom.com
       - servd-anthropic-website.b-cdn.net
+      - anthropic.auth0.com
+      - anthropic.com.cdn.cloudflare.net
   - domain_suffix:
       - anthropic.com
       - clau.de
       - claude.ai
       - claude.com
+      - claude.dev
       - claudemcpclient.com
       - claudemcpcontent.com
       - claudeusercontent.com
+  - ip_cidr:
+      # ARIN 归属 Anthropic 的整段，含官方给客户端的入口段 160.79.104.0/23、2607:6bc0::/48
+      - 160.79.104.0/21,no-resolve
+      - 2607:6bc0::/32,no-resolve
+  # sing-box 端无法表达（编译时忽略并告警），Mihomo/Loon 端按 ASN 兜底
+  - ip_asn:
+      - "399358"

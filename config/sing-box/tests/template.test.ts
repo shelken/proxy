@@ -206,13 +206,43 @@ describe("template.json structural verification", () => {
     }
   });
 
-  test("supports dual-stack IPv6 (tun address, exclude link-local, fakeip inet6_range)", () => {
+  test("tun 保持双栈，fakeip 只发 v4（无 inet6_range）", () => {
     const tun = template.inbounds.find((i) => i.type === "tun");
     expect(tun.address.some((addr: string) => addr.includes(":"))).toBe(true);
     expect(tun.route_exclude_address).toContain("fe80::/10");
 
     const fakeip = (template.dns?.servers ?? []).find((s) => s.type === "fakeip");
-    expect(fakeip?.inet6_range).toBe("fc00::/18");
+    expect(fakeip?.inet4_range).toBe("198.18.0.0/15");
+    // 去掉 v6 池后 AAAA 拿不到假地址，应用只会用 v4 连接
+    expect(fakeip?.inet6_range).toBeUndefined();
+  });
+
+  test("代理流量在路由阶段按 v4 解析后再交给节点", () => {
+    const rules = template.route?.rules ?? [];
+    const resolveRule = rules.find((r) => r.action === "resolve");
+    expect(resolveRule).toBeDefined();
+    // 必须显式指定 dns-proxy：否则内部查询被 dns.rules 的 fakeip 接住，返回假 IP
+    expect(resolveRule.server).toBe("dns-proxy");
+    expect(resolveRule.strategy).toBe("ipv4_only");
+  });
+
+  test("v4 解析规则排除了所有走 direct 的规则集", () => {
+    const rules = template.route?.rules ?? [];
+    const asArray = (v: unknown): string[] =>
+      Array.isArray(v) ? v : v === undefined ? [] : [v as string];
+
+    const resolveRule = rules.find((r) => r.action === "resolve");
+    expect(resolveRule.invert).toBe(true);
+    const excluded: Record<string, true> = {};
+    for (const tag of asArray(resolveRule.rule_set)) excluded[tag] = true;
+
+    // 漏掉一个直连组，该组流量会先被 dns-proxy 解析成海外 IP 再直连（国内站点拿到海外 CDN
+    // 地址）。新增走 direct 的规则集时必须同步这份排除清单，这里拦住漏项。
+    const directRuleSets = rules
+      .filter((r) => r.outbound === "direct")
+      .flatMap((r) => asArray(r.rule_set));
+    expect(directRuleSets.length).toBeGreaterThan(0);
+    expect(directRuleSets.filter((tag) => !excluded[tag])).toEqual([]);
   });
 
   test("routes bittorrent and download tools directly without proxy", () => {

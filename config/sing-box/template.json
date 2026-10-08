@@ -49,8 +49,7 @@
       {
         "type": "fakeip",
         "tag": "dns-fakeip",
-        "inet4_range": "198.18.0.0/15",
-        "inet6_range": "fc00::/18"
+        "inet4_range": "198.18.0.0/15"
       }
     ],
     "rules": [
@@ -191,6 +190,20 @@
           "Privacy"
         ],
         "action": "reject"
+      },
+      {
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn",
+          "torrent"
+        ],
+        "invert": true,
+        "action": "resolve",
+        "server": "dns-proxy",
+        "strategy": "ipv4_only"
       },
       {
         "rule_set": [
