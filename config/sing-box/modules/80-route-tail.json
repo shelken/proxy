@@ -5,7 +5,6 @@
         "rule_set": [
           "ChinaMax",
           "Lan",
-          "MyDirect",
           "cftunnel",
           "geoip-cn"
         ],
@@ -16,7 +15,6 @@
         "rule_set": [
           "Facebook",
           "Instagram",
-          "MyProxy",
           "Spotify",
           "Telegram",
           "TikTok",
@@ -40,13 +38,6 @@
         "tag": "Lan",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyDirect",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect.srs",
         "update_interval": "1d"
       },
       {
@@ -75,13 +66,6 @@
         "tag": "Instagram",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Instagram.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyProxy",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
         "update_interval": "1d"
       },
       {

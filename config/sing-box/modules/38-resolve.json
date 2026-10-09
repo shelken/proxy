@@ -1,0 +1,23 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn",
+          "torrent",
+          "Microsoft",
+          "PayPal",
+          "Apple"
+        ],
+        "invert": true,
+        "action": "resolve",
+        "server": "dns-proxy",
+        "strategy": "ipv4_only"
+      }
+    ]
+  }
+}

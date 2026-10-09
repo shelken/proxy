@@ -1,0 +1,37 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "Privacy"
+        ],
+        "action": "reject"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Advertising",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Hijacking",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Hijacking.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "Privacy",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "1d"
+      }
+    ]
+  }
+}
