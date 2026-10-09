@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "opencode"
+        ],
+        "action": "route",
+        "outbound": "opencode"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "opencode",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/opencode.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "opencode",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        ".*"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "ptcg"
+        ],
+        "action": "route",
+        "outbound": "ptcg"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "ptcg",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ptcg.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "ptcg",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "direct",
+        "(?i)(日本|JP)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

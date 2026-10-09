@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Apple-AI"
+        ],
+        "action": "route",
+        "outbound": "appleai"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Apple-AI",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple-AI.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "appleai",
+      "outbounds": [
+        "direct",
+        "selfhost",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

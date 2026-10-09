@@ -746,6 +746,15 @@ mod tests {
     #[test]
     fn policy_groups_expand_candidates_in_template_order() {
         let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        // 期望顺序从底模自身推导：写死快照会在调整模块布局时误报，而真正要守的不变量
+        // 是「装配后仍按底模顺序」。
+        let expected: Vec<String> = tpl["outbounds"]
+            .as_array()
+            .expect("outbounds 为数组")
+            .iter()
+            .filter(|o| o["type"] == "selector")
+            .filter_map(|s| s["tag"].as_str().map(str::to_string))
+            .collect();
         let input = input_with_fetcher(
             "hy2://pass@192.0.2.1:8388#selfhost|https://airport.example/sub",
             &airport_body(),
@@ -760,31 +769,11 @@ mod tests {
             .collect();
 
         // 底模的 selector 顺序：proxy 在首位，其余依次
-        let selector_tags: Vec<&str> = selectors.iter().filter_map(|s| s["tag"].as_str()).collect();
-        assert_eq!(
-            selector_tags,
-            vec![
-                "selfhost",
-                "proxy",
-                "openai",
-                "anthropic",
-                "gemini",
-                "dev",
-                "adultnsfw",
-                "appleai",
-                "ptcg",
-                "japansite",
-                "opencode",
-                "zai",
-                "download",
-                "microsoft",
-                "apple",
-                "paypal",
-                "grok",
-                "1024proxy",
-            ],
-            "selector 组集合与底模顺序"
-        );
+        let selector_tags: Vec<String> = selectors
+            .iter()
+            .filter_map(|s| s["tag"].as_str().map(str::to_string))
+            .collect();
+        assert_eq!(selector_tags, expected, "selector 组集合与底模顺序");
 
         let proxy = selectors
             .iter()

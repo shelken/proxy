@@ -1,31 +1,5 @@
 {
-  "inbounds": [
-    {
-      "type": "tun",
-      "tag": "tun-in",
-      "address": [
-        "198.51.100.1/30",
-        "fdfe:dcba:9876::1/126"
-      ],
-      "auto_route": true,
-      "dns_mode": "hijack",
-      "route_exclude_address": [
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "fe80::/10"
-      ]
-    },
-    {
-      "type": "mixed",
-      "tag": "mixed-in",
-      "listen": "127.0.0.1",
-      "listen_port": 2080
-    }
-  ],
   "dns": {
-    "strategy": "prefer_ipv4",
-    "optimistic": true,
     "servers": [
       {
         "type": "local",
@@ -39,8 +13,8 @@
       {
         "type": "https",
         "tag": "dns-proxy",
-        "server": "1.1.1.1",
         "detour": "dns-auto",
+        "server": "1.1.1.1",
         "tls": {
           "enabled": true,
           "server_name": "cloudflare-dns.com"
@@ -54,19 +28,17 @@
     ],
     "rules": [
       {
-        "domain_suffix": [".int.ooooo.space"],
-        "query_type": ["A"],
+        "query_type": "A",
+        "domain_suffix": ".int.ooooo.space",
         "action": "predefined",
-        "answer": ["*. IN A 192.168.69.46"]
+        "answer": "*.\t3600\tIN\tA\t192.168.69.46"
       },
       {
-        "domain_suffix": ["int.ooooo.space"],
+        "domain_suffix": "int.ooooo.space",
         "action": "predefined"
       },
       {
-        "rule_set": [
-          "Lan-dns"
-        ],
+        "rule_set": "Lan-dns",
         "server": "dns-local-system",
         "disable_optimistic_cache": true
       },
@@ -84,15 +56,11 @@
         "server": "dns-local-system"
       },
       {
-        "rule_set": [
-          "MyDirect-dns"
-        ],
+        "rule_set": "MyDirect-dns",
         "server": "dns-local-system"
       },
       {
-        "query_type": [
-          "PTR"
-        ],
+        "query_type": "PTR",
         "server": "dns-local-system"
       },
       {
@@ -110,510 +78,39 @@
         "server": "dns-fakeip"
       }
     ],
-    "final": "dns-proxy"
-  },
-  "route": {
-    "auto_detect_interface": true,
-    "rules": [
-      {
-        "action": "sniff",
-        "sniffer": [
-          "http",
-          "tls",
-          "quic",
-          "dns",
-          "bittorrent"
-        ]
-      },
-      {
-        "protocol": "dns",
-        "action": "hijack-dns"
-      },
-      {
-        "port": 53,
-        "action": "hijack-dns"
-      },
-      {
-        "clash_mode": "direct",
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "clash_mode": "global",
-        "action": "route",
-        "outbound": "proxy"
-      },
-      {
-        "ip_is_private": true,
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "network": "udp",
-        "port": [
-          443,
-          80
-        ],
-        "action": "reject"
-      },
-      {
-        "protocol": "bittorrent",
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "port_range": [
-          "6881:6889"
-        ],
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": [
-          "torrent"
-        ],
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": [
-          "Download"
-        ],
-        "action": "route",
-        "outbound": "download"
-      },
-      {
-        "rule_set": [
-          "Advertising",
-          "Hijacking",
-          "MyReject",
-          "Privacy"
-        ],
-        "action": "reject"
-      },
-      {
-        "rule_set": [
-          "ChinaMax",
-          "Lan",
-          "MyDirect",
-          "cftunnel",
-          "geoip-cn",
-          "torrent"
-        ],
-        "invert": true,
-        "action": "resolve",
-        "server": "dns-proxy",
-        "strategy": "ipv4_only"
-      },
-      {
-        "rule_set": [
-          "Gemini"
-        ],
-        "action": "route",
-        "outbound": "gemini"
-      },
-      {
-        "rule_set": [
-          "OpenAI"
-        ],
-        "action": "route",
-        "outbound": "openai"
-      },
-      {
-        "rule_set": [
-          "Anthropic"
-        ],
-        "action": "route",
-        "outbound": "anthropic"
-      },
-      {
-        "rule_set": [
-          "Apple-AI"
-        ],
-        "action": "route",
-        "outbound": "appleai"
-      },
-      {
-        "rule_set": [
-          "opencode"
-        ],
-        "action": "route",
-        "outbound": "opencode"
-      },
-      {
-        "rule_set": [
-          "zai"
-        ],
-        "action": "route",
-        "outbound": "zai"
-      },
-      {
-        "rule_set": [
-          "Microsoft"
-        ],
-        "action": "route",
-        "outbound": "microsoft"
-      },
-      {
-        "rule_set": [
-          "PayPal"
-        ],
-        "action": "route",
-        "outbound": "paypal"
-      },
-      {
-        "rule_set": [
-          "grok"
-        ],
-        "action": "route",
-        "outbound": "grok"
-      },
-      {
-        "rule_set": [
-          "1024proxy"
-        ],
-        "action": "route",
-        "outbound": "1024proxy"
-      },
-      {
-        "rule_set": [
-          "Apple"
-        ],
-        "action": "route",
-        "outbound": "apple"
-      },
-      {
-        "rule_set": [
-          "dev"
-        ],
-        "action": "route",
-        "outbound": "dev"
-      },
-      {
-        "rule_set": [
-          "ptcg"
-        ],
-        "action": "route",
-        "outbound": "ptcg"
-      },
-      {
-        "rule_set": [
-          "Japan"
-        ],
-        "action": "route",
-        "outbound": "japansite"
-      },
-      {
-        "rule_set": [
-          "Adult"
-        ],
-        "action": "route",
-        "outbound": "adultnsfw"
-      },
-      {
-        "rule_set": [
-          "ChinaMax",
-          "Lan",
-          "MyDirect",
-          "cftunnel",
-          "geoip-cn"
-        ],
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": [
-          "Facebook",
-          "Instagram",
-          "MyProxy",
-          "Spotify",
-          "Telegram",
-          "TikTok",
-          "Twitter",
-          "YouTube"
-        ],
-        "action": "route",
-        "outbound": "proxy"
-      }
-    ],
-    "final": "proxy",
-    "default_domain_resolver": {
-      "server": "dns-local-system"
-    },
-    "default_http_client": "rule-set-dl",
-    "rule_set": [
-      {
-        "type": "remote",
-        "tag": "1024proxy",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024proxy.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Adult",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Adult.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Advertising",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Anthropic",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Anthropic.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Apple",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Apple-AI",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple-AI.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "ChinaMax",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Download",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Facebook",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Facebook.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Gemini",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Gemini.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "grok",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/grok.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Hijacking",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Hijacking.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Instagram",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Instagram.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Japan",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Japan.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Microsoft",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Microsoft.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Lan",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyDirect",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyProxy",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyReject",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "OpenAI",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/OpenAI.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "PayPal",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/PayPal.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Privacy",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Spotify",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Spotify.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Telegram",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Telegram.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "TikTok",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/TikTok.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Twitter",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Twitter.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "YouTube",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/YouTube.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "cftunnel",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/cftunnel.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "dev",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/dev.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "geoip-cn",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/geoip-cn.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "opencode",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/opencode.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "ptcg",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ptcg.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "zai",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/zai.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "ChinaMax-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "Lan-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyDirect-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
-        "update_interval": "1d"
-      }
-    ]
+    "final": "dns-proxy",
+    "strategy": "prefer_ipv4",
+    "optimistic": true
   },
   "http_clients": [
     {
       "tag": "rule-set-dl",
+      "version": 2,
       "detour": "proxy"
+    }
+  ],
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": [
+        "198.51.100.1/30",
+        "fdfe:dcba:9876::1/126"
+      ],
+      "dns_mode": "hijack",
+      "auto_route": true,
+      "route_exclude_address": [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "fe80::/10"
+      ]
+    },
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
     }
   ],
   "outbounds": [
@@ -631,7 +128,7 @@
         "(?i)(新加坡|坡|狮城|SG|Singapore)"
       ],
       "url": "https://www.gstatic.com/generate_204",
-      "interval": "1m",
+      "interval": "1m0s",
       "tolerance": 50,
       "interrupt_exist_connections": true
     },
@@ -651,119 +148,6 @@
         ".*"
       ],
       "default": "selfhost",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "openai",
-      "outbounds": [
-        "selfhost",
-        "proxy",
-        "(?i)(港|日本|台湾|GPT|美)"
-      ],
-      "default": "selfhost",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "anthropic",
-      "outbounds": [
-        "openai",
-        "selfhost",
-        "(?i)(新加坡|坡|狮城|SG|Singapore|日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"
-      ],
-      "default": "openai",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "gemini",
-      "outbounds": [
-        "openai",
-        "selfhost",
-        "proxy",
-        "(?i)(日本|川日|东京|大阪|JP|Japan)"
-      ],
-      "default": "openai",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "dev",
-      "outbounds": [
-        "selfhost",
-        "proxy",
-        "(?i)(港|HK|Hong)"
-      ],
-      "default": "selfhost",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "adultnsfw",
-      "outbounds": [
-        "selfhost",
-        "proxy",
-        "direct",
-        "(?i)(vps|hys|港)"
-      ],
-      "default": "selfhost",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "appleai",
-      "outbounds": [
-        "direct",
-        "selfhost",
-        "proxy"
-      ],
-      "default": "direct",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "ptcg",
-      "outbounds": [
-        "selfhost",
-        "proxy",
-        "direct",
-        "(?i)(日本|JP)"
-      ],
-      "default": "selfhost",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "japansite",
-      "outbounds": [
-        "proxy",
-        "selfhost",
-        "(?i)(日本|川日|东京|大阪|JP|Japan)"
-      ],
-      "default": "proxy",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "opencode",
-      "outbounds": [
-        "proxy",
-        "selfhost",
-        ".*"
-      ],
-      "default": "proxy",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "zai",
-      "outbounds": [
-        "proxy",
-        "selfhost",
-        ".*"
-      ],
-      "default": "proxy",
       "interrupt_exist_connections": true
     },
     {
@@ -846,23 +230,79 @@
     },
     {
       "type": "selector",
-      "tag": "microsoft",
+      "tag": "gemini",
+      "outbounds": [
+        "openai",
+        "selfhost",
+        "proxy",
+        "(?i)(日本|川日|东京|大阪|JP|Japan)"
+      ],
+      "default": "openai",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "openai",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "(?i)(港|日本|台湾|GPT|美)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "anthropic",
+      "outbounds": [
+        "openai",
+        "selfhost",
+        "(?i)(新加坡|坡|狮城|SG|Singapore|日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"
+      ],
+      "default": "openai",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "appleai",
       "outbounds": [
         "direct",
+        "selfhost",
         "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "opencode",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        ".*"
       ],
       "default": "proxy",
       "interrupt_exist_connections": true
     },
     {
       "type": "selector",
-      "tag": "apple",
+      "tag": "zai",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        ".*"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "microsoft",
       "outbounds": [
         "direct",
-        "proxy",
-        "selfhost"
+        "proxy"
       ],
-      "default": "direct",
+      "default": "proxy",
       "interrupt_exist_connections": true
     },
     {
@@ -896,19 +336,474 @@
       ],
       "default": "proxy",
       "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "apple",
+      "outbounds": [
+        "direct",
+        "proxy",
+        "selfhost"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "dev",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "(?i)(港|HK|Hong)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "ptcg",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "direct",
+        "(?i)(日本|JP)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "japansite",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        "(?i)(日本|川日|东京|大阪|JP|Japan)"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "adultnsfw",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "direct",
+        "(?i)(vps|hys|港)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
     }
   ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff",
+        "sniffer": [
+          "http",
+          "tls",
+          "quic",
+          "dns",
+          "bittorrent"
+        ]
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "clash_mode": "direct",
+        "outbound": "direct"
+      },
+      {
+        "clash_mode": "global",
+        "outbound": "proxy"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject"
+      },
+      {
+        "protocol": "bittorrent",
+        "outbound": "direct"
+      },
+      {
+        "port_range": "6881:6889",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "torrent",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "Download",
+        "outbound": "download"
+      },
+      {
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "MyReject",
+          "Privacy"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn",
+          "torrent"
+        ],
+        "invert": true,
+        "action": "resolve",
+        "server": "dns-proxy",
+        "strategy": "ipv4_only"
+      },
+      {
+        "rule_set": "Gemini",
+        "outbound": "gemini"
+      },
+      {
+        "rule_set": "OpenAI",
+        "outbound": "openai"
+      },
+      {
+        "rule_set": "Anthropic",
+        "outbound": "anthropic"
+      },
+      {
+        "rule_set": "Apple-AI",
+        "outbound": "appleai"
+      },
+      {
+        "rule_set": "opencode",
+        "outbound": "opencode"
+      },
+      {
+        "rule_set": "zai",
+        "outbound": "zai"
+      },
+      {
+        "rule_set": "Microsoft",
+        "outbound": "microsoft"
+      },
+      {
+        "rule_set": "PayPal",
+        "outbound": "paypal"
+      },
+      {
+        "rule_set": "grok",
+        "outbound": "grok"
+      },
+      {
+        "rule_set": "1024proxy",
+        "outbound": "1024proxy"
+      },
+      {
+        "rule_set": "Apple",
+        "outbound": "apple"
+      },
+      {
+        "rule_set": "dev",
+        "outbound": "dev"
+      },
+      {
+        "rule_set": "ptcg",
+        "outbound": "ptcg"
+      },
+      {
+        "rule_set": "Japan",
+        "outbound": "japansite"
+      },
+      {
+        "rule_set": "Adult",
+        "outbound": "adultnsfw"
+      },
+      {
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "MyDirect",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Facebook",
+          "Instagram",
+          "MyProxy",
+          "Spotify",
+          "Telegram",
+          "TikTok",
+          "Twitter",
+          "YouTube"
+        ],
+        "outbound": "proxy"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Lan-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyDirect-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "ChinaMax-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "torrent-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "torrent",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Download",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Advertising",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Hijacking",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Hijacking.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyReject",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Privacy",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Gemini",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Gemini.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "OpenAI",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/OpenAI.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Anthropic",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Anthropic.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Apple-AI",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple-AI.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "opencode",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/opencode.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "zai",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/zai.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Microsoft",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Microsoft.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "PayPal",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/PayPal.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "grok",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/grok.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "1024proxy",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024proxy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Apple",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "dev",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/dev.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "ptcg",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ptcg.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Japan",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Japan.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Adult",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Adult.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "ChinaMax",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Lan",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyDirect",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "cftunnel",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/cftunnel.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "geoip-cn",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/geoip-cn.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Facebook",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Facebook.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Instagram",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Instagram.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyProxy",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Spotify",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Spotify.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Telegram",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Telegram.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "TikTok",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/TikTok.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Twitter",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Twitter.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "YouTube",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/YouTube.srs",
+        "update_interval": "24h0m0s"
+      }
+    ],
+    "final": "proxy",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-local-system",
+    "default_http_client": "rule-set-dl"
+  },
   "experimental": {
-    "clash_api": {
-      "external_controller": "127.0.0.1:9090",
-      "external_ui": "ui",
-      "default_mode": "rule"
-    },
     "cache_file": {
       "enabled": true,
       "path": "cache.db",
       "store_fakeip": true,
       "store_dns": true
+    },
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "external_ui": "ui",
+      "default_mode": "rule"
     }
   }
 }

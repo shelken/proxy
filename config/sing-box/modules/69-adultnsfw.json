@@ -1,0 +1,36 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Adult"
+        ],
+        "action": "route",
+        "outbound": "adultnsfw"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Adult",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Adult.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "adultnsfw",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "direct",
+        "(?i)(vps|hys|港)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

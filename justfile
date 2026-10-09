@@ -74,9 +74,23 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 # --- 生产底模装配与校验 ---
 # 从 config/sing-box/modules 构建 template.json
+# 用官方 merge：文件名（前缀数字）决定 route.rules / outbounds 的数组顺序
 template-build:
-    @bun scripts/template-build.ts
+    @{{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
     @just check-singbox
+
+# 校验 template.json 与 modules 一致：用内核重跑一次逐字节比对
+template-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp="$(mktemp "${TMPDIR:-/tmp}/sing-box-template.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    {{sing_box_cmd}} merge "$tmp" -C config/sing-box/modules >/dev/null
+    if ! diff -u config/sing-box/template.json "$tmp"; then
+        echo "❌ config/sing-box/template.json 与 modules/ 不一致，请运行 just template-build 更新底模"
+        exit 1
+    fi
+    echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
 
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
@@ -119,7 +133,7 @@ check-rust:
 
 # sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
 check-template:
-    @bun scripts/template-build.ts --check
+    @just template-check
     @just check-singbox
     @just check-deprecated
     SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts

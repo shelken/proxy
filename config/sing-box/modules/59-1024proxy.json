@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "1024proxy"
+        ],
+        "action": "route",
+        "outbound": "1024proxy"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "1024proxy",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024proxy.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "1024proxy",
+      "outbounds": [
+        "proxy",
+        "selfhost",
+        "(?i)1024"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

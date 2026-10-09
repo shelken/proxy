@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "OpenAI"
+        ],
+        "action": "route",
+        "outbound": "openai"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "OpenAI",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/OpenAI.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "openai",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "(?i)(港|日本|台湾|GPT|美)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

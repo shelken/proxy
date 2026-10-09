@@ -1,0 +1,36 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Gemini"
+        ],
+        "action": "route",
+        "outbound": "gemini"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Gemini",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Gemini.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "gemini",
+      "outbounds": [
+        "openai",
+        "selfhost",
+        "proxy",
+        "(?i)(日本|川日|东京|大阪|JP|Japan)"
+      ],
+      "default": "openai",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

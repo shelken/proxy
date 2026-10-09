@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "dev"
+        ],
+        "action": "route",
+        "outbound": "dev"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "dev",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/dev.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "dev",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "(?i)(港|HK|Hong)"
+      ],
+      "default": "selfhost",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

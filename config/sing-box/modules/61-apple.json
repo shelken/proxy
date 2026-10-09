@@ -1,0 +1,35 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Apple"
+        ],
+        "action": "route",
+        "outbound": "apple"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Apple",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple.srs",
+        "update_interval": "1d"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "apple",
+      "outbounds": [
+        "direct",
+        "proxy",
+        "selfhost"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    }
+  ]
+}
