@@ -5,7 +5,6 @@ rules:
   - domain_suffix:
       - kelee.one
       - q1w2d3.org
-      - opencode.ai
       - amazon.com.cn
       - amazonaws.com.cn
       - zajourney.com
