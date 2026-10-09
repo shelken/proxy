@@ -256,6 +256,20 @@ describe("template.json structural verification", () => {
     expect(directRuleSets.filter((tag) => !excluded[tag])).toEqual([]);
   });
 
+  test("所有 action: reject 规则必须排在首个 action: resolve 规则之前", () => {
+    const rules = template.route?.rules ?? [];
+    const firstResolveIndex = rules.findIndex(
+      (r: { action?: string }) => r.action === "resolve",
+    );
+    expect(firstResolveIndex).toBeGreaterThan(-1);
+
+    for (let i = 0; i < rules.length; i++) {
+      if (rules[i].action === "reject") {
+        expect(i).toBeLessThan(firstResolveIndex);
+      }
+    }
+  });
+
   test("routes bittorrent and download tools directly without proxy", () => {
     const sniffer = template.route?.rules?.[0]?.sniffer ?? [];
     expect(sniffer).toContain("bittorrent");

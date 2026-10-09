@@ -15,7 +15,7 @@
 2. 出站组默认 `direct` 的服务模块排到服务号段最后（`71`-`79`），避免默认直连的宽泛组抢占代理流量；`MyDirect` 这类「永直连」的自有清单不适用，仍随自有清单排在前面
 3. 服务号段扩到 `41`-`79`：自有 `41`-`63`、外部 `65`-`69`、默认直连 `71`-`79`，奇数编号为占用位、偶数为插队位
 4. `30-route-base-rules.json` 按关注点拆分：`30` 只留全局动作与守卫，`32` BT 直连、`34` 下载分流（`download` 出站组一并移入）、`36` 拦截清单、`38` 解析前置各自成文件
-5. `My` 开头的自有清单（`MyReject` / `MyDirect` / `MyProxy`）排在所有服务规则之前（`40-my-rules.json`），文件内语义优先级为拦截 > 强制直连 > 强制代理
+5. 拦截类的 `MyReject` 纳入 `36-reject.json` 确保在解析前短路终结，分流类的 `MyDirect` / `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）
 6. 默认直连的规则集必须出现在 `38-resolve.json` 的排除清单里。该清单由底模推导（出站是 `direct`，或出站是默认 `direct` 的策略组）并由 `config/sing-box/tests/template.test.ts` 断言，`microsoft` / `paypal` / `apple` 按此纳入
 
 ## Consequences

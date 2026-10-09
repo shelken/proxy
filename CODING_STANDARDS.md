@@ -22,7 +22,7 @@
   路由全局属性、前置动作、守卫、拦截、解析、核心出站组），`41`-`63` 自有清单（`custom/`）服务，`65`-`69` 外部清单服务，
   `71`-`79` 默认直连的分组，`80` 兜底规则，`90` 收尾。每个服务一个文件（路由规则 + rule_set + 出站组），号段留空便于插队。
   新增服务 = 新建一个文件 + 在 `index.yaml` 登记 rule_set，不用再改别的文件
-- 服务顺序的两条策略：自有清单默认排在外部清单（`geosite:` / `geoip:`）之前，宽泛的上游清单会抢走自有清单的域名；`My` 开头的自有清单（`MyReject` / `MyDirect` / `MyProxy`）再往前一步，排在所有服务规则之前（`40-my-rules.json`）；
+- 服务顺序的两条策略：自有清单默认排在外部清单（`geosite:` / `geoip:`）之前，宽泛的上游清单会抢走自有清单的域名；拦截类的 `MyReject` 纳入 `36-reject.json` 在解析前短路，分流类的 `MyDirect` / `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）；
   出站组默认 `direct` 的服务模块排到服务号段最后，避免默认直连的组抢占代理流量。两者都靠文件名前缀实现，理由见
   `docs/adr/0007`
 - 改底模、出站、规则集前先查[配置文档](https://sing-box.sagernet.org/configuration/)与 [changelog](https://sing-box.sagernet.org/changelog)

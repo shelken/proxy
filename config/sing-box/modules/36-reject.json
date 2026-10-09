@@ -5,6 +5,7 @@
         "rule_set": [
           "Advertising",
           "Hijacking",
+          "MyReject",
           "Privacy"
         ],
         "action": "reject"
@@ -23,6 +24,13 @@
         "tag": "Hijacking",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Hijacking.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyReject",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
         "update_interval": "1d"
       },
       {

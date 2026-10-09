@@ -455,6 +455,7 @@
         "rule_set": [
           "Advertising",
           "Hijacking",
+          "MyReject",
           "Privacy"
         ],
         "action": "reject"
@@ -475,10 +476,6 @@
         "action": "resolve",
         "server": "dns-proxy",
         "strategy": "ipv4_only"
-      },
-      {
-        "rule_set": "MyReject",
-        "action": "reject"
       },
       {
         "rule_set": "MyDirect",
@@ -621,14 +618,14 @@
       },
       {
         "type": "remote",
-        "tag": "Privacy",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "tag": "MyReject",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
         "update_interval": "24h0m0s"
       },
       {
         "type": "remote",
-        "tag": "MyReject",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
+        "tag": "Privacy",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
         "update_interval": "24h0m0s"
       },
       {
