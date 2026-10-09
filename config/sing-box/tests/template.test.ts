@@ -106,13 +106,19 @@ describe("template.json structural verification", () => {
     const rules = template.dns?.rules ?? [];
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
     expect(zoneRule).toBeDefined();
+    const zoneIndex = rules.indexOf(zoneRule);
     // 必须是 dns-local-system：局域网内由路由器应答真实内网 IP，
     // 拿到真实 IP 后出站直连无需再解析，绕开 fakeip → 拨号解析 NXDOMAIN
     expect(zoneRule.server).toBe("dns-local-system");
+    expect(zoneRule.disable_optimistic_cache).toBe(true);
+
+    // 个人域规则必须排在 clash_mode: direct 之前，确保在 direct 模式下也能禁用乐观缓存
+    const directIndex = rules.findIndex((r) => r.clash_mode === "direct");
+    expect(directIndex).toBeGreaterThan(-1);
+    expect(zoneIndex).toBeLessThan(directIndex);
 
     // first match wins：命中 fakeip 之前必须已被本条拦下，否则仍会拿到假 IP
     const fakeipIndex = rules.findIndex((r) => r.server === "dns-fakeip");
-    const zoneIndex = rules.indexOf(zoneRule);
     expect(fakeipIndex).toBeGreaterThan(-1);
     expect(zoneIndex).toBeLessThan(fakeipIndex);
   });
@@ -254,6 +260,34 @@ describe("template.json structural verification", () => {
       .flatMap((r) => asArray(r.rule_set));
     expect(directRuleSets.length).toBeGreaterThan(0);
     expect(directRuleSets.filter((tag) => !excluded[tag])).toEqual([]);
+  });
+
+  test("所有 action: reject 规则必须排在首个 action: resolve 规则之前", () => {
+    const rules = template.route?.rules ?? [];
+    const firstResolveIndex = rules.findIndex(
+      (r: { action?: string }) => r.action === "resolve",
+    );
+    expect(firstResolveIndex).toBeGreaterThan(-1);
+
+    for (let i = 0; i < rules.length; i++) {
+      if (rules[i].action === "reject") {
+        expect(i).toBeLessThan(firstResolveIndex);
+      }
+    }
+  });
+
+  test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
+    const dnsRules = template.dns?.rules ?? [];
+    const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>
+      asArray(r.rule_set).includes("MyReject-dns"),
+    );
+    expect(rejectDnsRule).toBeDefined();
+    expect(rejectDnsRule?.action).toBe("reject");
+
+    const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
+    expect(fakeipIndex).toBeGreaterThan(-1);
+    const rejectIndex = dnsRules.indexOf(rejectDnsRule);
+    expect(rejectIndex).toBeLessThan(fakeipIndex);
   });
 
   test("routes bittorrent and download tools directly without proxy", () => {

@@ -3,12 +3,6 @@
     "rules": [
       {
         "rule_set": [
-          "MyReject"
-        ],
-        "action": "reject"
-      },
-      {
-        "rule_set": [
           "MyDirect"
         ],
         "action": "route",
@@ -23,13 +17,6 @@
       }
     ],
     "rule_set": [
-      {
-        "type": "remote",
-        "tag": "MyReject",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
-        "update_interval": "1d"
-      },
       {
         "type": "remote",
         "tag": "MyDirect",

@@ -49,6 +49,12 @@
       },
       {
         "rule_set": [
+          "MyReject-dns"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
           "Lan-dns"
         ],
         "server": "dns-local-system",
@@ -64,13 +70,14 @@
         "disable_optimistic_cache": true
       },
       {
-        "clash_mode": "direct",
-        "server": "dns-local-system"
-      },
-      {
         "rule_set": [
           "MyDirect-dns"
         ],
+        "server": "dns-local-system",
+        "disable_optimistic_cache": true
+      },
+      {
+        "clash_mode": "direct",
         "server": "dns-local-system"
       },
       {
@@ -110,6 +117,13 @@
         "tag": "MyDirect-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyReject-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
         "update_interval": "1d"
       },
       {
