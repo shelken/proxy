@@ -27,7 +27,7 @@
         "direct",
         "proxy"
       ],
-      "default": "proxy",
+      "default": "direct",
       "interrupt_exist_connections": true
     }
   ]

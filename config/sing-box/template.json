@@ -270,7 +270,7 @@
         "selfhost",
         "proxy"
       ],
-      "default": "direct",
+      "default": "selfhost",
       "interrupt_exist_connections": true
     },
     {
@@ -302,7 +302,7 @@
         "direct",
         "proxy"
       ],
-      "default": "proxy",
+      "default": "direct",
       "interrupt_exist_connections": true
     },
     {

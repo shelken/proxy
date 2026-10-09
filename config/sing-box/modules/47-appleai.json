@@ -28,7 +28,7 @@
         "selfhost",
         "proxy"
       ],
-      "default": "direct",
+      "default": "selfhost",
       "interrupt_exist_connections": true
     }
   ]
