@@ -70,13 +70,14 @@
         "disable_optimistic_cache": true
       },
       {
-        "clash_mode": "direct",
-        "server": "dns-local-system"
-      },
-      {
         "rule_set": [
           "MyDirect-dns"
         ],
+        "server": "dns-local-system",
+        "disable_optimistic_cache": true
+      },
+      {
+        "clash_mode": "direct",
         "server": "dns-local-system"
       },
       {
