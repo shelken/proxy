@@ -455,7 +455,6 @@
         "rule_set": [
           "Advertising",
           "Hijacking",
-          "MyReject",
           "Privacy"
         ],
         "action": "reject"
@@ -467,12 +466,27 @@
           "MyDirect",
           "cftunnel",
           "geoip-cn",
-          "torrent"
+          "torrent",
+          "Microsoft",
+          "PayPal",
+          "Apple"
         ],
         "invert": true,
         "action": "resolve",
         "server": "dns-proxy",
         "strategy": "ipv4_only"
+      },
+      {
+        "rule_set": "MyReject",
+        "action": "reject"
+      },
+      {
+        "rule_set": "MyDirect",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "MyProxy",
+        "outbound": "proxy"
       },
       {
         "rule_set": "Gemini",
@@ -538,7 +552,6 @@
         "rule_set": [
           "ChinaMax",
           "Lan",
-          "MyDirect",
           "cftunnel",
           "geoip-cn"
         ],
@@ -548,7 +561,6 @@
         "rule_set": [
           "Facebook",
           "Instagram",
-          "MyProxy",
           "Spotify",
           "Telegram",
           "TikTok",
@@ -609,14 +621,26 @@
       },
       {
         "type": "remote",
+        "tag": "Privacy",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
         "tag": "MyReject",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject.srs",
         "update_interval": "24h0m0s"
       },
       {
         "type": "remote",
-        "tag": "Privacy",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "tag": "MyDirect",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyProxy",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
         "update_interval": "24h0m0s"
       },
       {
@@ -723,12 +747,6 @@
       },
       {
         "type": "remote",
-        "tag": "MyDirect",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
         "tag": "cftunnel",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/cftunnel.srs",
         "update_interval": "24h0m0s"
@@ -749,12 +767,6 @@
         "type": "remote",
         "tag": "Instagram",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Instagram.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "MyProxy",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
         "update_interval": "24h0m0s"
       },
       {

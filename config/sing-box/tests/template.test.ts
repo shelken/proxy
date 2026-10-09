@@ -234,17 +234,23 @@ describe("template.json structural verification", () => {
     expect(resolveRule.strategy).toBe("ipv4_only");
   });
 
-  test("v4 解析规则排除了所有走 direct 的规则集", () => {
+  test("v4 解析规则排除了所有默认直连的规则集", () => {
     const rules = template.route?.rules ?? [];
     const resolveRule = rules.find((r) => r.action === "resolve");
     expect(resolveRule.invert).toBe(true);
     const excluded: Record<string, true> = {};
     for (const tag of asArray(resolveRule.rule_set)) excluded[tag] = true;
 
-    // 漏掉一个直连组，该组流量会先被 dns-proxy 解析成海外 IP 再直连（国内站点拿到海外 CDN
-    // 地址）。新增走 direct 的规则集时必须同步这份排除清单，这里拦住漏项。
+    // 「默认直连」= 规则的出站就是 direct，或出站是默认 direct 的策略组。漏掉一个，该组流量会
+    // 先被 dns-proxy 解析成海外 IP 再直连（国内/就近站点拿到海外 CDN 地址）。清单从底模推导：
+    // 新增直连规则集、或把某个组改成默认 direct，都会在这里被拦住。
+    const directDefaults = new Set<string>(
+      (template.outbounds ?? [])
+        .filter((o: { default?: string }) => o.default === "direct")
+        .map((o: { tag: string }) => o.tag),
+    );
     const directRuleSets = rules
-      .filter((r) => r.outbound === "direct")
+      .filter((r) => r.outbound === "direct" || directDefaults.has(r.outbound as string))
       .flatMap((r) => asArray(r.rule_set));
     expect(directRuleSets.length).toBeGreaterThan(0);
     expect(directRuleSets.filter((tag) => !excluded[tag])).toEqual([]);

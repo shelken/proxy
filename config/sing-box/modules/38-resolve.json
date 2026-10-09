@@ -8,7 +8,10 @@
           "MyDirect",
           "cftunnel",
           "geoip-cn",
-          "torrent"
+          "torrent",
+          "Microsoft",
+          "PayPal",
+          "Apple"
         ],
         "invert": true,
         "action": "resolve",
