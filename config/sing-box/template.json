@@ -151,18 +151,6 @@
       "interrupt_exist_connections": true
     },
     {
-      "type": "selector",
-      "tag": "download",
-      "outbounds": [
-        "selfhost",
-        "proxy",
-        "direct",
-        ".*"
-      ],
-      "default": "selfhost",
-      "interrupt_exist_connections": true
-    },
-    {
       "type": "urltest",
       "tag": "hk",
       "outbounds": [
@@ -226,6 +214,18 @@
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
       "tolerance": 50,
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "download",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "direct",
+        ".*"
+      ],
+      "default": "selfhost",
       "interrupt_exist_connections": true
     },
     {
@@ -297,26 +297,6 @@
     },
     {
       "type": "selector",
-      "tag": "microsoft",
-      "outbounds": [
-        "direct",
-        "proxy"
-      ],
-      "default": "direct",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "paypal",
-      "outbounds": [
-        "direct",
-        "proxy"
-      ],
-      "default": "direct",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
       "tag": "grok",
       "outbounds": [
         "proxy",
@@ -335,17 +315,6 @@
         "(?i)1024"
       ],
       "default": "proxy",
-      "interrupt_exist_connections": true
-    },
-    {
-      "type": "selector",
-      "tag": "apple",
-      "outbounds": [
-        "direct",
-        "proxy",
-        "selfhost"
-      ],
-      "default": "direct",
       "interrupt_exist_connections": true
     },
     {
@@ -392,6 +361,37 @@
         "(?i)(vps|hys|港)"
       ],
       "default": "selfhost",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "microsoft",
+      "outbounds": [
+        "direct",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "paypal",
+      "outbounds": [
+        "direct",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "apple",
+      "outbounds": [
+        "direct",
+        "proxy",
+        "selfhost"
+      ],
+      "default": "direct",
       "interrupt_exist_connections": true
     }
   ],
@@ -499,24 +499,12 @@
         "outbound": "zai"
       },
       {
-        "rule_set": "Microsoft",
-        "outbound": "microsoft"
-      },
-      {
-        "rule_set": "PayPal",
-        "outbound": "paypal"
-      },
-      {
         "rule_set": "grok",
         "outbound": "grok"
       },
       {
         "rule_set": "1024proxy",
         "outbound": "1024proxy"
-      },
-      {
-        "rule_set": "Apple",
-        "outbound": "apple"
       },
       {
         "rule_set": "dev",
@@ -533,6 +521,18 @@
       {
         "rule_set": "Adult",
         "outbound": "adultnsfw"
+      },
+      {
+        "rule_set": "Microsoft",
+        "outbound": "microsoft"
+      },
+      {
+        "rule_set": "PayPal",
+        "outbound": "paypal"
+      },
+      {
+        "rule_set": "Apple",
+        "outbound": "apple"
       },
       {
         "rule_set": [
@@ -657,18 +657,6 @@
       },
       {
         "type": "remote",
-        "tag": "Microsoft",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Microsoft.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "PayPal",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/PayPal.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
         "tag": "grok",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/grok.srs",
         "update_interval": "24h0m0s"
@@ -677,12 +665,6 @@
         "type": "remote",
         "tag": "1024proxy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024proxy.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "Apple",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple.srs",
         "update_interval": "24h0m0s"
       },
       {
@@ -707,6 +689,24 @@
         "type": "remote",
         "tag": "Adult",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Adult.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Microsoft",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Microsoft.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "PayPal",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/PayPal.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Apple",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Apple.srs",
         "update_interval": "24h0m0s"
       },
       {

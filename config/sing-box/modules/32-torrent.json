@@ -1,0 +1,34 @@
+{
+  "route": {
+    "rules": [
+      {
+        "protocol": "bittorrent",
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "port_range": [
+          "6881:6889"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "torrent"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "torrent",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
+        "update_interval": "1d"
+      }
+    ]
+  }
+}
