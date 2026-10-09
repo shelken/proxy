@@ -270,6 +270,20 @@ describe("template.json structural verification", () => {
     }
   });
 
+  test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
+    const dnsRules = template.dns?.rules ?? [];
+    const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>
+      asArray(r.rule_set).includes("MyReject-dns"),
+    );
+    expect(rejectDnsRule).toBeDefined();
+    expect(rejectDnsRule?.action).toBe("reject");
+
+    const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
+    expect(fakeipIndex).toBeGreaterThan(-1);
+    const rejectIndex = dnsRules.indexOf(rejectDnsRule);
+    expect(rejectIndex).toBeLessThan(fakeipIndex);
+  });
+
   test("routes bittorrent and download tools directly without proxy", () => {
     const sniffer = template.route?.rules?.[0]?.sniffer ?? [];
     expect(sniffer).toContain("bittorrent");

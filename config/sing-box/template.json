@@ -38,6 +38,10 @@
         "action": "predefined"
       },
       {
+        "rule_set": "MyReject-dns",
+        "action": "reject"
+      },
+      {
         "rule_set": "Lan-dns",
         "server": "dns-local-system",
         "disable_optimistic_cache": true
@@ -578,6 +582,12 @@
         "type": "remote",
         "tag": "MyDirect-dns",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyReject-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
         "update_interval": "24h0m0s"
       },
       {
