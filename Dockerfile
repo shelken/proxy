@@ -9,7 +9,7 @@
 ARG SING_BOX_VERSION
 FROM ghcr.io/sagernet/sing-box:v${SING_BOX_VERSION} AS singbox
 
-FROM alpine:3.21
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
 # artifact 上传/下载不保留文件权限（GitHub Actions 的已知行为），COPY 会原样带上
