@@ -13,7 +13,7 @@ percent-encoding = "2"
 regex = "1"
 url = "2"
 serde_yaml = "0.9"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
+x25519-dalek = { version = "3", features = ["static_secrets"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
