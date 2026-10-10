@@ -1,15 +1,15 @@
 # sbtools 架构
 
-客户端加密编码 + 服务端原生合并的双形态单二进制。客户端只持有服务端公钥，服务端只持有自身私钥，订阅凭据全程不经第三方
+客户端加密编码与服务端原生合并的双形态单二进制；客户端只持有服务端公钥，服务端只持有自身私钥，订阅凭据全程不经第三方
 
 ## 1. 为什么是双形态
 
-旧交付链路（客户端直写 SFM Group Container 的 `settings.db` 与 profile 文件）被 macOS 跨沙盒权限阻断，且无合法修复通道。现改走 SFM 官方 Remote Profile 订阅机制：客户端产出的是**一条加密 URL**，服务端产出的是**标准 sing-box 配置 JSON**
+采用 SFM 官方 Remote Profile 订阅机制：客户端产出一条加密 URL，服务端产出标准 sing-box 配置 JSON
 
 | | 客户端 | 服务端 |
 | :--- | :--- | :--- |
-| 子命令 | `encode`、`keygen`、`check`（离线校验）、`config`（脱敏生效配置）、`logs`（内核日志）、`trace`（诊断） | `server` |
-| 运行位置 | 任意 arm Mac（mise 安装） | 容器（home-ops） |
+| 子命令 | `encode`、`keygen`、`check`（离线校验）、`config`（脱敏配置）、`logs`（内核日志）、`trace`（诊断） | `server` |
+| 运行位置 | arm Mac（mise 安装） | 容器（home-ops） |
 | 输入 | 本机 YAML 配置 | 加密 URL 查询参数 |
 | 输出 | 剪切板订阅 URL | sing-box 配置 JSON |
 | 持有密钥 | 服务端**公**钥 | 服务端**私**钥 |
@@ -42,7 +42,7 @@ flowchart LR
     M -->|配置 JSON| SFM
 ```
 
-客户端与服务端之间只有一条 URL，无凭证交换、无长连接、无会话状态。公钥非机密，经 `/pubkey` 明文传输即可，省掉手工同步密钥材料这一步
+客户端与服务端之间只有一条 URL，无凭证交换、无长连接、无会话状态；公钥非机密，经 `/pubkey` 明文传输即可，省去手工同步密钥材料
 
 ## 3. 客户端
 
@@ -51,15 +51,11 @@ sbtools encode -s <server> [-c <config.yaml>]   # 取公钥 → 校验 YAML → 
 sbtools check [-c <config.yaml>]                # 离线校验: 合并 overlay 到底模并跑内核 check
 sbtools config [--path <file>]                  # 打印脱敏后的生效配置与发现链
 sbtools logs [-n N] [-f] [--level <lvl>]        # 读内核日志: 回看末 N 行或跟踪
-sbtools keygen                                  # 生成服务端 X25519 密钥对（部署时一次）
+sbtools keygen                                  # 生成服务端 X25519 密钥对
 ```
 
-`check` 是纯离线入口：读本机 YAML → 把 `overlay` 合并到底模（与服务端同一套层序）
-→ 跑内核 `check` → 打印生效摘要。它补的是 `sing-box check` 单独跑底模时看不到的那层：
-overlay 的 `rule_set` 引用不在视野内，引用一个不存在的 rule-set 本地不报错，SFM 启动才
-`FATAL ... rule-set not found`。改 overlay 后先跑 `check`，能在重贴 SFM 之前发现问题，
-并用摘要确认改动是否真的压过了底模（比如 `route.default_domain_resolver` 已切到
-`dns-local-system`）。
+`check` 是纯离线入口：读取本机 YAML，将 `overlay` 合并到底模并执行内核 `check`，打印生效摘要
+改动 overlay 后先运行 `check`，确认配置合法且有效覆盖底模
 
 `encode` 流程
 
@@ -76,13 +72,13 @@ cmd_encode
   pbcopy                             # 非 macOS 失败不阻断，仅打印提示
 ```
 
-服务端地址是**命令行参数**，不写进 YAML：同一份配置可以指向不同服务端，切换只改命令。公钥每次从服务端 `/pubkey` 实时拉取并由私钥推导，因此没有任何需要手工同步的密钥材料
+服务端地址是命令行参数，不写入 YAML：同一份配置可指向不同服务端，切换仅需改动命令；公钥每次从服务端 `/pubkey` 实时拉取并由私钥推导，无需手动同步密钥材料
 
-**URL 每次都不同**：密文载荷就是本机 YAML 内容本身，且每次 `encode` 用新的临时密钥对与随机 nonce（见 §4）。改了 YAML 就必须重新 `encode` 并把新 URL **覆盖进** SFM 的 Remote Profile，SFM 存的是 URL 字符串，不覆盖就一直在拉旧密文。反过来，只改服务端侧的东西（`template_url` 指向的文件、机场订阅里的节点）不需要重出 URL，服务端每次请求都重新加载底模、重新抓订阅
+密文载荷即为本机 YAML 内容本身，且每次 `encode` 均采用新的临时密钥对与随机 nonce；修改 YAML 后需重新 `encode` 并将新 URL 覆盖至 SFM 的 Remote Profile；仅修改服务端文件或订阅节点时无需重新生成 URL，服务端请求时会自动拉取最新内容
 
 ## 4. 加密协议
 
-ECIES（X25519 + HKDF-SHA256 + AES-256-GCM），每次 `encode` 都用新的临时密钥对，同一份配置两次编码得到不同密文
+ECIES（X25519 + HKDF-SHA256 + AES-256-GCM），每次 `encode` 采用新临时密钥对，同一配置两次编码得到不同密文
 
 ```text
 密文报文（Base64URL 无填充）
@@ -93,7 +89,7 @@ ECIES（X25519 + HKDF-SHA256 + AES-256-GCM），每次 `encode` 都用新的临�
 派生：HKDF-SHA256(salt="sb-sync-v1", info="aes-256-gcm", ikm=DH(eph_sk, server_pk))
 ```
 
-服务端解密失败一律 403，且日志不回显密文。协议常量在 `scripts/sbtools-rs/src/crypto.rs` 顶部
+服务端解密失败统一返回 403 且日志不回显密文，协议常量定义于 `scripts/sbtools-rs/src/crypto.rs`
 
 ## 5. 服务端
 
