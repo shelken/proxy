@@ -1,4 +1,4 @@
-# sbtools Rust 门禁：格式化、严格 lint、全量测试。所有编译校验都在这里做。
+# sbtools Rust 门禁：严格 lint、全量测试。格式化由 pre-commit 保证。
 # 严格规则同时写在 src/lib.rs 与 src/main.rs 的 cfg 属性里，本工作流只需 -D warnings。
 name: ci-sbtools
 
@@ -39,10 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 安装 stable 工具链，包含 rustfmt 与 clippy
+      # 安装 stable 工具链，包含 clippy
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -56,9 +56,6 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
 
       # 严格 lint 规则在 crate 属性中声明；此处统一把警告升级为错误
       - name: cargo clippy
@@ -76,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           tmp=$(mktemp)
-          mise exec -- sing-box merge "$tmp" -C config/sing-box/modules
+          sing-box merge "$tmp" -C config/sing-box/modules
           diff -u config/sing-box/template.json "$tmp"
         working-directory: .
 
