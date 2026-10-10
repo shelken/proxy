@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.2](https://github.com/shelken/proxy/compare/v0.7.1...v0.7.2) - 2026-10-09
+
+### Added
+
+- *(sing-box)* 拆分 BT 直连规则为 torrent，新增 Download 分组承接 Mega ([#96](https://github.com/shelken/proxy/pull/96))
+
+### Other
+
+- *(sing-box)* 模块按服务切分，底模装配改用官方 merge ([#101](https://github.com/shelken/proxy/pull/101))
+
 ## [0.7.1](https://github.com/shelken/proxy/compare/v0.7.0...v0.7.1) - 2026-10-01
 
 ### Fixed
