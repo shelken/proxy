@@ -21,7 +21,7 @@ const MIN_PAYLOAD_LEN: usize = PK_LEN + NONCE_LEN + TAG_LEN;
 
 /// 生成随机的服务端 X25519 公私钥对（Hex 编码）
 pub fn generate_keypair_hex() -> (String, String) {
-    let secret = StaticSecret::random_from_rng(OsRng);
+    let secret = StaticSecret::random();
     let public = PublicKey::from(&secret);
     (
         hex::encode(secret.to_bytes()),
@@ -60,7 +60,7 @@ pub fn derive_public_key_hex(private_key_hex: &str) -> Result<String, String> {
 
 /// 客户端加密：生成临时密钥对 -> 计算共享密钥 -> HKDF 派生 AES 密钥 -> AES-256-GCM 加密 -> base64url
 pub fn encrypt_payload(server_pk: &PublicKey, plaintext: &[u8]) -> Result<String, String> {
-    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_secret = EphemeralSecret::random();
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
 
     // 1. Diffie-Hellman 计算共享密钥
