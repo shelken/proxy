@@ -66,13 +66,13 @@ flowchart LR
     ROUTE -->|内网域名| OUT_DIR["直连 (direct)"]
     ROUTE -->|广告 / 隐私| OUT_REJ["阻断 (reject)"]
     ROUTE -->|OpenAI / Gemini / Dev 等| GROUP["分流策略组\n(Selectors)"]
-    ROUTE -->|未命中 (兜底)| GROUP_PROXY["默认代理 (proxy)"]
+    ROUTE -->|未命中兜底| GROUP_PROXY["默认代理 (proxy)"]
 
     GROUP --> LEAF{"候选池决策"}
     GROUP_PROXY --> LEAF
 
-    LEAF -->|Index 0 (首选)| N_SELF["自建节点 (SelfHost)"]
-    LEAF -->|Index 1..N (备选)| N_AIRPORT["机场专线节点"]
+    LEAF -->|Index 0 首选| N_SELF["自建节点 (SelfHost)"]
+    LEAF -->|Index 1..N 备选| N_AIRPORT["机场专线节点"]
 ```
 
 DNS 查询先匹配本地与国内规则，未匹配的 A 查询使用 FakeIP（fakeip 只配 v4 池，AAAA 不再取得假地址，应用因此只用 v4 建立连接），其余查询经代理加密 DNS 解析，不拒绝 HTTPS 记录。FakeIP 映射持久化以跨正常重启保留客户端缓存的地址含义
