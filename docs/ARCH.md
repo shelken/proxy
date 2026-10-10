@@ -4,18 +4,18 @@
 
 ```text
 proxy/
-├── Cargo.toml            # workspace 清单（crate 在 scripts/sbtools-rs，版本真源在那边）
+├── Cargo.toml            # workspace 清单，crate 位于 scripts/sbtools-rs
 ├── Cargo.lock            # workspace 锁文件
 ├── release-plz.toml      # release-plz git_only 配置
 ├── scripts/
-│   └── sbtools-rs/       # sbtools 客户端编码 + 服务端装配（Rust 单二进制）
+│   └── sbtools-rs/       # sbtools 客户端编码与服务端装配
 ├── config/
 │   ├── rules/            # 分流规则源 (自定义 *.yaml 与 geosite:/geoip: 外部引用 index.yaml)
 │   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sbtools) 与用户指南
 ├── .github/workflows/    # CI：ci-sbtools 门禁；release-plz 开版本 PR；release-sbtools 发布二进制与镜像
-├── Dockerfile            # 服务端镜像（sing-box CLI + sbtools）
+├── Dockerfile            # 服务端镜像，包含 sing-box CLI 与 sbtools
 └── justfile              # 统一测试与运维指令入口
 ```
 
@@ -49,9 +49,9 @@ flowchart TD
 要点：
 
 - **规则产物自动重建**：改 `index.yaml` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
-- **清单与底模引用一致**：CI 校验清单 tag 集合与底模声明的规则集相互吻合，缺一即失败（底模是手写单一配置源，编译器只报错不改写）
+- **清单与底模引用一致**：CI 校验清单 tag 集合与底模声明的规则集相互吻合，缺一即失败
 - **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
-- **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct` / `01-overlay` / `02-base` 命名，路径字典序决定优先级（标量取先者、数组按序拼接）
+- **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct`、`01-overlay`、`02-base` 命名，字典序决定优先级
 - **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态
 - 细节见 [sbtools 架构](./sbtools.md)
 
@@ -103,9 +103,9 @@ sequenceDiagram
 
 ## 5. 发布与门禁链路
 
-发布操作规范见根目录 `RELEASE.md`。版本真源是 `scripts/sbtools-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新（含根 `Cargo.lock` 与 `CHANGELOG.md`）。
+发布操作规范见根目录 `RELEASE.md`；版本真源是 `scripts/sbtools-rs/Cargo.toml`，由 release-plz 的 Release PR 一并更新
 
-仓库根 `Cargo.toml` 是 workspace 清单（不含版本），必须留在根：release-plz 的 `git_only` 模式在清单所在目录打开 Git 仓库且不向上层搜索 `.git`，放回 crate 子目录会让版本推导直接失败。cargo 的 `target/` 同样属于 workspace 根。
+仓库根 `Cargo.toml` 是 workspace 清单，必须留在根目录：release-plz 的 `git_only` 模式要求清单与 `.git` 同目录；cargo 的 `target/` 同样属于 workspace 根
 
 ```text
 每次改动 (scripts/sbtools-rs/**、根 Cargo.toml/Cargo.lock 或 template.json) → ci-sbtools.yml
@@ -127,10 +127,8 @@ sequenceDiagram
   → mise [tools."github:shelken/proxy"] 按 v<semver> 拉取 darwin 产物
 ```
 
-触发点是 `push: main` 而非 tag：用 `GITHUB_TOKEN` 创建 tag 不会触发 `on.push.tags` 的工作流（要绕开只能引入 PAT），所以 tag 被降级为同一次 run 内的产物。是否已发布只看 GitHub Release 是否存在，构建失败留下的 tag 会被复用，版本不会卡死。
+触发点是 `push: main` 而非 tag：使用 `GITHUB_TOKEN` 创建 tag 不会触发 `on.push.tags` 工作流，tag 作为同一次 run 内的产物创建；是否已发布以 GitHub Release 是否存在为准，构建失败留下的 tag 会被复用
 
-构建期不改写任何文件：版本由 Release PR 提交，CI 只校验。原实现的 `sed` 改 `Cargo.toml` 却不改 `Cargo.lock`，与后续 `--locked` 冲突，三个平台会同时失败（见 `postmortems/004`）。
+构建期不改写任何文件：版本由 Release PR 统一提交，CI 仅校验并保持 Cargo.lock 一致
 
-`workflow_dispatch` 会跑完同一条镜像链路，但只推到 `snapshot-<sha>` 一次性 tag：
-多架构 manifest 合并只在发版时第一次执行的话，digest 拼接与 GHCR 权限都验不到。
-包是公开包，GHCR 对公开包不计量存储，这些快照无需回收。
+`workflow_dispatch` 会完整运行镜像链路并推送到 `snapshot-<sha>` 一次性 tag，验证 digest 拼接与 GHCR 权限；包属于公开包，GHCR 对公开包不计量存储，快照无需回收
