@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 与 Cargo.lock 里 icu_* 的要求（rustc ≥1.88）对齐，并带来 rustfmt/clippy
+      # 安装 stable 工具链，包含 rustfmt 与 clippy
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -71,7 +71,7 @@ jobs:
           cache: false
           install_args: sing-box
 
-      # 与 just template-check 同口径（CI 里没装 just，就地展开）
+      # 校验底模与各模块合并结果一致，口径与 just template-check 保持一致
       - name: verify template modules consistency
         run: |
           set -euo pipefail
@@ -88,8 +88,7 @@ jobs:
           cargo clean
           cargo build --release --locked
 
-  # 镜像只在打 tag 时构建的话，Dockerfile 坏了要等发版才暴露（include_str! 路径
-  # 与 rust 版本都踩过这个坑）。这里每次改动都真构建一次，不推送。
+  # 每次改动均执行镜像构建以在 CI 提前验证 Dockerfile，不执行推送
   docker:
     name: docker build
     runs-on: ubuntu-latest

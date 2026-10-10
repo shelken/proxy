@@ -46,10 +46,8 @@ jobs:
       # release-plz 内部要读 cargo metadata
       - uses: dtolnay/rust-toolchain@stable
 
-      # 清单版本是版本真源。历史漂移（清单 0.3.0 而最高 tag v0.5.0）或跨包更名（最高
-      # tag 内尚无 scripts/sbtools-rs）时，release-plz 以 tag commit 为基线，前者会
-      # 提出倒退版本，后者会在临时 worktree 中抛出 "cannot find package sbtools in workspace"。
-      # 两种情况均在此处跳过，由手动版本表单或合并新包首个版本完成基线校准。
+      # 清单版本是版本真源。若清单版本低于最高 tag 或最高 tag 不含当前 crate 路径，
+      # release-plz 无法正确推导基线，在此处跳过并提示通过手动版本流程校准
       - name: Check version is not behind released tags
         id: guard
         run: |

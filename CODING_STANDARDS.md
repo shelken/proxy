@@ -2,9 +2,9 @@
 
 ## 通用
 
-- 动手前先找参考实现：Loon/脚本类需求先搜 GitHub（如 [chavyleung/scripts](https://github.com/chavyleung/scripts/)）
-- 代理软件配置面向最新版本写：先读最新文档，不用被标记废弃的配置项
-- 仓库公开：不写入节点、凭据
+- 动手前先找参考实现：Loon 与脚本类需求先检索 GitHub，例如 [chavyleung/scripts](https://github.com/chavyleung/scripts/)
+- 代理软件配置面向最新版本编写：先查阅最新文档，不使用标记废弃的配置项
+- 仓库保持公开：不写入节点与凭据
 - 调用目标网站接口限于用户允许的范围，不做穷举探测
 
 ## 沙箱
@@ -17,14 +17,9 @@
 
 ## sing-box 与规则
 
-- `template.json` 由 `modules/` 经官方 `sing-box merge` 生成：只改 `modules/`，再 `just template-build`
-- `modules/` 文件名前缀决定合并顺序，也就决定 `route.rules` 与 `outbounds` 的数组顺序：`00`-`39` 全局与核心（入站、DNS、
-  路由全局属性、前置动作、守卫、拦截、解析、核心出站组），`41`-`63` 自有清单（`custom/`）服务，`65`-`69` 外部清单服务，
-  `71`-`79` 默认直连的分组，`80` 兜底规则，`90` 收尾。每个服务一个文件（路由规则 + rule_set + 出站组），号段留空便于插队。
-  新增服务 = 新建一个文件 + 在 `index.yaml` 登记 rule_set，不用再改别的文件
-- 服务顺序的两条策略：自有清单默认排在外部清单（`geosite:` / `geoip:`）之前，宽泛的上游清单会抢走自有清单的域名；拦截类的 `MyReject` 纳入 `36-reject.json` 在解析前短路，分流类的 `MyDirect` / `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）；
-  出站组默认 `direct` 的服务模块排到服务号段最后，避免默认直连的组抢占代理流量。两者都靠文件名前缀实现，理由见
-  `docs/adr/0007`
-- 改底模、出站、规则集前先查[配置文档](https://sing-box.sagernet.org/configuration/)与 [changelog](https://sing-box.sagernet.org/changelog)
-- raw.githubusercontent.com 同一文件至少隔 5 分钟再拉（CDN 缓存）；见到旧内容或 404 先想到它
-- `38-resolve.json` 里有一条 `action: resolve` 规则，让代理流量在本机按 v4 解析后再交给节点。它的排除清单必须覆盖所有**默认直连**的规则集（出站是 `direct`，或出站是默认 `direct` 的策略组；漏一个，该组流量就会先被远端解析器解析成海外 IP 再直连）。这份清单由底模推导并被 `config/sing-box/tests/template.test.ts` 断言，漏项即失败
+- `template.json` 由 `modules/` 经官方 `sing-box merge` 生成：只改 `modules/`，再执行 `just template-build`
+- `modules/` 文件名前缀决定合并顺序，即 `route.rules` 与 `outbounds` 的数组顺序：`00`-`39` 为全局与核心模块（入站、DNS、路由全局属性、前置动作、守卫、拦截、解析与核心出站组），`41`-`63` 为自有清单服务，`65`-`69` 为外部清单服务，`71`-`79` 为默认直连分组，`80` 为兜底规则，`90` 为收尾；每个服务对应独立文件，号段留空便于插队；新增服务只需新建文件并在 `index.yaml` 登记 rule_set
+- 服务顺序的两条策略：自有清单默认排在外部清单之前，避免宽泛的上游清单抢占自有域名；拦截类 `MyReject` 纳入 `36-reject.json` 在解析前短路，分流类 `MyDirect` 与 `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）；出站组默认 `direct` 的服务模块排到服务号段末尾，避免默认直连组抢占代理流量；理由见 `docs/adr/0007-order-service-rules-own-lists-first.md`
+- 改动底模、出站与规则集前先查阅[配置文档](https://sing-box.sagernet.org/configuration/)与 [changelog](https://sing-box.sagernet.org/changelog)
+- raw.githubusercontent.com 同一文件至少间隔 5 分钟再拉取，CDN 存在缓存，遇到旧内容或 404 先核实缓存
+- `38-resolve.json` 包含 `action: resolve` 规则，让代理流量在本机按 v4 解析后再交给节点；排除清单必须覆盖所有默认直连规则集（出站为 direct 或默认 direct 的策略组），避免直连流量被远端解析器解析为海外 IP；该清单由底模推导并由 `config/sing-box/tests/template.test.ts` 断言

@@ -42,9 +42,7 @@ jobs:
   # 已建但未发布的 tag，若拿 tag 当判据，这个版本就再也发不出来了。而 Release
   # 由发布 job 在产物齐全后才创建（见下方 release job）。
   #
-  # 原实现用 sed 把 tag 写进 Cargo.toml 却不改 Cargo.lock，与后续 --locked
-  # 冲突，三个平台的构建会一起失败（见 postmortems/004）。现在版本由版本 PR
-  # 一并提交，构建只校验不改写。
+  # 版本由版本 PR 统一提交，构建只校验不改写，保持 Cargo.lock 严格一致
   prepare:
     name: verify version
     runs-on: ubuntu-latest
@@ -138,10 +136,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # ring（经 rustls）的 build.rs 走 cc-rs 编 C 代码，musl 目标需要 musl-gcc。
-      # 两个 runner 都是原生架构（arm64 runner 编 aarch64 目标，amd64 runner 编
-      # x86_64 目标），所以系统自带的 musl-tools 就是对的，不需要交叉工具链：
-      # 只换 libc，不跨架构。ring 0.17.14 缺这个会在 cc-rs 探测阶段直接失败。
+      # ring 编译 C 代码在 musl 目标下需要 musl-gcc；runner 均为原生架构，安装 musl-tools 提供工具链支持
       - name: Install musl toolchain
         if: contains(matrix.target, 'linux')
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
@@ -162,9 +157,7 @@ jobs:
           key: sbtools-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: sbtools-${{ matrix.target }}-
 
-      # e2e 测试要真跑一次内核合并（server::tests::node_direct_rule_*），
-      # 内核不在 PATH 时它们以「启动内核失败（sing-box）: os error 2」失败。
-      # 版本由 .mise.toml 固定，与本地和 ci-sbtools 同源，此处不另写版本号。
+      # e2e 测试执行内核合并，sing-box 版本由 .mise.toml 固定，与本地及 ci-sbtools 同源
       - uses: jdx/mise-action@v5
         with:
           cache: false
