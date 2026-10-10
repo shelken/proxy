@@ -8,15 +8,15 @@ description = "设备侧 sing-box 配置同步 CLI"
 ureq = { version = "2", features = ["tls", "gzip"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-base64 = "0.22"
+base64 = "0.23"
 percent-encoding = "2"
 regex = "1"
 url = "2"
 serde_yaml = "0.9"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-aes-gcm = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-rand = "0.8"
+aes-gcm = "0.11"
+hkdf = "0.13"
+sha2 = "0.11"
+rand = "0.10"
 tiny_http = "0.12"
 hex = "0.4"
