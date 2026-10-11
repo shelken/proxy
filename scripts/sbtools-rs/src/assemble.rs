@@ -2,6 +2,7 @@
 //! 语义对齐旧 endpoint.ts 的 buildConfig / mergeLocalConfig。
 
 use serde_json::{Value, json};
+use std::io::Read;
 
 /// 保留标签 = 底模 route.rules 引用的出站标签；节点名撞上时必须让位。
 pub fn reserved_tags(template: &Value) -> Vec<String> {
@@ -137,16 +138,17 @@ fn system_resolve_a(domain: &str) -> Option<String> {
 /// AliDNS DoH JSON API：返回首个合法 IPv4 A 记录；任何失败静默 None。
 fn doh_resolve_a(domain: &str) -> Option<String> {
     let url = format!("https://223.5.5.5/resolve?name={domain}&type=A");
-    let mut res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(5))
+    let res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(5))
         .get(&url)
         .call()
         .ok()?;
-    let body = res
-        .body_mut()
-        .with_config()
-        .limit(64 * 1024)
-        .read_to_string()
+    let mut body = String::new();
+    std::io::Read::take(res.into_body().into_reader(), 64 * 1024 + 1)
+        .read_to_string(&mut body)
         .ok()?;
+    if body.len() > 64 * 1024 {
+        return None;
+    }
     let v: Value = serde_json::from_str(&body).ok()?;
     v["Answer"]
         .as_array()?

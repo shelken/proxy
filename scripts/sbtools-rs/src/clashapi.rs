@@ -129,7 +129,12 @@ pub fn get_rules(controller: &str) -> Result<Value, String> {
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
 /// `cmd_logs -f` 是当前调用方，PR4 的 live 归属段复用。
 pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead + use<>, String> {
-    let agent = agent_with_timeout(Duration::from_secs(2));
+    // 只设连接超时，不设整体超时，避免长连接流式读取在 2s 后被整体超时强制切断
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(2)))
+            .build(),
+    );
     let res = agent
         .get(&endpoint(controller, &format!("/logs?level={level}")))
         .call()

@@ -12,6 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -127,15 +128,13 @@ fn assemble_base(
 
 /// 订阅抓取：带 5MB 上限，防止机场响应过大拖垮服务。
 fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
-    let mut res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(10))
+    let res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(10))
         .get(url)
         .call()
         .map_err(|e| format!("订阅拉取失败: {e}"))?;
-    let body = res
-        .body_mut()
-        .with_config()
-        .limit(MAX_SUB_BODY as u64 + 1)
-        .read_to_string()
+    let mut body = String::new();
+    std::io::Read::take(res.into_body().into_reader(), MAX_SUB_BODY as u64 + 1)
+        .read_to_string(&mut body)
         .map_err(|e| format!("订阅读取失败: {e}"))?;
     if body.len() > MAX_SUB_BODY {
         return Err(format!(
@@ -271,6 +270,7 @@ fn handle_sub(
 struct ServerState {
     sk: crypto::CryptoStaticSecret,
     pk_hex: String,
+    merge_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Deserialize)]
@@ -302,10 +302,24 @@ async fn handle_sub_route(
         eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms)");
         return (StatusCode::BAD_REQUEST, "缺少 d 参数").into_response();
     };
+    if d.len() > MAX_QUERY_LEN {
+        let elapsed = started.elapsed().as_millis();
+        eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms, 载荷过长)");
+        return (StatusCode::BAD_REQUEST, "d 参数过长").into_response();
+    }
+
+    let Ok(permit) = state.merge_semaphore.clone().try_acquire_owned() else {
+        let elapsed = started.elapsed().as_millis();
+        eprintln!("[sbtools server] GET /sub -> 503 ({elapsed}ms, 队列已满)");
+        return (StatusCode::SERVICE_UNAVAILABLE, "服务繁忙，请稍后重试").into_response();
+    };
 
     let sk = state.sk.clone();
-    let res = tokio::task::spawn_blocking(move || handle_sub(&sk, &d)).await;
-
+    let res = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        handle_sub(&sk, &d)
+    })
+    .await;
     let elapsed = started.elapsed().as_millis();
     match res {
         Ok(Ok((json, src))) => {
@@ -362,13 +376,18 @@ pub fn run(port: u16) -> Result<(), String> {
     // 公钥由私钥推导，供客户端 encode 自动获取，无需人工配置
     let pk_hex = crypto::derive_public_key_hex(&sk_hex)?;
 
-    let state = Arc::new(ServerState { sk, pk_hex });
+    let state = Arc::new(ServerState {
+        sk,
+        pk_hex,
+        merge_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+    });
 
     let app = Router::new()
         .route("/healthz", get(handle_healthz))
         .route("/pubkey", get(handle_pubkey))
         .route("/sub", get(handle_sub_route))
         .fallback(handle_fallback)
+        .method_not_allowed_fallback(handle_fallback)
         .with_state(state);
 
     tokio::runtime::Builder::new_multi_thread()
@@ -381,6 +400,10 @@ pub fn run(port: u16) -> Result<(), String> {
                 .map_err(|e| format!("监听 {port} 失败: {e}"))?;
             eprintln!("[sbtools server] listening on 0.0.0.0:{port}");
             axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = tokio::signal::ctrl_c().await;
+                    eprintln!("[sbtools server] 收到中断信号，开始优雅停机");
+                })
                 .await
                 .map_err(|e| format!("服务异常退出: {e}"))
         })
