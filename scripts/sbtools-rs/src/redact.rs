@@ -58,26 +58,26 @@ fn redact_value(value: &Value, in_outbound: bool) -> Value {
 
 fn redact_field(key: &str, value: &Value, in_outbound: bool) -> Value {
     // 规则 1: subs/nodes 元素整体隐藏
-    if key == "subs" || key == "nodes" {
-        if let Value::Array(items) = value {
-            return Value::Array(items.iter().map(|_| Value::String(HIDDEN.into())).collect());
-        }
+    if (key == "subs" || key == "nodes")
+        && let Value::Array(items) = value
+    {
+        return Value::Array(items.iter().map(|_| Value::String(HIDDEN.into())).collect());
     }
     // overlay 是 YAML 块字符串: JSON 解析后按同规则递归脱敏再回填
-    if key == "overlay" {
-        if let Value::String(text) = value {
-            return redact_overlay(text);
-        }
+    if key == "overlay"
+        && let Value::String(text) = value
+    {
+        return redact_overlay(text);
     }
     // 规则 2: 敏感键; server 仅限 outbounds 子树
     if !value.is_null() && (SENSITIVE_KEYS.contains(&key) || (key == "server" && in_outbound)) {
         return Value::String(HIDDEN.into());
     }
     // 规则 3: URL userinfo 兜底
-    if let Value::String(s) = value {
-        if let Some(r) = redact_userinfo(s) {
-            return Value::String(r);
-        }
+    if let Value::String(s) = value
+        && let Some(r) = redact_userinfo(s)
+    {
+        return Value::String(r);
     }
     redact_value(value, in_outbound || key == "outbounds")
 }
@@ -134,11 +134,13 @@ mod tests {
         assert!(!s.contains("user:pass"), "hy2 凭据泄漏: {s}");
         assert_eq!(out["subs"][0], "[已隐藏]");
         assert_eq!(out["nodes"].as_array().unwrap().len(), 2);
-        assert!(out["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|x| x == "[已隐藏]"));
+        assert!(
+            out["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|x| x == "[已隐藏]")
+        );
     }
 
     #[test]

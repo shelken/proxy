@@ -102,7 +102,7 @@ pub fn load_config(path: &Path) -> Result<ClientConfig, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("读取配置 {} 失败: {e}", path.display()))?;
     let config: ClientConfig =
-        serde_yaml::from_str(&content).map_err(|e| format!("YAML 解析失败: {e}"))?;
+        serde_yaml_ng::from_str(&content).map_err(|e| format!("YAML 解析失败: {e}"))?;
     Ok(config)
 }
 
@@ -159,10 +159,10 @@ impl EffectiveConfig {
         if let Some(p) = self.root["log"]["output"].as_str() {
             return Some(p.to_string());
         }
-        if let Some(o) = &self.overlay {
-            if let Some(p) = o["log"]["output"].as_str() {
-                return Some(p.to_string());
-            }
+        if let Some(o) = &self.overlay
+            && let Some(p) = o["log"]["output"].as_str()
+        {
+            return Some(p.to_string());
         }
         None
     }
@@ -211,7 +211,8 @@ pub fn parse_config_text(text: &str, path: &Path) -> Result<Value, String> {
     {
         serde_json::from_str(text).map_err(|e| format!("JSON 解析失败（{}）: {e}", path.display()))
     } else {
-        serde_yaml::from_str(text).map_err(|e| format!("YAML 解析失败（{}）: {e}", path.display()))
+        serde_yaml_ng::from_str(text)
+            .map_err(|e| format!("YAML 解析失败（{}）: {e}", path.display()))
     }
 }
 
@@ -257,7 +258,7 @@ mod tests {
     }
 
     fn parse(yaml: &str) -> ClientConfig {
-        serde_yaml::from_str(yaml).expect("YAML 解析失败")
+        serde_yaml_ng::from_str(yaml).expect("YAML 解析失败")
     }
 
     #[test]
@@ -278,7 +279,7 @@ mod tests {
     #[test]
     fn unknown_top_level_field_rejected() {
         let yaml = format!("{}\nunknown_field: 1", valid_yaml());
-        let err = serde_yaml::from_str::<ClientConfig>(&yaml).unwrap_err();
+        let err = serde_yaml_ng::from_str::<ClientConfig>(&yaml).unwrap_err();
         assert!(
             err.to_string().contains("unknown_field"),
             "应拒绝未知字段，实际: {err}"
@@ -291,7 +292,7 @@ mod tests {
     fn server_fields_no_longer_accepted_in_yaml() {
         for field in ["server", "server_public_key"] {
             let yaml = format!("{field}: https://sub.example.com\n{}", valid_yaml());
-            let err = serde_yaml::from_str::<ClientConfig>(&yaml).unwrap_err();
+            let err = serde_yaml_ng::from_str::<ClientConfig>(&yaml).unwrap_err();
             assert!(
                 err.to_string().contains(field),
                 "`{field}` 应被拒绝，实际: {err}"

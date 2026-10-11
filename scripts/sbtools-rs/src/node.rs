@@ -1,7 +1,7 @@
 //! 节点 URI 解析：hysteria2 / hy2、anytls、shadowsocks（SIP002 + legacy）。
 //! 语义对齐旧 endpoint.ts，无法识别的输入 fail-fast。
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 fn parse_url(raw: &str) -> Result<url::Url, String> {
     url::Url::parse(raw).map_err(|e| format!("URI 解析失败: {e}"))

@@ -3,7 +3,7 @@
 use crate::assemble::{self, AssembleInput};
 use crate::crypto;
 use crate::template;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -142,10 +142,10 @@ fn absorb_line(
 
     // 嗅探行确立该请求号属于目标域名
     if payload.contains("router: sniffed protocol") {
-        if let (Some(id), true) = (id.as_ref(), matches_target) {
-            if !wanted_ids.contains(id) {
-                wanted_ids.push(id.clone());
-            }
+        if let (Some(id), true) = (id.as_ref(), matches_target)
+            && !wanted_ids.contains(id)
+        {
+            wanted_ids.push(id.clone());
         }
         return false;
     }
@@ -190,10 +190,10 @@ fn absorb_line(
         && guard.fakeip_answer.is_none()
     {
         // 提取答案 IP，稍后判断是否落 fakeip 段
-        if let Some(ans) = payload.rsplit(' ').next() {
-            if ans.parse::<std::net::Ipv4Addr>().is_ok() {
-                guard.fakeip_answer = Some(ans.to_string());
-            }
+        if let Some(ans) = payload.rsplit(' ').next()
+            && ans.parse::<std::net::Ipv4Addr>().is_ok()
+        {
+            guard.fakeip_answer = Some(ans.to_string());
         }
     }
     guard.router_match.is_some() && (guard.dns_match.is_some() || guard.dial_failure.is_some())
@@ -265,10 +265,10 @@ fn capture_decisions(controller: &str, domain: &str) -> KernelDecisions {
     // 证据行落地前掐掉监听。
     let start = Instant::now();
     while start.elapsed() < Duration::from_millis(1200) {
-        if let Ok(guard) = decisions.lock() {
-            if guard.dial_failure.is_some() || guard.dial_success.is_some() {
-                break;
-            }
+        if let Ok(guard) = decisions.lock()
+            && (guard.dial_failure.is_some() || guard.dial_success.is_some())
+        {
+            break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -431,10 +431,10 @@ fn dns_verdict_for(domain: &str, rules: &[Value], final_server: Option<&str>) ->
             }
         }
         if let Some(rs) = rule_set {
-            if let Some(server) = rule["server"].as_str().filter(|s| !s.is_empty()) {
-                if candidate.is_none() {
-                    candidate = Some((cond_display("rule_set", rs), server.to_string()));
-                }
+            if let Some(server) = rule["server"].as_str().filter(|s| !s.is_empty())
+                && candidate.is_none()
+            {
+                candidate = Some((cond_display("rule_set", rs), server.to_string()));
             }
             continue;
         }
@@ -476,7 +476,9 @@ fn report_dns_attribution(domain: &str) {
     let rules = cfg["dns"]["rules"].as_array().cloned().unwrap_or_default();
     let final_server = cfg["dns"]["final"].as_str().map(String::from);
     match dns_verdict_for(domain, &rules, final_server.as_deref()) {
-        DnsVerdict::Hit(cond, server) => println!("✓ dns 归属        {domain} => {cond} => {server}"),
+        DnsVerdict::Hit(cond, server) => {
+            println!("✓ dns 归属        {domain} => {cond} => {server}");
+        }
         DnsVerdict::Candidate(cond, server, fallback) => match fallback {
             Some(fb) => println!(
                 "· dns 归属        {domain} => {cond} => {server}  (rule_set 候选，内容未匹配；未命中落 final => {fb})"
@@ -620,10 +622,10 @@ impl Ipv4Cidr {
     /// 声明了新段时以内核实际生效的那份为准）；磁盘不可得（SFM）再退回内嵌底模；
     /// 都没有才用 sing-box 默认段。只读底模的旧写法在用户改段后会静默误判假 IP。
     fn resolve() -> Self {
-        if let Some(cfg) = effective_config() {
-            if let Some(spec) = fakeip_range_from(&cfg) {
-                return spec;
-            }
+        if let Some(cfg) = effective_config()
+            && let Some(spec) = fakeip_range_from(&cfg)
+        {
+            return spec;
         }
         let fallback = || Self {
             net: std::net::Ipv4Addr::new(198, 18, 0, 0),
@@ -787,10 +789,10 @@ fn report_kernel_decisions(ec: &str, domain: &str, resolved_ip: Option<&str>) ->
         Some(chain) => println!("✓ 实际出站链路   {chain}"),
         None => {
             // 若短连接已关闭，从路由判定的目标也能明确出口
-            if let Some(rd) = &decisions.router_match {
-                if let Some(target) = route_target(rd) {
-                    println!("✓ 规则分配目标   {target}");
-                }
+            if let Some(rd) = &decisions.router_match
+                && let Some(target) = route_target(rd)
+            {
+                println!("✓ 规则分配目标   {target}");
             }
         }
     }
@@ -961,11 +963,12 @@ mod tests {
             &mut ids,
             &mut g,
         );
-        assert!(g
-            .router_match
-            .as_deref()
-            .unwrap_or("")
-            .contains("route(direct)"));
+        assert!(
+            g.router_match
+                .as_deref()
+                .unwrap_or("")
+                .contains("route(direct)")
+        );
 
         // 拨号解析失败证据行
         absorb_line(
@@ -1006,11 +1009,12 @@ mod tests {
             &mut ids,
             &mut g,
         );
-        assert!(g
-            .dial_lookup
-            .as_deref()
-            .unwrap_or("")
-            .contains("lookup domain"));
+        assert!(
+            g.dial_lookup
+                .as_deref()
+                .unwrap_or("")
+                .contains("lookup domain")
+        );
         assert!(g.dial_failure.is_none() && g.dial_success.is_none());
 
         // 失败行
@@ -1031,11 +1035,12 @@ mod tests {
             &mut vec!["555".to_string()],
             &mut d,
         );
-        assert!(d
-            .dial_success
-            .as_deref()
-            .unwrap_or("")
-            .contains("104.21.33.74"));
+        assert!(
+            d.dial_success
+                .as_deref()
+                .unwrap_or("")
+                .contains("104.21.33.74")
+        );
     }
 
     /// Clash API `/dns/query` 触发的日志没有请求号（该端点用 context.Background()

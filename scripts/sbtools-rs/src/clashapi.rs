@@ -86,16 +86,16 @@ pub fn resolve_controller(
                 reason: "非回环地址，拒绝连接".to_string(),
             };
         }
-        if let Some(o) = &c.overlay {
-            if let Some(raw) = configured_controller(o) {
-                if is_loopback(&raw) {
-                    return ControllerResolution::Loopback(raw);
-                }
-                return ControllerResolution::ExplicitReject {
-                    address: raw,
-                    reason: "非回环地址，拒绝连接".to_string(),
-                };
+        if let Some(o) = &c.overlay
+            && let Some(raw) = configured_controller(o)
+        {
+            if is_loopback(&raw) {
+                return ControllerResolution::Loopback(raw);
             }
+            return ControllerResolution::ExplicitReject {
+                address: raw,
+                reason: "非回环地址，拒绝连接".to_string(),
+            };
         }
     }
     // 缺省口是 SFM 场景磁盘读不到配置时的唯一可辩护猜测，但必须喊出来：
@@ -118,7 +118,7 @@ pub fn get_rules(controller: &str) -> Result<Value, String> {
 ///
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
 /// `cmd_logs -f` 是当前调用方，PR4 的 live 归属段复用。
-pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead, String> {
+pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead + use<>, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(2))
         .build();

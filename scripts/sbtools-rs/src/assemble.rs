@@ -1,7 +1,7 @@
 //! 装配：源列表 → 完整 sing-box 配置（订阅解析 + 标签唯一化 + 策略组填充 + local 覆盖）。
 //! 语义对齐旧 endpoint.ts 的 buildConfig / mergeLocalConfig。
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 保留标签 = 底模 route.rules 引用的出站标签；节点名撞上时必须让位。
 pub fn reserved_tags(template: &Value) -> Vec<String> {
@@ -263,12 +263,11 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
             let mut out = (*sel).clone();
             out["outbounds"] = json!(kept);
             // default 指向被剔除的组时移除,否则同样是悬空引用。
-            if let Some(default) = out.get("default").and_then(|d| d.as_str()) {
-                if !kept.iter().any(|k| k == default) {
-                    if let Some(obj) = out.as_object_mut() {
-                        obj.remove("default");
-                    }
-                }
+            if let Some(default) = out.get("default").and_then(|d| d.as_str())
+                && !kept.iter().any(|k| k == default)
+                && let Some(obj) = out.as_object_mut()
+            {
+                obj.remove("default");
             }
             if out.get("interrupt_exist_connections").is_none() {
                 out["interrupt_exist_connections"] = json!(true);
@@ -361,14 +360,14 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
         .flatten()
     {
         let tag = server["tag"].as_str().unwrap_or("?").to_string();
-        if let Some(detour) = server.get_mut("detour") {
-            if detour.as_str().is_some_and(|t| !available.contains(t)) {
-                let orig = detour.as_str().unwrap_or_default().to_string();
-                eprintln!(
-                    "[sbtools] dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
-                );
-                *detour = Value::from(fallback);
-            }
+        if let Some(detour) = server.get_mut("detour")
+            && detour.as_str().is_some_and(|t| !available.contains(t))
+        {
+            let orig = detour.as_str().unwrap_or_default().to_string();
+            eprintln!(
+                "[sbtools] dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
+            );
+            *detour = Value::from(fallback);
         }
     }
     Ok(())

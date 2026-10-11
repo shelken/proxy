@@ -309,7 +309,9 @@ fn cmd_config(rest: &[String]) -> Result<(), String> {
         clashapi::ControllerResolution::Loopback(c)
         | clashapi::ControllerResolution::Default(c) => Some(c),
         clashapi::ControllerResolution::ExplicitReject { address, .. } => {
-            println!("· controller {address} 非回环地址，已拒绝；跳过运行时摘要（clash_api 仅允许 127.0.0.1）");
+            println!(
+                "· controller {address} 非回环地址，已拒绝；跳过运行时摘要（clash_api 仅允许 127.0.0.1）"
+            );
             None
         }
     };
