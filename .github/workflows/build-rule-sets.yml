@@ -50,8 +50,8 @@ jobs:
       # 只装 sing-box 一个工具，缓存没有可命中的内容，关掉省一次无用往返。
       - uses: jdx/mise-action@v5
         with:
-          cache: false
-
+          cache: true
+          install_args: sing-box
       - name: 单元测试
         run: bun test scripts/rules-compile.test.ts
 
