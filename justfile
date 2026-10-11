@@ -125,11 +125,12 @@ rules-check:
 
 
 # --- 提交前检查：按改动范围分组，pre-commit 用 files 只触发相关那组 ---
-# Rust workspace：格式化 + 严格 lint + 未使用依赖 + 全量测试
-check-rust:
+check-rust-fast:
     cargo fmt --all --check
     cargo machete
     cargo clippy --workspace --all-targets --locked -- -D warnings
+
+check-rust-test:
     cargo test --workspace --locked
 
 # sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
@@ -140,7 +141,7 @@ check-template:
     SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts
 
 # 全量检查（手动跑 / CI 同口径）
-verify: check-rust check-template rules-check
+verify: check-rust-fast check-rust-test check-template rules-check
 
 
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点

@@ -19,7 +19,7 @@
 Preconditions: 已 `launch`
 
 - 契约通过：`doctor` 会执行 `bun scripts/rules-compile.ts check`，失败即列出漂移的 tag
-- 全量校验：`just verify` = `check-rust` + `check-template`（`template-check` + `check-singbox` + `check-deprecated` + `bun test config/sing-box/tests/template.test.ts`）+ `rules-check`；`template-check` 用内核 `sing-box merge` 重跑一遍并逐字节比对 `template.json`
+- 全量校验：`just verify` = `check-rust-fast` + `check-rust-test` + `check-template`（`template-check` + `check-singbox` + `check-deprecated` + `bun test config/sing-box/tests/template.test.ts`）+ `rules-check`；`template-check` 用内核 `sing-box merge` 重跑一遍并逐字节比对 `template.json`
 - 发布侧核对：`gh api repos/shelken/proxy/contents/singbox?ref=sing-box-rules --jq length` 返回的是**文件数**（`.json` + `.srs` + 伴生，约为 tag 数的数倍），不是 tag 数
 
 ## Gotchas

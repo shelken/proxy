@@ -216,10 +216,14 @@ fn capture_decisions(controller: &str, domain: &str) -> KernelDecisions {
     // 启动日志流监听线程
     let handle = std::thread::spawn(move || {
         let url = format!("http://{ctrl}/logs?level=debug");
-        let Ok(resp) = ureq::get(&url).timeout(Duration::from_secs(4)).call() else {
+        let Ok(resp) = crate::clashapi::agent_with_timeout(Duration::from_secs(4))
+            .get(&url)
+            .call()
+        else {
             return;
         };
-        let reader = BufReader::new(resp.into_reader());
+        let body = resp.into_body();
+        let reader = BufReader::new(body.into_reader());
         // 只认「域名已确认为目标」的请求号：嗅探行先确立 id→域名 映射
         let mut wanted_ids: Vec<String> = Vec::new();
         for line in reader.lines() {
@@ -248,15 +252,15 @@ fn capture_decisions(controller: &str, domain: &str) -> KernelDecisions {
     // 触发 1: 发送 DNS 查询
     let dom = domain.to_string();
     let ctrl_dns = controller.to_string();
-    let _ = ureq::get(&format!("http://{ctrl_dns}/dns/query?name={dom}&type=A"))
-        .timeout(Duration::from_secs(2))
+    let _ = crate::clashapi::agent_with_timeout(Duration::from_secs(2))
+        .get(&format!("http://{ctrl_dns}/dns/query?name={dom}&type=A"))
         .call();
 
     // 触发 2: 发送 HTTPS 流量，触发内核 route 判定
     let dom_http = domain.to_string();
     std::thread::spawn(move || {
-        let _ = ureq::get(&format!("https://{dom_http}/"))
-            .timeout(Duration::from_secs(3))
+        let _ = crate::clashapi::agent_with_timeout(Duration::from_secs(3))
+            .get(&format!("https://{dom_http}/"))
             .call();
     });
 
@@ -535,9 +539,9 @@ fn spawn_connect_probe(target: String, port: u16, hold: Duration) {
 /// range 探针：直连发起 range 长下载，靠 TUN 进内核。用于生效配置读不到（SFM）时。
 fn spawn_range_probe(target: String) {
     std::thread::spawn(move || {
-        let _ = ureq::get(&format!("https://{target}/"))
-            .set("Range", "bytes=0-104857600")
-            .timeout(Duration::from_secs(4))
+        let _ = crate::clashapi::agent_with_timeout(Duration::from_secs(4))
+            .get(&format!("https://{target}/"))
+            .header("Range", "bytes=0-104857600")
             .call();
     });
 }
@@ -604,8 +608,11 @@ fn report_rules(ec: &str) {
 /// HTTP GET 首字节计时（经系统网络栈，即真实用户路径）。
 pub fn http_first_byte(url: &str) -> (bool, u128) {
     let start = Instant::now();
-    match ureq::get(url).timeout(Duration::from_secs(8)).call() {
-        Ok(_) | Err(ureq::Error::Status(_, _)) => (true, start.elapsed().as_millis()),
+    match crate::clashapi::agent_with_timeout(Duration::from_secs(8))
+        .get(url)
+        .call()
+    {
+        Ok(_) | Err(ureq::Error::StatusCode(_)) => (true, start.elapsed().as_millis()),
         Err(_) => (false, start.elapsed().as_millis()),
     }
 }

@@ -5,7 +5,7 @@
 //! `into_reader` 用法。
 
 use serde_json::Value;
-use std::io::{BufRead, Read};
+use std::io::BufRead;
 use std::time::Duration;
 
 /// controller 是否回环。统一解析器与 config 的拒绝判定共用，
@@ -28,23 +28,33 @@ pub fn endpoint(controller: &str, path: &str) -> String {
     format!("http://{controller}{path}")
 }
 
+/// 带全局超时的 Agent：v3 的 per-request `.timeout()` 已移除，
+/// 超时收敛到 Agent 配置，调用方只传时长。
+pub(crate) fn agent_with_timeout(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .build(),
+    )
+}
+
 /// 探活：/version 2s 内可达。
 pub fn reachable(controller: &str) -> bool {
-    ureq::get(&endpoint(controller, "/version"))
-        .timeout(Duration::from_secs(2))
+    agent_with_timeout(Duration::from_secs(2))
+        .get(&endpoint(controller, "/version"))
         .call()
         .is_ok()
 }
 
 /// GET JSON 端点（/version、/configs 等一次性读取）。
 pub fn get_json(controller: &str, path: &str) -> Result<Value, String> {
-    let res = ureq::get(&endpoint(controller, path))
-        .timeout(Duration::from_secs(2))
+    let mut res = agent_with_timeout(Duration::from_secs(2))
+        .get(&endpoint(controller, path))
         .call()
         .map_err(|e| format!("GET {path} 失败: {e}"))?;
-    let mut body = String::new();
-    res.into_reader()
-        .read_to_string(&mut body)
+    let body = res
+        .body_mut()
+        .read_to_string()
         .map_err(|e| format!("{path} 响应读取失败: {e}"))?;
     serde_json::from_str(&body).map_err(|e| format!("{path} 响应不是合法 JSON: {e}"))
 }
@@ -119,14 +129,18 @@ pub fn get_rules(controller: &str) -> Result<Value, String> {
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
 /// `cmd_logs -f` 是当前调用方，PR4 的 live 归属段复用。
 pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead + use<>, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(2))
-        .build();
+    // 只设连接超时，不设整体超时，避免长连接流式读取在 2s 后被整体超时强制切断
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(2)))
+            .build(),
+    );
     let res = agent
         .get(&endpoint(controller, &format!("/logs?level={level}")))
         .call()
         .map_err(|e| format!("GET /logs 失败: {e}"))?;
-    Ok(std::io::BufReader::new(res.into_reader()))
+    let body = res.into_body();
+    Ok(std::io::BufReader::new(body.into_reader()))
 }
 
 #[cfg(test)]
