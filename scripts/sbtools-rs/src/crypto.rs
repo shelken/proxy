@@ -6,8 +6,6 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use hkdf::Hkdf;
-use rand::rngs::OsRng;
-use rand::RngCore;
 use sha2::Sha256;
 pub use x25519_dalek::StaticSecret as CryptoStaticSecret;
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
@@ -21,7 +19,7 @@ const MIN_PAYLOAD_LEN: usize = PK_LEN + NONCE_LEN + TAG_LEN;
 
 /// 生成随机的服务端 X25519 公私钥对（Hex 编码）
 pub fn generate_keypair_hex() -> (String, String) {
-    let secret = StaticSecret::random_from_rng(OsRng);
+    let secret = StaticSecret::random();
     let public = PublicKey::from(&secret);
     (
         hex::encode(secret.to_bytes()),
@@ -60,7 +58,7 @@ pub fn derive_public_key_hex(private_key_hex: &str) -> Result<String, String> {
 
 /// 客户端加密：生成临时密钥对 -> 计算共享密钥 -> HKDF 派生 AES 密钥 -> AES-256-GCM 加密 -> base64url
 pub fn encrypt_payload(server_pk: &PublicKey, plaintext: &[u8]) -> Result<String, String> {
-    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
+    let ephemeral_secret = EphemeralSecret::random();
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
 
     // 1. Diffie-Hellman 计算共享密钥
@@ -74,13 +72,13 @@ pub fn encrypt_payload(server_pk: &PublicKey, plaintext: &[u8]) -> Result<String
 
     // 3. 随机 12 字节 Nonce
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    rand::fill(&mut nonce_bytes);
+    let nonce = Nonce::from(nonce_bytes);
 
     // 4. AES-256-GCM 加密
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(derived_key));
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|e| format!("AES-256-GCM 加密失败: {e}"))?;
 
     // 5. 拼装: [32B 临时公钥] + [12B Nonce] + [密文 + Tag]
@@ -112,7 +110,7 @@ pub fn decrypt_payload(server_sk: &StaticSecret, encoded: &str) -> Result<Vec<u8
     let ephemeral_pk = PublicKey::from(epk_bytes);
 
     let nonce_bytes = &payload[PK_LEN..PK_LEN + NONCE_LEN];
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes).map_err(|e| format!("Nonce 解析失败: {e}"))?;
     let ciphertext = &payload[PK_LEN + NONCE_LEN..];
 
     // 1. Diffie-Hellman
@@ -125,9 +123,9 @@ pub fn decrypt_payload(server_sk: &StaticSecret, encoded: &str) -> Result<Vec<u8
         .map_err(|e| format!("HKDF 密钥派生失败: {e}"))?;
 
     // 3. AES-256-GCM 解密
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derived_key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(derived_key));
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| format!("AES-256-GCM 解密失败: {e}"))?;
 
     Ok(plaintext)
