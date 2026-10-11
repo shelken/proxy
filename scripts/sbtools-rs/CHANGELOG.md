@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.3](https://github.com/shelken/proxy/compare/v0.7.2...v0.7.3) - 2026-10-11
+
+### Fixed
+
+- *(crypto)* 适配 rand 0.10 与 aes-gcm 0.11 API
+- *(crypto)* 适配 x25519-dalek v3 随机密钥生成 API
+- *(deps)* update rust crate x25519-dalek to v3
+
+### Other
+
+- *(sbtools)* 替换 tiny_http 为 axum 并完成 ureq v3 全量迁移 ([#116](https://github.com/shelken/proxy/pull/116))
+- *(deps)* 移除归档依赖 serde_yaml 并升级到 edition 2024
+
 ## [0.7.2](https://github.com/shelken/proxy/compare/v0.7.1...v0.7.2) - 2026-10-09
 
 ### Added

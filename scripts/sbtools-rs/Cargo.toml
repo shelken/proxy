@@ -1,6 +1,6 @@
 [package]
 name = "sbtools"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2024"
 description = "设备侧 sing-box 配置同步 CLI"
 
