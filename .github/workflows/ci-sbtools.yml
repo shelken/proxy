@@ -33,21 +33,15 @@ jobs:
   audit:
     name: security audit
     runs-on: ubuntu-latest
-    permissions:
-      checks: write
-      contents: read
     steps:
       - uses: actions/checkout@v7
 
-      # RustSec 通告库每次运行实时拉取：今天绿的 lockfile 明天可能命中新 CVE。
-      # checks:write 是 audit-check 上报结果的必需权限，缺了会报
-      # "Resource not accessible by integration"
-      # 未使用依赖检查在本地 pre-commit（check-rust-fast -> cargo machete）：
-      # 纯本地静态秒级判定，不需要 CI
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # 使用预编译二进制安装 cargo-audit，耗时由源码编译的 2m41s 压缩至 1s
+      - uses: taiki-e/install-action@cargo-audit
 
+      # RustSec 通告库每次运行实时拉取；检测有无已知漏洞
+      - name: cargo audit
+        run: cargo audit --file Cargo.lock
   quality:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
@@ -62,19 +56,9 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo
-        uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ci-sbtools-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-sbtools-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
+          workspaces: scripts/sbtools-rs -> target
       # 严格 lint 规则在 crate 属性中声明；此处统一把警告升级为错误
       - name: cargo clippy
         run: cargo clippy --all-targets --locked -- -D warnings
@@ -83,7 +67,7 @@ jobs:
       # 版本只在 .mise.toml 声明，这里不写版本号
       - uses: jdx/mise-action@v5
         with:
-          cache: false
+          cache: true
           install_args: sing-box
 
       # 校验底模与各模块合并结果一致，口径与 just template-check 保持一致
@@ -99,10 +83,7 @@ jobs:
         run: cargo test --locked --all-targets
 
       - name: cargo build (release)
-        run: |
-          cargo clean
-          cargo build --release --locked
-
+        run: cargo build --release --locked
   # 每次改动均执行镜像构建以在 CI 提前验证 Dockerfile，不执行推送
   docker:
     name: docker build
@@ -120,16 +101,10 @@ jobs:
       - name: Install musl toolchain
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
-      - name: Cache cargo
-        uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ci-sbtools-docker-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ci-sbtools-docker-
-
+          workspaces: scripts/sbtools-rs -> target
+          shared-key: musl
       # 镜像已改为 COPY 预编译二进制，构建上下文里必须先有它。
       # 这里与 release 工作流同源同目标，避免「CI 绿但发版炸」。
       # workspace 化后 target 目录在仓库根，不在 crate 目录
@@ -141,17 +116,12 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # 镜像基底内核版本只在 .mise.toml 声明；这里只取 mise CLI，不装内核
-      - uses: jdx/mise-action@v5
-        with:
-          cache: false
-          install: false
-
+      # 仅从 .mise.toml 解析 sing-box 版本，用 Python 3 内置 tomllib 零延迟提取，不下载 mise CLI
       - name: Resolve kernel version
         id: kernel
         run: |
           set -euo pipefail
-          V=$(mise config get --file .mise.toml tools.sing-box)
+          V=$(python3 -c "import tomllib; print(tomllib.load(open('.mise.toml','rb'))['tools']['sing-box'])")
           test -n "$V" || { echo "无法从 .mise.toml 读取 sing-box 版本"; exit 1; }
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
