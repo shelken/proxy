@@ -42,7 +42,7 @@ jobs:
       # RustSec 通告库每次运行实时拉取：今天绿的 lockfile 明天可能命中新 CVE。
       # checks:write 是 audit-check 上报结果的必需权限，缺了会报
       # "Resource not accessible by integration"
-      # 未使用依赖检查在本地 pre-commit（just check-rust -> cargo machete）：
+      # 未使用依赖检查在本地 pre-commit（check-rust-fast -> cargo machete）：
       # 纯本地静态秒级判定，不需要 CI
       - uses: rustsec/audit-check@v2
         with:

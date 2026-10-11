@@ -6,19 +6,31 @@
 repos:
   - repo: local
     hooks:
-      # Rust workspace：格式化 + 严格 lint + 全量测试
-      - id: check-rust
-        name: cargo fmt + clippy + test
-        entry: just check-rust
+      # 文档等不改变代码行为的改动，不必付出全量测试成本
+      - id: check-rust-fast
+        name: cargo fmt + machete + clippy
+        entry: just check-rust-fast
         language: system
         files: ^(scripts/sbtools-rs/|Cargo\.(toml|lock)$)
+        pass_filenames: false
+      - id: check-rust-test
+        name: cargo test
+        entry: just check-rust-test
+        language: system
+        files: ^(scripts/sbtools-rs/(src/|tests/|build\.rs$|Cargo\.toml$)|Cargo\.(toml|lock)$)
         pass_filenames: false
       # 底模与装配器：modules/template 一致 + 结构 check + 废弃写法 + 模板测试
       - id: check-template
         name: sing-box 底模检查
         entry: just check-template
         language: system
-        files: ^(config/sing-box/|justfile$)
+        files: ^config/sing-box/
+        pass_filenames: false
+      - id: check-justfile
+        name: justfile 废弃写法检查
+        entry: just check-deprecated
+        language: system
+        files: ^justfile$
         pass_filenames: false
       # 清单与底模的 tag 契约（编译器改动会改变这份契约）
       - id: rules-check
