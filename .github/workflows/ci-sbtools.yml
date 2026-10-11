@@ -31,7 +31,7 @@ env:
 
 jobs:
   audit:
-    name: security audit + unused deps
+    name: security audit
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -42,15 +42,11 @@ jobs:
       # RustSec 通告库每次运行实时拉取：今天绿的 lockfile 明天可能命中新 CVE。
       # checks:write 是 audit-check 上报结果的必需权限，缺了会报
       # "Resource not accessible by integration"
+      # 未使用依赖检查在本地 pre-commit（just check-rust -> cargo machete）：
+      # 纯本地静态秒级判定，不需要 CI
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      # 未使用依赖门禁：退出码 0=干净 / 1=存在未使用依赖，直接阻断
-      - name: cargo machete (unused dependencies)
-        run: |
-          cargo install cargo-machete --locked
-          cargo machete
 
   quality:
     name: fmt + clippy + test

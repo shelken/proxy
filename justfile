@@ -125,9 +125,10 @@ rules-check:
 
 
 # --- 提交前检查：按改动范围分组，pre-commit 用 files 只触发相关那组 ---
-# Rust workspace：格式化 + 严格 lint + 全量测试
+# Rust workspace：格式化 + 严格 lint + 未使用依赖 + 全量测试
 check-rust:
     cargo fmt --all --check
+    cargo machete
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
 
