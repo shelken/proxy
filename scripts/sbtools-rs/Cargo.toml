@@ -5,7 +5,7 @@ edition = "2024"
 description = "设备侧 sing-box 配置同步 CLI"
 
 [dependencies]
-ureq = { version = "2", features = ["tls", "gzip"] }
+ureq = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 base64 = "0.23"
@@ -18,5 +18,6 @@ aes-gcm = "0.11"
 hkdf = "0.13"
 sha2 = "0.11"
 rand = "0.10"
-tiny_http = "0.12"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
 hex = "0.4"

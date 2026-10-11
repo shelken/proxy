@@ -4,7 +4,6 @@
 //! 下载内容要进入 `sing-box merge`，因此必须比订阅更严格地校验。
 
 use serde_json::Value;
-use std::io::Read;
 use std::time::Duration;
 
 /// 底模响应体上限。生产底模约 16KB，1MB 足够且能挡住超大响应。
@@ -32,14 +31,15 @@ fn resolve_singbox_from(env_value: Option<std::ffi::OsString>) -> std::ffi::OsSt
 
 /// HTTP GET（ureq，走系统 DNS 栈）。非 2xx 或网络错误返回 Err 文本。
 pub fn http_get(url: &str) -> Result<String, String> {
-    let res = ureq::get(url)
-        .timeout(Duration::from_secs(15))
+    let mut res = crate::clashapi::agent_with_timeout(Duration::from_secs(15))
+        .get(url)
         .call()
         .map_err(|e| format!("HTTP 请求失败 {url}: {e}"))?;
-    let mut body = String::new();
-    res.into_reader()
-        .take(10 * 1024 * 1024) // 10MB 上限，防异常响应撑爆内存
-        .read_to_string(&mut body)
+    let body = res
+        .body_mut()
+        .with_config()
+        .limit(10 * 1024 * 1024)
+        .read_to_string()
         .map_err(|e| format!("HTTP 响应读取失败: {e}"))?;
     Ok(body)
 }
@@ -95,14 +95,15 @@ pub fn load_template(template_url: Option<&str>) -> Result<(Value, TemplateSourc
 /// 下载并严格校验远端底模。
 fn fetch_template(raw_url: &str) -> Result<Value, String> {
     let url = validate_template_url(raw_url)?;
-    let res = ureq::get(url.as_str())
-        .timeout(Duration::from_secs(TEMPLATE_TIMEOUT_SECS))
+    let mut res = crate::clashapi::agent_with_timeout(Duration::from_secs(TEMPLATE_TIMEOUT_SECS))
+        .get(url.as_str())
         .call()
         .map_err(|e| format!("底模拉取失败 {url}: {e}"))?;
-    let mut body = String::new();
-    res.into_reader()
-        .take(MAX_TEMPLATE_BODY as u64 + 1)
-        .read_to_string(&mut body)
+    let body = res
+        .body_mut()
+        .with_config()
+        .limit(MAX_TEMPLATE_BODY as u64 + 1)
+        .read_to_string()
         .map_err(|e| format!("底模读取失败: {e}"))?;
     if body.len() > MAX_TEMPLATE_BODY {
         return Err(format!("底模响应超过 {}KB 上限", MAX_TEMPLATE_BODY / 1024));

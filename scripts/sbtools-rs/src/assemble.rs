@@ -136,16 +136,16 @@ fn system_resolve_a(domain: &str) -> Option<String> {
 
 /// AliDNS DoH JSON API：返回首个合法 IPv4 A 记录；任何失败静默 None。
 fn doh_resolve_a(domain: &str) -> Option<String> {
-    use std::io::Read;
     let url = format!("https://223.5.5.5/resolve?name={domain}&type=A");
-    let res = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(5))
+    let mut res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(5))
+        .get(&url)
         .call()
         .ok()?;
-    let mut body = String::new();
-    res.into_reader()
-        .take(64 * 1024)
-        .read_to_string(&mut body)
+    let body = res
+        .body_mut()
+        .with_config()
+        .limit(64 * 1024)
+        .read_to_string()
         .ok()?;
     let v: Value = serde_json::from_str(&body).ok()?;
     v["Answer"]

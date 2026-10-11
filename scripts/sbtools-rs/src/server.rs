@@ -3,12 +3,19 @@
 use crate::assemble::{self, AssembleInput};
 use crate::crypto;
 use crate::template;
+use axum::{
+    Router,
+    extract::{Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::get,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
-use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use tiny_http::{Response, Server};
 
 /// 请求参数上限：URL 查询串（d=）最大字节数。
 const MAX_QUERY_LEN: usize = 128 * 1024;
@@ -120,14 +127,15 @@ fn assemble_base(
 
 /// 订阅抓取：带 5MB 上限，防止机场响应过大拖垮服务。
 fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
-    let res = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(10))
+    let mut res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(10))
+        .get(url)
         .call()
         .map_err(|e| format!("订阅拉取失败: {e}"))?;
-    let mut body = String::new();
-    res.into_reader()
-        .take(MAX_SUB_BODY as u64 + 1)
-        .read_to_string(&mut body)
+    let body = res
+        .body_mut()
+        .with_config()
+        .limit(MAX_SUB_BODY as u64 + 1)
+        .read_to_string()
         .map_err(|e| format!("订阅读取失败: {e}"))?;
     if body.len() > MAX_SUB_BODY {
         return Err(format!(
@@ -260,6 +268,92 @@ fn handle_sub(
     Ok((merged, source))
 }
 
+struct ServerState {
+    sk: crypto::CryptoStaticSecret,
+    pk_hex: String,
+}
+
+#[derive(Deserialize)]
+struct SubQuery {
+    d: Option<String>,
+}
+
+async fn handle_healthz() -> impl IntoResponse {
+    let started = Instant::now();
+    let elapsed = started.elapsed().as_millis();
+    eprintln!("[sbtools server] GET /healthz -> 200 ({elapsed}ms)");
+    (StatusCode::OK, "ok")
+}
+
+async fn handle_pubkey(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
+    let started = Instant::now();
+    let elapsed = started.elapsed().as_millis();
+    eprintln!("[sbtools server] GET /pubkey -> 200 ({elapsed}ms)");
+    (StatusCode::OK, state.pk_hex.clone())
+}
+
+async fn handle_sub_route(
+    State(state): State<Arc<ServerState>>,
+    Query(query): Query<SubQuery>,
+) -> Response {
+    let started = Instant::now();
+    let Some(d) = query.d.filter(|s| !s.is_empty()) else {
+        let elapsed = started.elapsed().as_millis();
+        eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms)");
+        return (StatusCode::BAD_REQUEST, "缺少 d 参数").into_response();
+    };
+
+    let sk = state.sk.clone();
+    let res = tokio::task::spawn_blocking(move || handle_sub(&sk, &d)).await;
+
+    let elapsed = started.elapsed().as_millis();
+    match res {
+        Ok(Ok((json, src))) => {
+            eprintln!(
+                "[sbtools server] GET /sub -> 200 ({elapsed}ms, 底模: {})",
+                src.as_str()
+            );
+            (
+                StatusCode::OK,
+                [("Content-Type", "application/json; charset=utf-8")],
+                json,
+            )
+                .into_response()
+        }
+        Ok(Err(e)) => {
+            let status =
+                if e.contains("解密失败") || e.contains("Base64URL") || e.contains("载荷长度")
+                {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+            eprintln!(
+                "[sbtools server] GET /sub -> {} ({elapsed}ms)",
+                status.as_u16()
+            );
+            (status, e).into_response()
+        }
+        Err(e) => {
+            eprintln!("[sbtools server] GET /sub -> 500 ({elapsed}ms)");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("任务调度失败: {e}"),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn handle_fallback(req: axum::extract::Request) -> impl IntoResponse {
+    let started = Instant::now();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let elapsed = started.elapsed().as_millis();
+    eprintln!("[sbtools server] {method} {path} -> 404 ({elapsed}ms)");
+    (StatusCode::NOT_FOUND, "not found")
+}
+
 /// 服务端主循环。
 pub fn run(port: u16) -> Result<(), String> {
     let sk_hex = std::env::var("SERVER_PRIVATE_KEY")
@@ -268,75 +362,28 @@ pub fn run(port: u16) -> Result<(), String> {
     // 公钥由私钥推导，供客户端 encode 自动获取，无需人工配置
     let pk_hex = crypto::derive_public_key_hex(&sk_hex)?;
 
-    let server =
-        Server::http(format!("0.0.0.0:{port}")).map_err(|e| format!("监听 {port} 失败: {e}"))?;
-    eprintln!("[sbtools server] listening on 0.0.0.0:{port}");
+    let state = Arc::new(ServerState { sk, pk_hex });
 
-    for request in server.incoming_requests() {
-        let started = Instant::now();
-        let method = request.method().as_str();
-        let url = request.url().to_string();
-        let (path, query) = match url.split_once('?') {
-            Some((p, q)) => (p, Some(q)),
-            None => (url.as_str(), None),
-        };
+    let app = Router::new()
+        .route("/healthz", get(handle_healthz))
+        .route("/pubkey", get(handle_pubkey))
+        .route("/sub", get(handle_sub_route))
+        .fallback(handle_fallback)
+        .with_state(state);
 
-        let (status, body, tpl_src): (u16, String, Option<&'static str>) = match (method, path) {
-            ("GET", "/healthz") => (200, "ok".into(), None),
-            // 公钥公开：客户端 encode 靠它加密，无任何机密性要求
-            ("GET", "/pubkey") => (200, pk_hex.clone(), None),
-            ("GET", "/sub") => match query.and_then(|q| q.strip_prefix("d=")) {
-                Some(d) if !d.is_empty() => match handle_sub(&sk, d) {
-                    Ok((json, src)) => (200, json, Some(src.as_str())),
-                    Err(e) => {
-                        // 解密失败（含 403 语义）与装配失败统一 400；不回显密文
-                        let code = if e.contains("解密失败")
-                            || e.contains("Base64URL")
-                            || e.contains("载荷长度")
-                        {
-                            403
-                        } else {
-                            400
-                        };
-                        (code, e, None)
-                    }
-                },
-                _ => (400, "缺少 d 参数".into(), None),
-            },
-            _ => (404, "not found".into(), None),
-        };
-        match tpl_src {
-            Some(src) => eprintln!(
-                "[sbtools server] {} {} -> {} ({}ms, 底模: {})",
-                method,
-                path,
-                status,
-                started.elapsed().as_millis(),
-                src
-            ),
-            None => eprintln!(
-                "[sbtools server] {} {} -> {} ({}ms)",
-                method,
-                path,
-                status,
-                started.elapsed().as_millis()
-            ),
-        }
-
-        let response = Response::from_string(body)
-            .with_status_code(status)
-            .with_header(
-                tiny_http::Header::from_bytes(
-                    &b"Content-Type"[..],
-                    &b"application/json; charset=utf-8"[..],
-                )
-                .map_err(|()| "构造 Content-Type 响应头失败".to_string())?,
-            );
-        if let Err(e) = request.respond(response) {
-            eprintln!("[sbtools server] 响应失败: {e}");
-        }
-    }
-    Ok(())
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("启动 Tokio 运行时失败: {e}"))?
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+                .await
+                .map_err(|e| format!("监听 {port} 失败: {e}"))?;
+            eprintln!("[sbtools server] listening on 0.0.0.0:{port}");
+            axum::serve(listener, app)
+                .await
+                .map_err(|e| format!("服务异常退出: {e}"))
+        })
 }
 
 #[cfg(test)]
