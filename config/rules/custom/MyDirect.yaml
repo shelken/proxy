@@ -55,7 +55,7 @@ rules:
       - 🎈.com
   - port:
       - 22
-      - 123
+      # - 123 # claude会通过ntp检测
   - process_name:
       - tailscale
       - tailscaled

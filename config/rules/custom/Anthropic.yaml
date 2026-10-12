@@ -13,6 +13,7 @@ rules:
       - claudemcpclient.com
       - claudemcpcontent.com
       - claudeusercontent.com
+      - datadog.pool.ntp.org
   - ip_cidr:
       # ARIN 归属 Anthropic 的整段，含官方给客户端的入口段 160.79.104.0/23、2607:6bc0::/48
       - 160.79.104.0/21,no-resolve
