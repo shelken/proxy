@@ -1,0 +1,30 @@
+{
+  "route": {
+    "rules": [
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject",
+        "no_drop": true
+      }
+    ]
+  }
+}

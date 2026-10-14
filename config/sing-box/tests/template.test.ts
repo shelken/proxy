@@ -52,14 +52,31 @@ describe("template.json structural verification", () => {
   });
 
 
-  test("blocks QUIC / HTTP3 on UDP 443 and 80", () => {
+  test("QUIC 守卫排在拦截之后，国内直连的 HTTP/3 才放行", () => {
     const rules = template.route?.rules ?? [];
-    const quicRule = rules.find(
-      (r) => r.network === "udp" && r.action === "reject",
+    const quicRules = rules.filter(
+      (r) => r.network === "udp" && asArray(r.port).includes(443),
     );
-    expect(quicRule).toBeDefined();
-    expect(quicRule.port).toContain(443);
-    expect(quicRule.port).toContain(80);
+    // 两条成套：先给国内直连放行，再兜底 reject。单留 reject 会让国内 CDN 的
+    // HTTP/3 无差别降级；只放行不 reject 则代理侧 QUIC 打进承载差的机场 UDP。
+    const exempt = quicRules.find((r) => r.outbound === "direct");
+    const reject = quicRules.find((r) => r.action === "reject");
+    expect(exempt).toBeDefined();
+    expect(reject).toBeDefined();
+    expect(rules.indexOf(exempt)).toBeLessThan(rules.indexOf(reject));
+
+    // 豁免必须排在广告/黑名单拦截之后：国内 CDN 承载大量统计域名（hm.baidu.com
+    // 同属 ChinaMax 与 Advertising，loggw-ex.alipay.com 同属 ChinaMax 与 MyReject），
+    // 豁免若抢先，这些域名走 HTTP/3 时会被放行为 direct，与拦截被截胡是同一类病。
+    const adReject = rules.find(
+      (r) => r.action === "reject" && asArray(r.rule_set).includes("Advertising"),
+    );
+    expect(adReject).toBeDefined();
+    expect(rules.indexOf(adReject)).toBeLessThan(rules.indexOf(exempt));
+
+    // no_drop：默认 method 在 30s 内触发超过 50 次会退化为静默丢包（不回 ICMP），
+    // 客户端只能等 QUIC 超时，正是"国内网站首屏卡顿"的来源。置 true 恒回 ICMP。
+    expect(reject?.no_drop).toBe(true);
   });
 
 
@@ -276,6 +293,24 @@ describe("template.json structural verification", () => {
     }
   });
 
+  test("拦截规则先于 clash_mode 与分流服务", () => {
+    // ADR-0008：clash_mode 只能决定"业务走哪条线路"，不能顺手放行广告与黑名单。
+    // 排在 clash_mode 之前，global 模式下黑名单才仍然被拦截。
+    const rules = template.route?.rules ?? [];
+    const firstClashModeIndex = rules.findIndex((r) => r.clash_mode !== undefined);
+    expect(firstClashModeIndex).toBeGreaterThan(-1);
+
+    const rejectIndices = rules
+      .map((r, i) => (r.action === "reject" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(rejectIndices.length).toBeGreaterThan(0);
+    // 含 QUIC 兜底：守卫必须在 clash_mode 之前，direct 模式下境外 QUIC 才仍被拒
+    // （旧序 clash_mode: direct 在前会让该模式下 QUIC 全放行，见 ADR-0008 决策 6）。
+    for (const i of rejectIndices) {
+      expect(i).toBeLessThan(firstClashModeIndex);
+    }
+  });
+
   test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
     const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>
@@ -290,24 +325,31 @@ describe("template.json structural verification", () => {
     expect(rejectIndex).toBeLessThan(fakeipIndex);
   });
 
-  test("routes bittorrent and download tools directly without proxy", () => {
+  test("BT 与下载工具经策略组分流，默认直连而非固定出站", () => {
     const sniffer = template.route?.rules?.[0]?.sniffer ?? [];
     expect(sniffer).toContain("bittorrent");
 
     const rules = template.route?.rules ?? [];
     const btRule = rules.find((r) => r.protocol === "bittorrent");
-    expect(btRule?.outbound).toBe("direct");
+    expect(btRule?.outbound).toBe("torrent");
 
-    const dlRule = rules.find((r) => r.rule_set?.includes("torrent"));
-    expect(dlRule?.outbound).toBe("direct");
+    const torrentRule = rules.find((r) => asArray(r.rule_set).includes("torrent"));
+    expect(torrentRule?.outbound).toBe("torrent");
 
-    // torrent-dns 应在 FakeIP 之前由直连 DNS 解析真实 IP
-    const dnsRules = template.dns?.rules ?? [];
-    const dlDnsRule = dnsRules.find((r) => r.rule_set?.includes("torrent-dns"));
-    expect(dlDnsRule?.server).toBe("dns-direct-cn");
+    // 组必须存在且默认可直连：候选含 direct，默认值就是 direct。
+    // 改成 direct 之外的默认值会让 BT 大流量打进代理节点，这条断言守住它。
+    const group = (template.outbounds ?? []).find((o) => o.tag === "torrent");
+    expect(group).toBeDefined();
+    expect(group?.type).toBe("selector");
+    expect(asArray(group?.outbounds)).toContain("direct");
+    expect(asArray(group?.outbounds)).toContain("proxy");
+    expect(group?.default).toBe("direct");
 
-    const fakeipIndex = dnsRules.findIndex((r) => r.server === "dns-fakeip");
-    const dlDnsIndex = dnsRules.indexOf(dlDnsRule);
-    expect(dlDnsIndex).toBeLessThan(fakeipIndex);
+    // torrent 清单只按协议/端口/进程识别，不含域名条目：域名关键词是子串匹配，
+    // "tracker"/"torrent" 会抢走广告拦截清单里的域名（见 ADR-0008）。
+    // 无域名条目 → 无 torrent-dns 伴生，DNS 侧不得再引用它。
+    const dnsRuleSets = (template.dns?.rules ?? []).flatMap((r) => asArray(r.rule_set));
+    expect(dnsRuleSets).not.toContain("torrent-dns");
+    expect((template.route?.rule_set ?? []).map((rs) => rs.tag)).not.toContain("torrent-dns");
   });
 });

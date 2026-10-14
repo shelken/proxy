@@ -69,10 +69,7 @@
         "server": "dns-local-system"
       },
       {
-        "rule_set": [
-          "ChinaMax-dns",
-          "torrent-dns"
-        ],
+        "rule_set": "ChinaMax-dns",
         "server": "dns-direct-cn"
       },
       {
@@ -223,6 +220,17 @@
     },
     {
       "type": "selector",
+      "tag": "torrent",
+      "outbounds": [
+        "direct",
+        "selfhost",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
       "tag": "download",
       "outbounds": [
         "selfhost",
@@ -363,7 +371,7 @@
         "selfhost",
         "proxy",
         "direct",
-        "(?i)(vps|hys|港)"
+        "(?i)(vps|hy2|港)"
       ],
       "default": "selfhost",
       "interrupt_exist_connections": true
@@ -421,40 +429,8 @@
         "action": "hijack-dns"
       },
       {
-        "clash_mode": "direct",
-        "outbound": "direct"
-      },
-      {
-        "clash_mode": "global",
-        "outbound": "proxy"
-      },
-      {
         "ip_is_private": true,
         "outbound": "direct"
-      },
-      {
-        "network": "udp",
-        "port": [
-          443,
-          80
-        ],
-        "action": "reject"
-      },
-      {
-        "protocol": "bittorrent",
-        "outbound": "direct"
-      },
-      {
-        "port_range": "6881:6889",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": "torrent",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": "Download",
-        "outbound": "download"
       },
       {
         "rule_set": [
@@ -464,6 +440,49 @@
           "Privacy"
         ],
         "action": "reject"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "clash_mode": "direct",
+        "outbound": "direct"
+      },
+      {
+        "clash_mode": "global",
+        "outbound": "proxy"
+      },
+      {
+        "protocol": "bittorrent",
+        "outbound": "torrent"
+      },
+      {
+        "rule_set": "torrent",
+        "outbound": "torrent"
+      },
+      {
+        "rule_set": "Download",
+        "outbound": "download"
       },
       {
         "rule_set": [
@@ -599,24 +618,6 @@
       },
       {
         "type": "remote",
-        "tag": "torrent-dns",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "Download",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
         "tag": "Advertising",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Advertising.srs",
         "update_interval": "24h0m0s"
@@ -637,6 +638,18 @@
         "type": "remote",
         "tag": "Privacy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "torrent",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Download",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
         "update_interval": "24h0m0s"
       },
       {

@@ -1,0 +1,16 @@
+{
+  "route": {
+    "rules": [
+      {
+        "clash_mode": "direct",
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "clash_mode": "global",
+        "action": "route",
+        "outbound": "proxy"
+      }
+    ]
+  }
+}

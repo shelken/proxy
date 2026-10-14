@@ -31,8 +31,3 @@ rules:
       - 51413
   - port_range:
       - 6881:6889
-  - domain_keyword:
-      - tracker
-      - announce
-      - torrent
-      - peer_id
