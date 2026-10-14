@@ -52,7 +52,7 @@ describe("template.json structural verification", () => {
   });
 
 
-  test("代理侧 QUIC 降级为 TCP，国内直连的 HTTP/3 放行", () => {
+  test("QUIC 守卫排在拦截之后，国内直连的 HTTP/3 才放行", () => {
     const rules = template.route?.rules ?? [];
     const quicRules = rules.filter(
       (r) => r.network === "udp" && asArray(r.port).includes(443),
@@ -64,6 +64,15 @@ describe("template.json structural verification", () => {
     expect(exempt).toBeDefined();
     expect(reject).toBeDefined();
     expect(rules.indexOf(exempt)).toBeLessThan(rules.indexOf(reject));
+
+    // 豁免必须排在广告/黑名单拦截之后：国内 CDN 承载大量统计域名（hm.baidu.com
+    // 同属 ChinaMax 与 Advertising，loggw-ex.alipay.com 同属 ChinaMax 与 MyReject），
+    // 豁免若抢先，这些域名走 HTTP/3 时会被放行为 direct，与拦截被截胡是同一类病。
+    const adReject = rules.find(
+      (r) => r.action === "reject" && asArray(r.rule_set).includes("Advertising"),
+    );
+    expect(adReject).toBeDefined();
+    expect(rules.indexOf(adReject)).toBeLessThan(rules.indexOf(exempt));
 
     // no_drop：默认 method 在 30s 内触发超过 50 次会退化为静默丢包（不回 ICMP），
     // 客户端只能等 QUIC 超时，正是"国内网站首屏卡顿"的来源。置 true 恒回 ICMP。
@@ -295,8 +304,9 @@ describe("template.json structural verification", () => {
       .map((r, i) => (r.action === "reject" ? i : -1))
       .filter((i) => i >= 0);
     expect(rejectIndices.length).toBeGreaterThan(0);
-    // QUIC 兜底 reject 是守卫层动作，不在此列（它必须在分流前拦下 UDP）
-    for (const i of rejectIndices.filter((i) => rules[i].network !== "udp")) {
+    // 含 QUIC 兜底：守卫必须在 clash_mode 之前，direct 模式下境外 QUIC 才仍被拒
+    // （旧序 clash_mode: direct 在前会让该模式下 QUIC 全放行，见 ADR-0008 决策 6）。
+    for (const i of rejectIndices) {
       expect(i).toBeLessThan(firstClashModeIndex);
     }
   });

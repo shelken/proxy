@@ -20,7 +20,11 @@ BitTorrent 识别只保留协议嗅探、端口与进程名三类，删除全部
 
 ## Consequences
 
-- 海外 tracker 恢复可用（走代理），peer 流量仍默认直连；两侧都能在客户端手动切换
+- 广告与黑名单域名不再被 BT 关键词截胡；域名类 tracker（HTTP/HTTPS）恢复走代理
 - 误伤归零：不再有域名被 `tracker` / `torrent` 等子串命中
-- 残余限制（内核能力边界，无配置可解）：UDP tracker 的 ANNOUNCE 包与 DHT（KRPC）不被任何嗅探器识别，落 `final: proxy`；MSE/PE 加密的 TCP peer 握手无法识别，本机场景由 `process_name` 兜底，旁路由场景无进程名可查
+- 残余限制（内核能力边界，无配置可解）：
+  - **UDP tracker 与 peer 无法区分，且都落 `torrent` 组（默认 direct）**。`route/rule/rule_action.go` 把 `sniff.UDPTracker` 注册为 `protocol: bittorrent` 的 PacketSniffer，它按 BEP-15 magic（`0x41727101980` + connect flag `0`）识别并写入 `metadata.Protocol = bittorrent`。故 UDP tracker 命中 `protocol: bittorrent` 规则 → `torrent` 组 → 默认 direct。**公网 tracker 以 UDP 为主，境外 UDP tracker 因此仍走直连、仍被墙**；若把 `torrent` 组切到 `proxy`，其 uTP peer 流量会一并进入代理
+  - 「tracker 恢复可用」只对 HTTP(S) tracker 域名成立（它们不被任何规则命中，落 `final: proxy`），对 UDP tracker 不成立
+  - DHT（KRPC）与 UDP tracker 的 ANNOUNCE 包（非 CONNECT）不被任何嗅探器识别，落 `final: proxy`；`UDPTracker` 只认 CONNECT（`trackerConnectFlag = 0`），后续 ANNOUNCE 包未被正则匹配则由 UDP NAT 会话保持既有裁决
+  - MSE/PE 加密的 TCP peer 握手无法识别，本机场景由 `process_name` 兜底，旁路由场景无进程名可查
 - 回滚：恢复 `torrent.yaml` 的域名关键词与直连出站，`just rules-build` 后 `just template-build`

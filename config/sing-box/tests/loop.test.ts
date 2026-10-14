@@ -173,3 +173,34 @@ describe("共享规则集与 DNS 伴生集", () => {
     expect(r.out.trim()).toBe("");
   });
 });
+
+/**
+ * BT 规则集不得按域名匹配（ADR-0009）。
+ *
+ * 这些域名曾被 `domain_keyword: [tracker, announce, torrent, peer_id]` 命中并
+ * 抢在拦截之前判给直连，其中 adeventtracker.spotify.com 本属 Advertising、
+ * tracker.xiaomixiaoai.com 本属 Advertising、spider-tracker.xiaohongshu.com
+ * 本属 MyReject。关键词删除后必须全部不命中，否则误伤回归。
+ */
+const TORRENT_MUST_NOT_HIT = [
+  "tracker.gg",
+  "torrentfreak.com",
+  "issuetracker.google.com",
+  "libtorrent.org",
+  "tracker.debian.org",
+  "adeventtracker.spotify.com",
+  "tracker.xiaomixiaoai.com",
+  "spider-tracker.xiaohongshu.com",
+];
+
+describe("BT 规则集只按协议与端口识别", () => {
+  for (const value of TORRENT_MUST_NOT_HIT) {
+    test(`${value} 不被 torrent 规则集命中`, () => {
+      // 命中信息走 stderr（stdout 恒空、退出码恒 0），故按输出为空判定
+      const r = sh(
+        `${SB} rule-set match -f binary ${WORK}/rules/torrent.srs ${value} 2>&1 1>/dev/null`,
+      );
+      expect(r.out.trim()).toBe("");
+    });
+  }
+});

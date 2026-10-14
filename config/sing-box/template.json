@@ -371,7 +371,7 @@
         "selfhost",
         "proxy",
         "direct",
-        "(?i)(vps|hys|港)"
+        "(?i)(vps|hy2|港)"
       ],
       "default": "selfhost",
       "interrupt_exist_connections": true
@@ -433,6 +433,15 @@
         "outbound": "direct"
       },
       {
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "MyReject",
+          "Privacy"
+        ],
+        "action": "reject"
+      },
+      {
         "network": "udp",
         "port": [
           443,
@@ -454,15 +463,6 @@
         ],
         "action": "reject",
         "no_drop": true
-      },
-      {
-        "rule_set": [
-          "Advertising",
-          "Hijacking",
-          "MyReject",
-          "Privacy"
-        ],
-        "action": "reject"
       },
       {
         "clash_mode": "direct",

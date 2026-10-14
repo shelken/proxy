@@ -27,7 +27,7 @@
         "selfhost",
         "proxy",
         "direct",
-        "(?i)(vps|hys|港)"
+        "(?i)(vps|hy2|港)"
       ],
       "default": "selfhost",
       "interrupt_exist_connections": true
