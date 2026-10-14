@@ -17,6 +17,7 @@ BitTorrent 识别只保留协议嗅探、端口与进程名三类，删除全部
 2. 新增 `torrent` selector，候选 `direct` / `selfhost` / `proxy`，默认 `direct`
 3. 不建 `torrent-tracker` 组：域名关键词删除后，tracker 域名不再被任何规则命中，自然落 `final: proxy`，无需专用规则集
 4. `torrent` 规则集不再产出有意义的 `-dns` 伴生（无域名条目），底模删除 `torrent-dns` 的引用与声明
+5. `torrent` 保持在 `38-resolve.json` 的排除清单里。它虽已无域名条目，但 `process_name` 与端口条目**仍是有效的路由匹配条件**：`ProcessItem.Match` 比对 `metadata.ProcessInfo.ProcessPath`，而进程信息由 `prepareMatchMetadata` 在规则匹配前填充（实测 `aria2c` 命中 `rule_set=torrent => route(torrent)`）。BT 客户端发起的连接因此跳过 `resolve`，与其它默认直连的组同构——留着是语义正确，不是残留
 
 ## Consequences
 

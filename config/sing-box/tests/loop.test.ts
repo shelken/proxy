@@ -6,13 +6,71 @@
 //   router: match[N] rule_set=<tag> => route(<outbound>)
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { createSocket, type Socket } from "node:dgram";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { startSandbox, type SandboxHandle } from "./lib/sandbox.ts";
 
 const SB = "/opt/proxy-test/bin/sing-box";
 const WORK = "/work/sing-box";
 const CONFIG = `${WORK}/config.json`;
+
+/**
+ * 合成 DNS 上游的绑定端口。避开 15353/15354（dns-behavior.test.js）与 15355
+ * （kernel-routing.test.js 的 socks 目的端口）。
+ */
+const UPSTREAM_PORT = 15356;
+
+/** 固定 A 记录，取自 TEST-NET-3（RFC 5737，保留给文档与测试）。断言的是路由
+ *  裁决而非解析结果，具体取值无关紧要。 */
+const UPSTREAM_IP = Buffer.from([203, 0, 113, 7]);
+
+/**
+ * 应答任意 A 查询，AAAA 返回空。`resolve` 用 `strategy: ipv4_only`，只查 A。
+ */
+function buildResponse(query: Buffer): Buffer {
+  let end = 12;
+  while (query[end] !== 0) end += query[end] + 1;
+  end += 1;
+  const qtype = query.readUInt16BE(end);
+  const question = query.subarray(12, end + 4);
+  const header = Buffer.alloc(12);
+  query.copy(header, 0, 0, 2);
+  header.writeUInt16BE(0x8180, 2); // QR=1 RD=1 RA=1
+  header.writeUInt16BE(1, 4); // QDCOUNT
+  const answering = qtype === 1;
+  header.writeUInt16BE(answering ? 1 : 0, 6);
+  const parts = [header, question];
+  if (answering) {
+    const rr = Buffer.alloc(16);
+    rr.writeUInt16BE(0xc00c, 0); // 压缩指针 → 问题里的 QNAME
+    rr.writeUInt16BE(1, 2); // TYPE A
+    rr.writeUInt16BE(1, 4); // CLASS IN
+    rr.writeUInt32BE(60, 6); // TTL
+    rr.writeUInt16BE(4, 10); // RDLENGTH
+    UPSTREAM_IP.copy(rr, 12);
+    parts.push(rr);
+  }
+  return Buffer.concat(parts);
+}
+
+/**
+ * 把远程 DNS server 全部指向合成上游，并去掉 detour 与 TLS。
+ *
+ * 只改「沙箱零外网」带来的传输差异，不动 `dns.rules` 与 `route.rules`——
+ * 被断言的语义是路由裁决。改完夹具域名无需真实存在，测试也不再随第三方
+ * 域名下线而假红：那类失败与规则回归在日志里长得一样，是最坏的假红。
+ */
+function useLocalUpstream(config: Record<string, any>): void {
+  for (const server of config.dns?.servers ?? []) {
+    if (server.type !== "udp" && server.type !== "https") continue;
+    delete server.tls;
+    delete server.detour;
+    server.type = "udp";
+    server.server = "127.0.0.1";
+    server.server_port = UPSTREAM_PORT;
+  }
+}
 
 /**
  * 命中用例：域名/地址取自仓库内自定义清单并固化，上游清单内容持续变动不作 fixture。
@@ -22,6 +80,13 @@ const CONFIG = `${WORK}/config.json`;
  *
  * `outbound` 是断言层级的下界——域名 → 规则集 → 出站，不追到具体节点：
  * 节点是假 URI，被测对象是裁决结果而非代理连通性（ADR-0003）。
+ *
+ * 域名只需命中规则集，**不依赖真实 DNS**：`beforeAll` 把远程 DNS server 全部
+ * 指向 VM 内的合成上游（应答 TEST-NET-3 地址）。此前夹具直接依赖公网解析，
+ * 1024proxy.net / s.dsqcjk.com / pokemontcgpocket.com 下线后让三条断言长期假红，
+ * 而「夹具失效」与「规则回归」在日志里都是「取不到裁决行」，无法区分——
+ * 这是最坏的假红，掩盖真回归。合成上游从根上消除该外部依赖。
+ * 域名仍须命中对应规则集：这是断言的真实约束，取自仓库自有清单。
  */
 const HITS: { value: string; ruleSet: string; outbound: string }[] = [
   { value: "1024proxy.net", ruleSet: "1024proxy", outbound: "1024proxy" },
@@ -62,6 +127,10 @@ function sh(cmd: string): { code: number | null; out: string } {
 }
 
 let sb: SandboxHandle | undefined;
+let upstream: Socket | undefined;
+
+/** 改写后的配置路径：夹具域名走合成上游，不依赖任何真实域名存活。 */
+const CONFIG_WITH_UPSTREAM = `${WORK}/loop-config.json`;
 
 beforeAll(() => {
   if (!existsSync(CONFIG)) {
@@ -69,11 +138,23 @@ beforeAll(() => {
       `未找到 ${CONFIG}。先运行 just sandbox-loop（宿主机侧）准备闭环配置。`,
     );
   }
-  sb = startSandbox();
+
+  upstream = createSocket("udp4");
+  upstream.on("message", (packet, peer) => {
+    upstream!.send(buildResponse(packet), peer.port, peer.address);
+  });
+  upstream.bind(UPSTREAM_PORT, "127.0.0.1");
+
+  const config = JSON.parse(readFileSync(CONFIG, "utf8"));
+  useLocalUpstream(config);
+  writeFileSync(CONFIG_WITH_UPSTREAM, JSON.stringify(config));
+
+  sb = startSandbox({ configPath: CONFIG_WITH_UPSTREAM });
 });
 
 afterAll(async () => {
   await sb?.stop();
+  upstream?.close();
 });
 
 /**
@@ -85,15 +166,28 @@ afterAll(async () => {
  * 等待的是真实信号（日志里出现该目的地的嗅探行），不是固定时长：嗅探行一出现就
  * 说明这条连接已进入路由阶段，紧随其后的裁决行必然已在同一次输出刷新里。
  *
- * 请求打不通是预期内的（节点是假 URI），裁决发生在拨号之前，故不看 curl 的成败。
+ * 请求打不通是预期内的（节点假 URI，合成上游回 TEST-NET-3 不可路由地址），
+ * 裁决发生在拨号之前，故不看 curl 的成败。
+ *
+ * 先等日志再收尾：日志由后台 drain 灌入，且嗅探行出现时裁决行已在同一次刷新里。
+ * 若先 `await proc.exited`，每个用例都要白等满 curl 的连接超时——目标地址不可路由
+ * 时那接近 --max-time，30 个用例会累积成分钟级。
  */
 async function probe(value: string): Promise<void> {
+  // 直接 spawn curl（不经 sh）让 kill 作用到 curl 本身，否则只杀外壳、留下孤儿
   const proc = Bun.spawn([
-    "sh", "-c",
-    `curl -s -k -x http://127.0.0.1:2080 -o /dev/null --max-time 4 "https://${value}/" 2>/dev/null || true`,
+    "curl", "-s", "-k", "-x", "http://127.0.0.1:2080", "-o", "/dev/null",
+    "--max-time", "10", `https://${value}/`,
   ]);
+  try {
+    await sb!.waitFor(
+      new RegExp(`router: sniffed protocol: \\w+, domain: ${value.replace(/\./g, "\\.")}`),
+    );
+  } finally {
+    // 裁决已落日志，连接的成与败都不再影响断言
+    proc.kill();
+  }
   await proc.exited;
-  await sb!.waitFor(new RegExp(`router: sniffed protocol: \\w+, domain: ${value.replace(/\./g, "\\.")}`));
 }
 
 /**
