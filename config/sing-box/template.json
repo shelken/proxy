@@ -477,10 +477,6 @@
         "outbound": "torrent"
       },
       {
-        "rule_set": "torrent",
-        "outbound": "torrent"
-      },
-      {
         "rule_set": "Download",
         "outbound": "download"
       },
@@ -491,7 +487,6 @@
           "MyDirect",
           "cftunnel",
           "geoip-cn",
-          "torrent",
           "Microsoft",
           "PayPal",
           "Apple"
@@ -638,12 +633,6 @@
         "type": "remote",
         "tag": "Privacy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
         "update_interval": "24h0m0s"
       },
       {

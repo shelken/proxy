@@ -325,7 +325,7 @@ describe("template.json structural verification", () => {
     expect(rejectIndex).toBeLessThan(fakeipIndex);
   });
 
-  test("BT 与下载工具经策略组分流，默认直连而非固定出站", () => {
+  test("BT 仅按协议嗅探分流，默认直连而非固定出站", () => {
     const sniffer = template.route?.rules?.[0]?.sniffer ?? [];
     expect(sniffer).toContain("bittorrent");
 
@@ -333,8 +333,11 @@ describe("template.json structural verification", () => {
     const btRule = rules.find((r) => r.protocol === "bittorrent");
     expect(btRule?.outbound).toBe("torrent");
 
-    const torrentRule = rules.find((r) => asArray(r.rule_set).includes("torrent"));
-    expect(torrentRule?.outbound).toBe("torrent");
+    // torrent rule_set 已退役（process_name/端口是死代码或误伤，见 PR 评估）：
+    // BT 分流只认 protocol: bittorrent，tracker 域名落 final proxy。
+    expect((template.route?.rule_set ?? []).map((rs) => rs.tag)).not.toContain("torrent");
+    expect(rules.some((r) => asArray(r.rule_set).includes("torrent"))).toBe(false);
+    expect((template.route?.rules ?? []).some((r) => asArray(r.rule_set).includes("torrent"))).toBe(false);
 
     // 组必须存在且默认可直连：候选含 direct，默认值就是 direct。
     // 改成 direct 之外的默认值会让 BT 大流量打进代理节点，这条断言守住它。
@@ -345,9 +348,7 @@ describe("template.json structural verification", () => {
     expect(asArray(group?.outbounds)).toContain("proxy");
     expect(group?.default).toBe("direct");
 
-    // torrent 清单只按协议/端口/进程识别，不含域名条目：域名关键词是子串匹配，
-    // "tracker"/"torrent" 会抢走广告拦截清单里的域名（见 ADR-0008）。
-    // 无域名条目 → 无 torrent-dns 伴生，DNS 侧不得再引用它。
+    // 无 torrent 清单 → 无 torrent-dns 伴生，DNS 侧不得再引用它。
     const dnsRuleSets = (template.dns?.rules ?? []).flatMap((r) => asArray(r.rule_set));
     expect(dnsRuleSets).not.toContain("torrent-dns");
     expect((template.route?.rule_set ?? []).map((rs) => rs.tag)).not.toContain("torrent-dns");
