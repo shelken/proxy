@@ -75,6 +75,19 @@ function ensureBinary(): void {
   const head = host(["git", "rev-parse", "HEAD"]).out.trim();
   if (!head) fail("解析 HEAD", "git rev-parse HEAD 无输出");
 
+  // CI 产物只会从 commit 构建。工作区有未提交的底模/Rust 改动时，commit 间的
+  // relevantDiff 与工作区自比的 verifyLocalArtifacts 都查不出「产物内嵌模板与被测
+  // 配置不一致」——实测表现为服务端下发已删除的 rule_set，报错却在内核启动处。
+  const dirty = host(["git", "status", "--porcelain", "--", ...BINARY_INPUTS]).out.trim();
+  if (dirty) {
+    fail(
+      "二进制输入未提交",
+      `以下文件有未提交改动，不会体现在任何 CI 产物里（假绿风险）：\n` +
+        `  ${dirty.replaceAll("\n", "\n  ")}\n` +
+        `  先提交并推送分支，再执行 gh workflow run release-sbtools.yml --ref <分支> 并等它跑完`,
+    );
+  }
+
   const stamp = resolve(ARTIFACT_DIR, "commit");
   if (existsSync(LOCAL_BINARY) && existsSync(stamp)) {
     const cached = readFileSync(stamp, "utf-8").trim();
@@ -235,7 +248,14 @@ function verifyLocalArtifacts(): void {
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
   verifyLocalArtifacts();
+  // 先杀残留服务端再拷贝：上一次引导若在 `set -e` 早退路径死掉（如 sb check 失败），
+  // VM 里会留着旧二进制启动的 server；`cp` 覆盖正被执行的文件触发 ETXTBSY，
+  // 没有 set -e 时错误被静默吞掉，VM 继续跑旧内嵌模板——配置与规则产物对不上，
+  // 报错点却在内核启动处（实测：torrent.srs no such file）。
   const r = guest(`
+    set -e
+    sudo -n pkill -9 -x sbtools 2>/dev/null || true
+    sleep 0.3
     mkdir -p /work
     cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}
     chmod +x ${GUEST_BINARY}
