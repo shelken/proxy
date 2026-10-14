@@ -4,21 +4,14 @@
       {
         "protocol": "bittorrent",
         "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "port_range": [
-          "6881:6889"
-        ],
-        "action": "route",
-        "outbound": "direct"
+        "outbound": "torrent"
       },
       {
         "rule_set": [
           "torrent"
         ],
         "action": "route",
-        "outbound": "direct"
+        "outbound": "torrent"
       }
     ],
     "rule_set": [
@@ -30,5 +23,18 @@
         "update_interval": "1d"
       }
     ]
-  }
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "torrent",
+      "outbounds": [
+        "direct",
+        "selfhost",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    }
+  ]
 }

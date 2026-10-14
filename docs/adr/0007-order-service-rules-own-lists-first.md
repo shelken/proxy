@@ -14,9 +14,11 @@
 1. 自有清单（`index.yaml` 指向 `config/rules/custom/`）的服务规则默认排在外部清单（`geosite:` / `geoip:`）之前；例外用文件名前缀单独安排
 2. 出站组默认 `direct` 的服务模块排到服务号段最后（`71`-`79`），避免默认直连的宽泛组抢占代理流量；`MyDirect` 这类「永直连」的自有清单不适用，仍随自有清单排在前面
 3. 服务号段扩到 `41`-`79`：自有 `41`-`63`、外部 `65`-`69`、默认直连 `71`-`79`，奇数编号为占用位、偶数为插队位
-4. `30-route-base-rules.json` 按关注点拆分：`30` 只留全局动作与守卫，`32` BT 直连、`34` 下载分流（`download` 出站组一并移入）、`36` 拦截清单、`38` 解析前置各自成文件
-5. 拦截类的 `MyReject` 纳入 `36-reject.json` 确保在解析前短路终结，分流类的 `MyDirect` / `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）
+4. `30-route-base-rules.json` 按关注点拆分：`30` 只留全局动作与守卫，`32` 拦截清单、`34` 模式开关、`36` BT 直连、`37` 下载分流（`download` 出站组一并移入）、`38` 解析前置各自成文件
+5. 拦截类的 `MyReject` 纳入 `32-reject.json` 确保在解析前短路终结，分流类的 `MyDirect` / `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）
 6. 默认直连的规则集必须出现在 `38-resolve.json` 的排除清单里。该清单由底模推导（出站是 `direct`，或出站是默认 `direct` 的策略组）并由 `config/sing-box/tests/template.test.ts` 断言，`microsoft` / `paypal` / `apple` 按此纳入
+
+> 修订（ADR-0008）：本决策让 BT 与下载分流排在拦截之后，故 `32`/`34` 号段改由 `32-reject.json` / `34-clash-mode.json` 占用，BT 与下载分流依次后移至 `36-torrent.json` / `37-download.json`。排序策略随之补上第三条「拦截 > 模式开关 > 服务分流」，见 `docs/adr/0008`
 
 ## Consequences
 

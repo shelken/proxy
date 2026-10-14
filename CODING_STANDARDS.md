@@ -18,8 +18,10 @@
 ## sing-box 与规则
 
 - `template.json` 由 `modules/` 经官方 `sing-box merge` 生成：只改 `modules/`，再执行 `just template-build`
-- `modules/` 文件名前缀决定合并顺序，即 `route.rules` 与 `outbounds` 的数组顺序：`00`-`39` 为全局与核心模块（入站、DNS、路由全局属性、前置动作、守卫、拦截、解析与核心出站组），`41`-`63` 为自有清单服务，`65`-`69` 为外部清单服务，`71`-`79` 为默认直连分组，`80` 为兜底规则，`90` 为收尾；每个服务对应独立文件，号段留空便于插队；新增服务只需新建文件并在 `index.yaml` 登记 rule_set
-- 服务顺序的两条策略：自有清单默认排在外部清单之前，避免宽泛的上游清单抢占自有域名；拦截类 `MyReject` 纳入 `36-reject.json` 在解析前短路，分流类 `MyDirect` 与 `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）；出站组默认 `direct` 的服务模块排到服务号段末尾，避免默认直连组抢占代理流量；理由见 `docs/adr/0007-order-service-rules-own-lists-first.md`
+- `modules/` 文件名前缀决定合并顺序，即 `route.rules` 与 `outbounds` 的数组顺序：`00`-`29` 为入站、DNS 与路由全局属性，`30`-`39` 为前置动作、守卫、拦截、模式开关、BT 与下载分流、解析与核心出站组，`41`-`63` 为自有清单服务，`65`-`69` 为外部清单服务，`71`-`79` 为默认直连分组，`80` 为兜底规则，`90` 为收尾；每个服务对应独立文件，号段留空便于插队；新增服务只需新建文件并在 `index.yaml` 登记 rule_set
+- 服务顺序的三条策略：**拦截 > 模式开关 > 服务分流**（`32-reject.json` 早于 `34-clash-mode.json` 与全部服务，否则 `global` 模式会连同广告与黑名单一起放行，按域名关键词分流的规则也会截胡本该 reject 的域名，见 `docs/adr/0008`）；自有清单默认排在外部清单之前，避免宽泛的上游清单抢占自有域名，分流类 `MyDirect` 与 `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）；出站组默认 `direct` 的服务模块排到服务号段末尾，避免默认直连组抢占代理流量；理由见 `docs/adr/0007-order-service-rules-own-lists-first.md`
+- BT 直连经 `torrent` 策略组下发（默认 `direct`，候选含 `selfhost` / `proxy`），识别只按协议嗅探、端口与进程名，不含域名关键词；tracker 域名不单独建组，落 `final: proxy`，理由见 `docs/adr/0009`
+- QUIC 守卫（UDP 443/80 `reject`）必须自带国内直连豁免（`ChinaMax` / `Lan` / `cftunnel` / `geoip-cn` 走 `direct`）并置 `no_drop: true`：豁免靠 `matchRule` 在匹配前调 `prepareMatchMetadata` 把 fakeip 还原为域名，`no_drop` 避免 30 秒内超过 50 次后从 ICMP 不可达退化为静默丢包
 - 改动底模、出站与规则集前先查阅[配置文档](https://sing-box.sagernet.org/configuration/)与 [changelog](https://sing-box.sagernet.org/changelog)
 - raw.githubusercontent.com 同一文件至少间隔 5 分钟再拉取，CDN 存在缓存，遇到旧内容或 404 先核实缓存
 - `38-resolve.json` 包含 `action: resolve` 规则，让代理流量在本机按 v4 解析后再交给节点；排除清单必须覆盖所有默认直连规则集（出站为 direct 或默认 direct 的策略组），避免直连流量被远端解析器解析为海外 IP；该清单由底模推导并由 `config/sing-box/tests/template.test.ts` 断言

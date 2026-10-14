@@ -20,16 +20,6 @@
         "action": "hijack-dns"
       },
       {
-        "clash_mode": "direct",
-        "action": "route",
-        "outbound": "direct"
-      },
-      {
-        "clash_mode": "global",
-        "action": "route",
-        "outbound": "proxy"
-      },
-      {
         "ip_is_private": true,
         "action": "route",
         "outbound": "direct"
@@ -40,7 +30,23 @@
           443,
           80
         ],
-        "action": "reject"
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject",
+        "no_drop": true
       }
     ]
   }

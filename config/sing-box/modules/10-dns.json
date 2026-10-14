@@ -88,8 +88,7 @@
       },
       {
         "rule_set": [
-          "ChinaMax-dns",
-          "torrent-dns"
+          "ChinaMax-dns"
         ],
         "server": "dns-direct-cn"
       },
@@ -131,13 +130,6 @@
         "tag": "ChinaMax-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
         "update_interval": "1d"
       }
     ]
