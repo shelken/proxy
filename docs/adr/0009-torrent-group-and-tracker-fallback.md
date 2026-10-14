@@ -17,7 +17,15 @@ BitTorrent 识别只保留协议嗅探、端口与进程名三类，删除全部
 2. 新增 `torrent` selector，候选 `direct` / `selfhost` / `proxy`，默认 `direct`
 3. 不建 `torrent-tracker` 组：域名关键词删除后，tracker 域名不再被任何规则命中，自然落 `final: proxy`，无需专用规则集
 4. `torrent` 规则集不再产出有意义的 `-dns` 伴生（无域名条目），底模删除 `torrent-dns` 的引用与声明
-5. `torrent` 保持在 `38-resolve.json` 的排除清单里。它虽已无域名条目，但 `process_name` 与端口条目**仍是有效的路由匹配条件**：`ProcessItem.Match` 比对 `metadata.ProcessInfo.ProcessPath`，而进程信息由 `prepareMatchMetadata` 在规则匹配前填充（实测 `aria2c` 命中 `rule_set=torrent => route(torrent)`）。BT 客户端发起的连接因此跳过 `resolve`，与其它默认直连的组同构——留着是语义正确，不是残留
+5. ~~`torrent` 保持在 `38-resolve.json` 的排除清单里。它虽已无域名条目，但 `process_name` 与端口条目**仍是有效的路由匹配条件**：`ProcessItem.Match` 比对 `metadata.ProcessInfo.ProcessPath`，而进程信息由 `prepareMatchMetadata` 在规则匹配前填充（实测 `aria2c` 命中 `rule_set=torrent => route(torrent)`）。BT 客户端发起的连接因此跳过 `resolve`，与其它默认直连的组同构——留着是语义正确，不是残留~~
+   **修订（2026-10-15）**：后续评估推翻了 process_name 与端口条目的价值，`torrent.yaml` 整体退役（见下），本条随之失效——`torrent` 已从 `38-resolve.json` 排除清单移除。
+
+## 修订（2026-10-15）：torrent 清单整体退役
+
+- `process_name` 把 BT 客户端的全部流量（WebUI、RSS、内置搜索、普通 HTTP 下载）拖进直连组，与协议探测无增量：协议探测不到的流量（出站 UDP DHT）进程名也救不了多少
+- `port` / `port_range` 条目只匹配**目的端口**：BT peer 端口随机（协议嗅探必中）、tracker 端口任意（TLS/HTTP 嗅探出域名），出站方向全部抓不到；唯一作用是入站 DHT（需端口转发），而本机在 NAT 后不做转发，纯死代码
+- UDP tracker 与 BT peer 在源码层共用 `protocol: bittorrent` 标记（`route/rule/rule_action.go:537-540`），规则层无法分离，接受 UDP tracker 直连（客户端失败自动降级 HTTP tracker，降级后走代理）
+- 变更：`torrent.yaml` 删除、`index.yaml` 移除登记、`36-torrent.json` 只剩 `protocol: bittorrent → torrent`、`38-resolve.json` 排除清单移除 `torrent`
 
 ## Consequences
 
