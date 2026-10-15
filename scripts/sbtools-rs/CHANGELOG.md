@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.4](https://github.com/shelken/proxy/compare/v0.7.3...v0.7.4) - 2026-10-15
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.7.3](https://github.com/shelken/proxy/compare/v0.7.2...v0.7.3) - 2026-10-11
 
 ### Fixed
