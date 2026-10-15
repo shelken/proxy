@@ -248,17 +248,21 @@ function verifyLocalArtifacts(): void {
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
   verifyLocalArtifacts();
-  // 先杀残留服务端再拷贝：上一次引导若在 `set -e` 早退路径死掉（如 sb check 失败），
-  // VM 里会留着旧二进制启动的 server；`cp` 覆盖正被执行的文件触发 ETXTBSY，
-  // 没有 set -e 时错误被静默吞掉，VM 继续跑旧内嵌模板——配置与规则产物对不上，
-  // 报错点却在内核启动处（实测：torrent.srs no such file）。
+  // 先等残留服务端真退出，再原子替换二进制，两个坑都要堵：
+  // 1) 上一次引导若在 `set -e` 早退路径死掉（如 sb check 失败），VM 里留着旧服务端；
+  //    直接 cp 覆盖正被执行的二进制触发 ETXTBSY，无 set -e 时静默吞掉 → 跑旧内嵌模板。
+  //    轮询等进程消失，而不是拍固定 sleep（慢机器上 sleep 不够就是一样静默）。
+  // 2) cp 到临时名 + mv：rename 作用于新 inode，即便有残留进程仍映射旧 inode 也不触发
+  //    ETXTBSY，替换本身原子。
   const r = guest(`
     set -e
     sudo -n pkill -9 -x sbtools 2>/dev/null || true
-    sleep 0.3
+    for _ in $(seq 1 100); do pgrep -x sbtools >/dev/null || break; sleep 0.05; done
+    pgrep -x sbtools >/dev/null && { echo "残留 sbtools 未在 5s 内退出" >&2; exit 1; }
     mkdir -p /work
-    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}
-    chmod +x ${GUEST_BINARY}
+    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}.new
+    chmod +x ${GUEST_BINARY}.new
+    mv -f ${GUEST_BINARY}.new ${GUEST_BINARY}
     rm -rf ${WORK}
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
