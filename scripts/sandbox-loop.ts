@@ -75,6 +75,19 @@ function ensureBinary(): void {
   const head = host(["git", "rev-parse", "HEAD"]).out.trim();
   if (!head) fail("解析 HEAD", "git rev-parse HEAD 无输出");
 
+  // CI 产物不包含工作区改动，必须在复用缓存前核对构建输入。
+  const status = host(["git", "status", "--porcelain", "--", ...BINARY_INPUTS]);
+  if (status.code !== 0) fail("检查二进制输入", status.err.trim());
+  const dirty = status.out.trim();
+  if (dirty) {
+    fail(
+      "二进制输入未提交",
+      `以下文件有未提交改动，不会体现在任何 CI 产物里（假绿风险）：\n` +
+        `  ${dirty.replaceAll("\n", "\n  ")}\n` +
+        `  先提交并推送分支，再执行 gh workflow run release-sbtools.yml --ref <分支> 并等它跑完`,
+    );
+  }
+
   const stamp = resolve(ARTIFACT_DIR, "commit");
   if (existsSync(LOCAL_BINARY) && existsSync(stamp)) {
     const cached = readFileSync(stamp, "utf-8").trim();
@@ -180,7 +193,9 @@ function listArtifactRuns(): ArtifactRun[] {
  * 改动它同样会改变产物（版本本身不在此列，它由 Cargo.toml 决定，见上面的路径）。
  */
 const BINARY_INPUTS = [
-  "scripts/sbtools-rs",
+  "scripts/sbtools-rs/src",
+  "scripts/sbtools-rs/Cargo.toml",
+  "scripts/sbtools-rs/build.rs",
   "Cargo.toml",
   "Cargo.lock",
   "config/sing-box/template.json",
@@ -235,10 +250,16 @@ function verifyLocalArtifacts(): void {
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
   verifyLocalArtifacts();
+  // 崩溃可能留下服务端；替换 inode 避免原地覆写触发 ETXTBSY。
   const r = guest(`
+    set -e
+    sudo -n pkill -9 -x sbtools 2>/dev/null || true
+    for _ in $(seq 1 100); do pgrep -x sbtools >/dev/null || break; sleep 0.05; done
+    pgrep -x sbtools >/dev/null && { echo "残留 sbtools 未在 5s 内退出" >&2; exit 1; }
     mkdir -p /work
-    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}
-    chmod +x ${GUEST_BINARY}
+    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}.new
+    chmod +x ${GUEST_BINARY}.new
+    mv -f ${GUEST_BINARY}.new ${GUEST_BINARY}
     rm -rf ${WORK}
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
