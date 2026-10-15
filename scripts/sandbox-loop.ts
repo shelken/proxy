@@ -75,10 +75,10 @@ function ensureBinary(): void {
   const head = host(["git", "rev-parse", "HEAD"]).out.trim();
   if (!head) fail("解析 HEAD", "git rev-parse HEAD 无输出");
 
-  // CI 产物只会从 commit 构建。工作区有未提交的底模/Rust 改动时，commit 间的
-  // relevantDiff 与工作区自比的 verifyLocalArtifacts 都查不出「产物内嵌模板与被测
-  // 配置不一致」——实测表现为服务端下发已删除的 rule_set，报错却在内核启动处。
-  const dirty = host(["git", "status", "--porcelain", "--", ...BINARY_INPUTS]).out.trim();
+  // CI 产物不包含工作区改动，必须在复用缓存前核对构建输入。
+  const status = host(["git", "status", "--porcelain", "--", ...BINARY_INPUTS]);
+  if (status.code !== 0) fail("检查二进制输入", status.err.trim());
+  const dirty = status.out.trim();
   if (dirty) {
     fail(
       "二进制输入未提交",
@@ -193,7 +193,9 @@ function listArtifactRuns(): ArtifactRun[] {
  * 改动它同样会改变产物（版本本身不在此列，它由 Cargo.toml 决定，见上面的路径）。
  */
 const BINARY_INPUTS = [
-  "scripts/sbtools-rs",
+  "scripts/sbtools-rs/src",
+  "scripts/sbtools-rs/Cargo.toml",
+  "scripts/sbtools-rs/build.rs",
   "Cargo.toml",
   "Cargo.lock",
   "config/sing-box/template.json",
@@ -248,12 +250,7 @@ function verifyLocalArtifacts(): void {
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
   verifyLocalArtifacts();
-  // 先等残留服务端真退出，再原子替换二进制，两个坑都要堵：
-  // 1) 上一次引导若在 `set -e` 早退路径死掉（如 sb check 失败），VM 里留着旧服务端；
-  //    直接 cp 覆盖正被执行的二进制触发 ETXTBSY，无 set -e 时静默吞掉 → 跑旧内嵌模板。
-  //    轮询等进程消失，而不是拍固定 sleep（慢机器上 sleep 不够就是一样静默）。
-  // 2) cp 到临时名 + mv：rename 作用于新 inode，即便有残留进程仍映射旧 inode 也不触发
-  //    ETXTBSY，替换本身原子。
+  // 崩溃可能留下服务端；替换 inode 避免原地覆写触发 ETXTBSY。
   const r = guest(`
     set -e
     sudo -n pkill -9 -x sbtools 2>/dev/null || true
