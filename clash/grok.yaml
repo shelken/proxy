@@ -1,0 +1,4 @@
+payload:
+  - 'DOMAIN,cli-chat-proxy.grok.com'
+  - 'DOMAIN,accounts.x.ai'
+  - 'DOMAIN,api.x.ai'
