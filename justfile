@@ -98,7 +98,8 @@ template-ios-build:
     set -euo pipefail
     d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
     trap 'rm -rf "$d"' EXIT
-    cp config/sing-box/modules/*.json config/sing-box/modules-ios/*.json "$d"
+    cp config/sing-box/modules/*.json "$d"
+    cp config/sing-box/modules-ios/*.json "$d"
     {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
     {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
 
@@ -108,7 +109,8 @@ template-ios-check:
     set -euo pipefail
     d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
     trap 'rm -rf "$d"' EXIT
-    cp config/sing-box/modules/*.json config/sing-box/modules-ios/*.json "$d"
+    cp config/sing-box/modules/*.json "$d"
+    cp config/sing-box/modules-ios/*.json "$d"
     {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null 2>&1
     trap 'rm -rf "$d" "$d.merged.json"' EXIT
     if ! diff -u config/sing-box/template-ios.json "$d.merged.json"; then
