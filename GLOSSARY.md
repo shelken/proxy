@@ -16,6 +16,9 @@
 **底模**
 sing-box 配置的公共骨架，包含双入站、内网穿透、分流策略组与 route_exclude_address；服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模
 
+**iOS 底模**
+同一批 `modules/` 经 `modules-ios/` 替换与新增后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
+
 **DNS 出口**
 访问真实 DNS 上游所使用的网络路径，可独立于应用的业务出口选择
 

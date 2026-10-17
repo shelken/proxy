@@ -60,10 +60,20 @@ describe("template.json structural verification", () => {
     // 两条成套：先给国内直连放行，再兜底 reject。单留 reject 会让国内 CDN 的
     // HTTP/3 无差别降级；只放行不 reject 则代理侧 QUIC 打进承载差的机场 UDP。
     const exempt = quicRules.find((r) => r.outbound === "direct");
-    const reject = quicRules.find((r) => r.action === "reject");
+    const reject = quicRules.find(
+      (r) => r.action === "reject" && r.rule_set === undefined,
+    );
     expect(exempt).toBeDefined();
     expect(reject).toBeDefined();
     expect(rules.indexOf(exempt)).toBeLessThan(rules.indexOf(reject));
+
+    // MyProxy 是用户显式要求走代理的清单，与 ChinaMax 重叠的域名（如 minimax.io）
+    // 不能被国内豁免直连：先 reject 降级 TCP，再由服务规则走代理（ADR-0011）。
+    const myProxyReject = quicRules.find(
+      (r) => r.action === "reject" && asArray(r.rule_set).includes("MyProxy"),
+    );
+    expect(myProxyReject?.no_drop).toBe(true);
+    expect(rules.indexOf(myProxyReject)).toBeLessThan(rules.indexOf(exempt));
 
     // 豁免必须排在广告/黑名单拦截之后：国内 CDN 承载大量统计域名（hm.baidu.com
     // 同属 ChinaMax 与 Advertising，loggw-ex.alipay.com 同属 ChinaMax 与 MyReject），
@@ -80,6 +90,16 @@ describe("template.json structural verification", () => {
   });
 
 
+  test("MyProxy-dns 先于 ChinaMax-dns，重叠域名不被国内解析抢先（ADR-0011）", () => {
+    const dnsRules = template.dns?.rules ?? [];
+    const mine = dnsRules.findIndex((r) => asArray(r.rule_set).includes("MyProxy-dns"));
+    const china = dnsRules.findIndex((r) => asArray(r.rule_set).includes("ChinaMax-dns"));
+    expect(mine).toBeGreaterThanOrEqual(0);
+    expect(mine).toBeLessThan(china);
+    expect(dnsRules[mine].server).toBe("dns-fakeip");
+    expect(asArray(dnsRules[mine].query_type)).toEqual(["A", "AAAA"]);
+  });
+
   test("configures prefer_ipv4 DNS strategy", () => {
     expect(template.dns?.strategy).toBe("prefer_ipv4");
   });
@@ -93,7 +113,7 @@ describe("template.json structural verification", () => {
     expect(template.dns?.final).not.toBe(fakeip?.tag);
     // A/AAAA 查询导流到 fakeip
     const fakeipRule = (template.dns?.rules ?? []).find(
-      (r) => r.server === fakeip?.tag,
+      (r) => r.server === fakeip?.tag && r.query_type,
     );
     expect(fakeipRule?.query_type).toContain("A");
     expect(fakeipRule?.query_type).toContain("AAAA");

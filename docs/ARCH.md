@@ -11,7 +11,7 @@ proxy/
 │   └── sbtools-rs/       # sbtools 客户端编码与服务端装配
 ├── config/
 │   ├── rules/            # 分流规则源 (自定义 *.yaml 与 geosite:/geoip: 外部引用 index.yaml)
-│   ├── sing-box/         # sing-box 生产底模 (template.json) 与沙箱测试套件
+│   ├── sing-box/         # sing-box 生产底模 (template.json、iOS 用 template-ios.json) 与沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sbtools) 与用户指南
 ├── .github/workflows/    # CI：ci-sbtools 门禁；release-plz 开版本 PR；release-sbtools 发布二进制与镜像
@@ -50,6 +50,7 @@ flowchart TD
 
 - **规则产物自动重建**：改 `index.yaml` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
 - **清单与底模引用一致**：CI 校验清单 tag 集合与底模声明的规则集相互吻合，缺一即失败
+- **底模护栏**：内核 `check` 只 `box.New` 不 `Start()`，抓不到悬空 tag 引用与规则顺序。这两类由契约测试覆盖（引用闭合、顺序契约、iOS 差异面白名单），并用变异验证确认断言真的锁住取值，见 [ADR-0012](./adr/0012-template-guardrails-order-and-refs.md)
 - **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
 - **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct`、`01-overlay`、`02-base` 命名，字典序决定优先级
 - **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态

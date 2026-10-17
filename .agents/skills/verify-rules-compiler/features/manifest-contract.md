@@ -19,12 +19,13 @@
 Preconditions: 已 `launch`
 
 - 契约通过：`doctor` 会执行 `bun scripts/rules-compile.ts check`，失败即列出漂移的 tag
-- 全量校验：`just verify` = `check-rust-fast` + `check-rust-test` + `check-template`（`template-check` + `check-singbox` + `check-deprecated` + `bun test config/sing-box/tests/template.test.ts`）+ `rules-check`；`template-check` 用内核 `sing-box merge` 重跑一遍并逐字节比对 `template.json`
+- 全量校验：`just verify` = `check-rust-fast` + `check-rust-test` + `check-template`（`template-check` + `template-test`）+ `template-mutation` + `rules-check`；`template-check` 用内核 `sing-box merge` 重跑两份产物并逐字节比对，同时做内核 check 与废弃写法检查；`template-test` 跑结构契约（引用闭合、顺序契约、iOS 差异面白名单，见 ADR-0012）；`template-mutation` 验证这些断言真的锁住取值
 - 发布侧核对：`gh api repos/shelken/proxy/contents/singbox?ref=sing-box-rules --jq length` 返回的是**文件数**（`.json` + `.srs` + 伴生，约为 tag 数的数倍），不是 tag 数
 
 ## Gotchas
 
 - `rules-check` 校验 tag 集合的四种越界，但**不比出站去向**（direct / proxy / reject），去向由底模单方面决定，清单不重复声明
-- `template.json` 由 `just template-build`（内核 `sing-box merge`）从 `modules/*.json` 生成；直接手改会在下一次构建被覆盖（`just template-check` 会先报出不一致）
+- `template.json` 与 `template-ios.json` 由 `just template-build`（内核 `sing-box merge`）从 `modules/*.json` 与 `modules-ios/*.json` 生成；直接手改会在下一次构建被覆盖（`just template-check` 会先报出不一致）
+- 新增 iOS 模块要在 `config/sing-box/tests/lib/contract.ts` 的 `IOS_MODULE_WHITELIST` 登记，否则 `template-test` 报白名单不匹配
 - 内联规则集（代码里固定的 `zone-internal`）不是清单产物，不参与 DNS 伴生要求；当前公共底模没有使用它
 - 发布 URL 指向 `sing-box-rules` 分支而非 `main`；改底模后必须等 CI 重新发布，否则 URL 仍指向旧产物
