@@ -34,6 +34,10 @@
     ],
     "rules": [
       {
+        "inbound": "ts-ep",
+        "action": "reject"
+      },
+      {
         "preferred_by": "dns-ts",
         "server": "dns-ts",
         "disable_optimistic_cache": true

@@ -77,13 +77,15 @@ jobs:
         run: |
           set -euo pipefail
           tmp=$(mktemp)
+          ios=$(mktemp -d)
+          trap 'rm -rf "$tmp" "$ios"' EXIT
           sing-box merge "$tmp" -C config/sing-box/modules
           diff -u config/sing-box/template.json "$tmp"
-          ios=$(mktemp -d)
           cp config/sing-box/modules/*.json "$ios"
           cp config/sing-box/modules-ios/*.json "$ios"
           sing-box merge "$tmp" -C "$ios"
           diff -u config/sing-box/template-ios.json "$tmp"
+          sing-box check -D "$ios" -c "$PWD/config/sing-box/template-ios.json"
         working-directory: .
 
       - name: cargo test

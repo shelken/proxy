@@ -65,4 +65,4 @@ curl -x socks5h://lan:<随机密码>@<本机局域网IP>:2081 https://example.co
 ## 注意
 
 - 本文的认证与固定出站在沙箱内以 `127.0.0.1` 监听验证，局域网设备能否连入取决于你的网络与系统防火墙
-- 若同时使用 Tailscale，iOS 底模会拒绝来自 Tailnet 的入站，Mac 的系统 Tailscale 是否可达 `2081` 取决于 Mac 上 Tailscale 的监听设置，不在本文范围
+- iOS 底模拒绝 Tailnet 连入 sing-box 路由的流量；Mac 的系统 Tailscale 是否可达 `2081` 取决于 Mac 上 Tailscale 的监听设置，不在本文范围

@@ -26,8 +26,11 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
 
   test("preferred_by ts-ep 在 DNS 劫持之后、私网直连之前", () => {
     const hijack = indexOfRule((r) => r.protocol === "dns");
-    const toTs = indexOfRule((r) => r.preferred_by !== undefined && r.outbound === "ts-ep");
+    const toTs = indexOfRule(
+      (r) => r.outbound === "ts-ep" && asArray(r.preferred_by).join() === "ts-ep",
+    );
     const priv = indexOfRule((r) => r.ip_is_private === true);
+    expect(toTs).toBeGreaterThanOrEqual(0);
     expect(toTs).toBeGreaterThan(hijack);
     expect(toTs).toBeLessThan(priv);
   });
@@ -52,7 +55,9 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
 
   test("MagicDNS 规则排在 ChinaMax-dns 与 FakeIP 之前，且不接管默认解析", () => {
     const dnsRules = ios.dns.rules as Array<Record<string, any>>;
-    const ts = dnsRules.findIndex((r) => r.server === "dns-ts");
+    const ts = dnsRules.findIndex(
+      (r) => r.server === "dns-ts" && asArray(r.preferred_by).join() === "dns-ts",
+    );
     const china = dnsRules.findIndex((r) => asArray(r.rule_set).includes("ChinaMax-dns"));
     const fake = dnsRules.findIndex((r) => r.server === "dns-fakeip");
     expect(ts).toBeGreaterThanOrEqual(0);
@@ -60,6 +65,16 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
     expect(ts).toBeLessThan(fake);
     const server = ios.dns.servers.find((s) => s.tag === "dns-ts");
     expect(server.accept_default_resolvers ?? false).toBe(false);
+    expect(server.type).toBe("tailscale");
+    expect(server.endpoint).toBe("ts-ep");
+  });
+
+  // Peer 的 DNS 查询由 tailscale 依赖直接交给 dnsRouter（endpoint.go HandlePeerDNSQuery），
+  // 不经过 route.rules，路由层的入站拒绝覆盖不到，DNS 层必须有自己的入站拒绝。
+  test("dns.rules 首条拒绝 ts-ep 入站，且早于 MagicDNS 规则与静态应答", () => {
+    const dnsRules = ios.dns.rules as Array<Record<string, any>>;
+    expect(asArray(dnsRules[0].inbound)).toEqual(["ts-ep"]);
+    expect(dnsRules[0].action).toBe("reject");
   });
 
   test("Mac 底模不含 Tailscale endpoint 且保留私网排除", () => {
