@@ -6,3 +6,4 @@
 | [01-mac-sfm.md](./01-mac-sfm.md) | Mac + SFM：Remote Profile 导入、配置更新、面板节点切换、已知行为与排查 |
 | [02-overlay.md](./02-overlay.md) | overlay：覆盖底模、自定义 host 与通配应答的写法与限制 |
 | [03-lan-share.md](./03-lan-share.md) | 局域网共享本机代理：用 overlay 新增带认证的入口、开关与验证 |
+| [04-ios-tailscale.md](./04-ios-tailscale.md) | iOS 单 VPN：用 iOS 底模内嵌 Tailscale，同时代理与访问内网，含前置、登录、验证与排障 |

@@ -13,3 +13,4 @@
 - [011 · controller 守卫静默回退,只读顶层漏掉 overlay 形态](./011-controller-guard-silent-fallback.md)
 - [012 · lane 证据落 /tmp 随重启蒸发,子代理落盘声明不实](./012-tmp-evidence-volatile-and-false-claims.md)
 - [013 · 验证直接跑旧 release 产物得出假阴性](./013-stale-release-binary-false-negative.md)
+- [014 · iOS 底模验证止于内核 check，缺口由 CI 与外部审查才暴露](./014-ios-template-verified-below-real-pipeline.md)
