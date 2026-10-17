@@ -73,68 +73,128 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 
 # --- 生产底模装配与校验 ---
-# 从 config/sing-box/modules 构建 template.json
-# 用官方 merge：文件名（前缀数字）决定 route.rules / outbounds 的数组顺序
+# 一个入口产出两份底模：Mac（modules/）与 iOS（modules/ + modules-ios/）。
+# 不需要记住该跑哪一条，也不需要判断改动落在哪一侧：两侧都重算，只报告真的变了的那份。
+# 合并用官方 merge：文件名（前缀数字）决定 route.rules / outbounds 的数组顺序。
 template-build:
-    @{{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
-    @just check-singbox
+    #!/usr/bin/env bash
+    set -euo pipefail
+    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-build.XXXXXX")"
+    trap 'rm -rf "$d"' EXIT
+    mkdir "$d/ios"
+    # iOS 以 modules 为底，modules-ios 同名替换并新增（ADR-0010）。
+    # 必须复制到同一目录：`-C` 按完整路径排序合并，两个目录分开传会让 modules-ios 排在前面而被覆盖。
+    cp config/sing-box/modules/*.json "$d/ios"
+    cp config/sing-box/modules-ios/*.json "$d/ios"
 
-# 校验 template.json 与 modules 一致：用内核重跑一次逐字节比对
+    # 先合并到临时文件再比对，才能区分「重算了」与「真的变了」。
+    # merge 的 stderr 平常只写输出路径，失败时才是错误信息，所以只在失败时展示。
+    emit() {
+        if ! {{sing_box_cmd}} merge "$d/out.json" -C "$2" >"$d/merge.log" 2>&1; then
+            cat "$d/merge.log"
+            echo "❌ 合并 $1 失败"
+            exit 1
+        fi
+        if cmp -s "$1" "$d/out.json"; then
+            echo "·  $1 无变化"
+        else
+            cp "$d/out.json" "$1"
+            echo "✏️  $1 已更新"
+        fi
+    }
+    emit config/sing-box/template.json config/sing-box/modules
+    emit config/sing-box/template-ios.json "$d/ios"
+
+    {{sing_box_cmd}} check -c config/sing-box/template.json
+    {{sing_box_cmd}} check -c config/sing-box/template-ios.json
+
+# 校验两份底模与 modules 一致，并做结构 check 与废弃写法检查。
+# check 只做 box.New 不 Start()，抓不到悬空 tag 引用与规则顺序，那部分由 template-test 覆盖。
 template-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    tmp="$(mktemp "${TMPDIR:-/tmp}/sing-box-template.XXXXXX")"
-    trap 'rm -f "$tmp"' EXIT
-    {{sing_box_cmd}} merge "$tmp" -C config/sing-box/modules >/dev/null
-    if ! diff -u config/sing-box/template.json "$tmp"; then
-        echo "❌ config/sing-box/template.json 与 modules/ 不一致，请运行 just template-build 更新底模"
-        exit 1
-    fi
-    echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
+    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-check.XXXXXX")"
+    trap 'rm -rf "$d"' EXIT
+    mkdir "$d/ios"
+    cp config/sing-box/modules/*.json "$d/ios"
+    cp config/sing-box/modules-ios/*.json "$d/ios"
 
-# iOS 底模：modules 为底，modules-ios 同名替换并新增模块后合并（ADR-0010）
-template-ios-build:
+    if ! {{sing_box_cmd}} merge "$d/mac.json" -C config/sing-box/modules >"$d/merge-mac.log" 2>&1; then
+        cat "$d/merge-mac.log"; echo "❌ 合并 template.json 失败"; exit 1
+    fi
+    if ! {{sing_box_cmd}} merge "$d/ios.json" -C "$d/ios" >"$d/merge-ios.log" 2>&1; then
+        cat "$d/merge-ios.log"; echo "❌ 合并 template-ios.json 失败"; exit 1
+    fi
+
+    failed=0
+    for pair in "template.json:$d/mac.json" "template-ios.json:$d/ios.json"; do
+        want="config/sing-box/${pair%%:*}"
+        got="${pair##*:}"
+        if diff -u "$want" "$got"; then
+            echo "✅ $want 与 modules 一致"
+        else
+            echo "❌ $want 与 modules 不一致，请运行 just template-build"
+            failed=1
+        fi
+    done
+    [ "$failed" -eq 0 ] || exit 1
+
+    # 一份 check 同时覆盖两件事：配置结构合法 + 无废弃写法。
+    # 内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
+    for tpl in template.json template-ios.json; do
+        out=$({{sing_box_cmd}} check -c "config/sing-box/$tpl" 2>&1) || {
+            printf '%s\n' "$out"
+            echo "❌ config/sing-box/$tpl 未通过内核 check"
+            exit 1
+        }
+        if printf '%s\n' "$out" | grep -qi deprecated; then
+            printf '%s\n' "$out"
+            echo "❌ config/sing-box/$tpl 存在废弃写法（见上方 WARN）"
+            exit 1
+        fi
+    done
+    echo "✅ 两份底模通过内核 check，无废弃写法"
+
+# 底模结构契约测试：引用闭合、顺序契约、iOS 差异面白名单（ADR-0012）
+template-test:
     #!/usr/bin/env bash
     set -euo pipefail
-    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
-    trap 'rm -rf "$d"' EXIT
-    cp config/sing-box/modules/*.json "$d"
-    cp config/sing-box/modules-ios/*.json "$d"
-    {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
-    {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
-
-# 校验 template-ios.json 与 modules + modules-ios 一致
-template-ios-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
-    trap 'rm -rf "$d"' EXIT
-    cp config/sing-box/modules/*.json "$d"
-    cp config/sing-box/modules-ios/*.json "$d"
-    {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null 2>&1
-    trap 'rm -rf "$d" "$d.merged.json"' EXIT
-    if ! diff -u config/sing-box/template-ios.json "$d.merged.json"; then
-        echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-ios-build"
+    # 内核路径缺失时直接报清楚，否则会落到沙箱默认路径、报出无关的「文件不存在」
+    kernel="${SING_BOX:-$(command -v sing-box || true)}"
+    if [ -z "$kernel" ]; then
+        echo "❌ 找不到 sing-box：设置 SING_BOX，或确保它在 PATH 上（mise exec -- bun test ...）"
         exit 1
     fi
-    {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
-    echo "✅ template-ios.json 检查一致"
+    SING_BOX="$kernel" bun test \
+        config/sing-box/tests/template.test.ts \
+        config/sing-box/tests/ios-template.test.ts \
+        config/sing-box/tests/order-contract.test.ts
 
-# 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
+# 变异验证：把已知有害的改动施加到临时副本，断言必须失败（ADR-0012）。
+# 放在 verify 而非 pre-commit：要跑十余次真实测试，秒级成本不适合每次提交。
+template-mutation:
+    @bun run scripts/verify-assertions.ts
+
+# 校验标准生产底模：单独跑时用，check-template 已内含同等检查
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
-# 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败
+# 废弃写法检查：单独跑时用，check-template 已内含同等检查
 check-deprecated:
     #!/usr/bin/env bash
-    out=$({{sing_box_cmd}} check -C config/sing-box/modules 2>&1)
-    rc=$?
-    printf '%s\n' "$out"
-    [ "$rc" -eq 0 ] || exit "$rc"
-    if printf '%s\n' "$out" | grep -qi deprecated; then
-        echo "❌ config/sing-box/modules 存在废弃写法（见上方 WARN）"
-        exit 1
-    fi
+    set -euo pipefail
+    failed=0
+    for tpl in template.json template-ios.json; do
+        out=$({{sing_box_cmd}} check -c "config/sing-box/$tpl" 2>&1)
+        rc=$?
+        printf '%s\n' "$out"
+        [ "$rc" -eq 0 ] || exit "$rc"
+        if printf '%s\n' "$out" | grep -qi deprecated; then
+            echo "❌ config/sing-box/$tpl 存在废弃写法（见上方 WARN）"
+            failed=1
+        fi
+    done
+    [ "$failed" -eq 0 ]
 
 
 # --- 规则产物 ---
@@ -161,16 +221,13 @@ check-rust-fast:
 check-rust-test:
     cargo test --workspace --locked
 
-# sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
+# sing-box 底模：两侧一致 + 结构 check + 废弃写法 + 契约测试
 check-template:
     @just template-check
-    @just template-ios-check
-    @just check-singbox
-    @just check-deprecated
-    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts
+    @just template-test
 
-# 全量检查（手动跑 / CI 同口径）
-verify: check-rust-fast check-rust-test check-template rules-check
+# 全量检查（手动跑 / CI 同口径）；变异验证只在这里跑，见 template-mutation
+verify: check-rust-fast check-rust-test check-template template-mutation rules-check
 
 
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点

@@ -13,6 +13,8 @@ on:
       - "config/sing-box/modules/**"
       - "config/sing-box/modules-ios/**"
       - "config/sing-box/template-ios.json"
+      - "config/sing-box/tests/**"
+      - "scripts/verify-assertions.ts"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -72,21 +74,22 @@ jobs:
           cache: true
           install_args: sing-box
 
-      # 校验底模与各模块合并结果一致，口径与 just template-check 保持一致
-      - name: verify template modules consistency
-        run: |
-          set -euo pipefail
-          tmp=$(mktemp)
-          ios=$(mktemp -d)
-          trap 'rm -rf "$tmp" "$ios"' EXIT
-          sing-box merge "$tmp" -C config/sing-box/modules
-          diff -u config/sing-box/template.json "$tmp"
-          cp config/sing-box/modules/*.json "$ios"
-          cp config/sing-box/modules-ios/*.json "$ios"
-          sing-box merge "$tmp" -C "$ios"
-          diff -u config/sing-box/template-ios.json "$tmp"
-          sing-box check -D "$ios" -c "$PWD/config/sing-box/template-ios.json"
-        working-directory: .
+      # 底模校验与本地共用同一套 just recipe，避免 CI 与本地出现两套语义。
+      # check-template = 两份产物与 modules 一致 + 内核 check + 废弃写法 + 契约测试。
+      - uses: extractions/setup-just@v4
+
+      # 契约测试与变异验证用 bun 跑
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: 底模一致性与结构契约
+        run: just check-template
+
+      # 变异验证：确认契约断言真的锁住取值（ADR-0012）。
+      # 单放一步，失败时能直接看出是「底模坏了」还是「断言退化成恒真」。
+      - name: 契约断言的变异验证
+        run: just template-mutation
 
       - name: cargo test
         run: cargo test --locked --all-targets

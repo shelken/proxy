@@ -26,9 +26,10 @@ repos:
         language: system
         files: ^config/sing-box/
         pass_filenames: false
+      # 改了 justfile 里的装配命令，要确保它仍能跑通并产出与产物一致的结果
       - id: check-justfile
-        name: justfile 废弃写法检查
-        entry: just check-deprecated
+        name: justfile 装配命令可执行
+        entry: just template-check
         language: system
         files: ^justfile$
         pass_filenames: false
