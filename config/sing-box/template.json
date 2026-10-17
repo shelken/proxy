@@ -69,6 +69,14 @@
         "server": "dns-local-system"
       },
       {
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "rule_set": "MyProxy-dns",
+        "server": "dns-fakeip"
+      },
+      {
         "rule_set": "ChinaMax-dns",
         "server": "dns-direct-cn"
       },
@@ -447,6 +455,16 @@
           443,
           80
         ],
+        "rule_set": "MyProxy",
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
         "rule_set": [
           "ChinaMax",
           "Lan",
@@ -603,6 +621,12 @@
         "type": "remote",
         "tag": "MyReject-dns",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MyProxy-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy-dns.srs",
         "update_interval": "24h0m0s"
       },
       {

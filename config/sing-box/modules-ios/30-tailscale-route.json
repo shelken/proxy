@@ -1,0 +1,11 @@
+{
+  "route": {
+    "rules": [
+      {
+        "preferred_by": "ts-ep",
+        "action": "route",
+        "outbound": "ts-ep"
+      }
+    ]
+  }
+}

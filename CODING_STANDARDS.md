@@ -18,6 +18,7 @@
 ## sing-box 与规则
 
 - `template.json` 由 `modules/` 经官方 `sing-box merge` 生成：只改 `modules/`，再执行 `just template-build`
+- `template-ios.json` 由 `modules/` 加 `modules-ios/` 生成：`modules-ios/` 的同名文件替换、其余新增，只改这两处，再执行 `just template-ios-build`，决策见 `docs/adr/0010`
 - `modules/` 文件名前缀决定合并顺序，即 `route.rules` 与 `outbounds` 的数组顺序：`00`-`29` 为入站、DNS 与路由全局属性，`30`-`39` 为前置动作、私网守卫、拦截、QUIC 守卫、模式开关、BT 与下载分流、解析与核心出站组，`41`-`63` 为自有清单服务，`65`-`69` 为外部清单服务，`71`-`79` 为默认直连分组，`80` 为兜底规则，`90` 为收尾；每个服务对应独立文件，号段留空便于插队；新增服务只需新建文件并在 `index.yaml` 登记 rule_set
 - 服务顺序的三条策略：**拦截 > 模式开关 > 服务分流**（`32-reject.json` 早于 `33-quic-guard.json`：QUIC 的国内豁免会把同属 `ChinaMax` 的统计域名判成直连，实测 `hm.baidu.com` 同属 `Advertising`、`loggw-ex.alipay.com` 同属 `MyReject`，见 `docs/adr/0008`）；`32-reject.json` 早于 `34-clash-mode.json` 与全部服务，否则 `global` 模式会连同广告与黑名单一起放行，按域名关键词分流的规则也会截胡本该 reject 的域名；自有清单默认排在外部清单之前，避免宽泛的上游清单抢占自有域名，分流类 `MyDirect` 与 `MyProxy` 排在所有服务规则之前（`40-my-rules.json`）；出站组默认 `direct` 的服务模块排到服务号段末尾，避免默认直连组抢占代理流量；理由见 `docs/adr/0007-order-service-rules-own-lists-first.md`
 - BT 直连经 `torrent` 策略组下发（默认 `direct`，候选含 `selfhost` / `proxy`），识别只按协议嗅探（`protocol: bittorrent`），不依赖清单、端口与进程名；tracker 域名不单独建组，落 `final: proxy`，理由见 `docs/adr/0009`

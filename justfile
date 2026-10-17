@@ -92,6 +92,32 @@ template-check:
     fi
     echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
 
+# iOS 底模：modules 为底，modules-ios 同名替换并新增模块后合并（ADR-0010）
+template-ios-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
+    trap 'rm -rf "$d"' EXIT
+    cp config/sing-box/modules/*.json config/sing-box/modules-ios/*.json "$d"
+    {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
+    {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
+
+# 校验 template-ios.json 与 modules + modules-ios 一致
+template-ios-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
+    trap 'rm -rf "$d"' EXIT
+    cp config/sing-box/modules/*.json config/sing-box/modules-ios/*.json "$d"
+    {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null 2>&1
+    trap 'rm -rf "$d" "$d.merged.json"' EXIT
+    if ! diff -u config/sing-box/template-ios.json "$d.merged.json"; then
+        echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-ios-build"
+        exit 1
+    fi
+    {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
+    echo "✅ template-ios.json 检查一致"
+
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
@@ -136,9 +162,10 @@ check-rust-test:
 # sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
 check-template:
     @just template-check
+    @just template-ios-check
     @just check-singbox
     @just check-deprecated
-    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts
+    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts
 
 # 全量检查（手动跑 / CI 同口径）
 verify: check-rust-fast check-rust-test check-template rules-check

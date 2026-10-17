@@ -1,0 +1,12 @@
+{
+  "endpoints": [
+    {
+      "type": "tailscale",
+      "tag": "ts-ep",
+      "state_directory": "tailscale-ios",
+      "hostname": "singbox-ios",
+      "accept_routes": true,
+      "system_interface": false
+    }
+  ]
+}

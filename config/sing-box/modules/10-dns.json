@@ -88,6 +88,16 @@
       },
       {
         "rule_set": [
+          "MyProxy-dns"
+        ],
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "dns-fakeip"
+      },
+      {
+        "rule_set": [
           "ChinaMax-dns"
         ],
         "server": "dns-direct-cn"
@@ -123,6 +133,13 @@
         "tag": "MyReject-dns",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyProxy-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy-dns.srs",
         "update_interval": "1d"
       },
       {

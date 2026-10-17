@@ -8,6 +8,18 @@
           80
         ],
         "rule_set": [
+          "MyProxy"
+        ],
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "rule_set": [
           "ChinaMax",
           "Lan",
           "cftunnel",
