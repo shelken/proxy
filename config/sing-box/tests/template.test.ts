@@ -331,6 +331,32 @@ describe("template.json structural verification", () => {
     }
   });
 
+  test("MyDirect/MyProxy 排在所有服务规则之前（ADR-0007）", () => {
+    const rules = template.route?.rules ?? [];
+    const myDirect = rules.findIndex(
+      (r) => r.outbound === "direct" && asArray(r.rule_set).includes("MyDirect"),
+    );
+    const myProxy = rules.findIndex(
+      (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
+    );
+    // 服务分流：出站为具体策略组（非 direct/proxy 等通用出站）
+    const serviceOutbounds = new Set(
+      (template.outbounds ?? [])
+        .filter((o) => o.type === "selector" || o.type === "urltest")
+        .map((o) => o.tag),
+    );
+    for (const generic of ["direct", "proxy", "torrent", "download", "ts-ep"])
+      serviceOutbounds.delete(generic);
+    const firstService = rules.findIndex(
+      (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
+    );
+    expect(myDirect).toBeGreaterThanOrEqual(0);
+    expect(myProxy).toBeGreaterThanOrEqual(0);
+    expect(firstService).toBeGreaterThan(-1);
+    expect(myDirect).toBeLessThan(firstService);
+    expect(myProxy).toBeLessThan(firstService);
+  });
+
   test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
     const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>

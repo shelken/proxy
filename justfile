@@ -73,11 +73,29 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 
 # --- 生产底模装配与校验 ---
-# 从 config/sing-box/modules 构建 template.json
-# 用官方 merge：文件名（前缀数字）决定 route.rules / outbounds 的数组顺序
+# 单入口：一次重建 mac 与 iOS 两份底模。
+# 开发时只跑这一条命令，无需记住两个产物各自怎么生成；
+# 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
-    @{{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
-    @just check-singbox
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # mac：直接从 modules 合并（文件名前缀决定数组顺序）
+    {{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
+    # iOS：modules 为底，modules-ios 同名替换并新增（ADR-0010）。
+    # 分两步 cp 是为了兼容 GNU cp 的 -C 目录覆盖行为（户检 014）
+    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
+    trap 'rm -rf "$d"' EXIT
+    cp config/sing-box/modules/*.json "$d"
+    cp config/sing-box/modules-ios/*.json "$d"
+    {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
+    # 报告哪份产物变了，方便确认改动范围没超出预期
+    for t in template.json template-ios.json; do
+        if git diff --quiet -- "config/sing-box/$t"; then
+            echo "✅ config/sing-box/$t 未变化"
+        else
+            echo "📝 config/sing-box/$t 已更新"
+        fi
+    done
 
 # 校验 template.json 与 modules 一致：用内核重跑一次逐字节比对
 template-check:
@@ -92,16 +110,7 @@ template-check:
     fi
     echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
 
-# iOS 底模：modules 为底，modules-ios 同名替换并新增模块后合并（ADR-0010）
-template-ios-build:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
-    trap 'rm -rf "$d"' EXIT
-    cp config/sing-box/modules/*.json "$d"
-    cp config/sing-box/modules-ios/*.json "$d"
-    {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
-    {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
+# iOS 底模由 just template-build 一并生成，不再单独提供 build 入口
 
 # 校验 template-ios.json 与 modules + modules-ios 一致
 template-ios-check:
@@ -114,7 +123,7 @@ template-ios-check:
     {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null 2>&1
     trap 'rm -rf "$d" "$d.merged.json"' EXIT
     if ! diff -u config/sing-box/template-ios.json "$d.merged.json"; then
-        echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-ios-build"
+        echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-build"
         exit 1
     fi
     {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
