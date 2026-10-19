@@ -43,7 +43,7 @@ overlay: |
 | `subs` | 二选一 | 机场订阅 URL 列表 |
 | `nodes` | 二选一 | 私有节点 URI，支持 `ss` / `hysteria2` / `hy2` / `anytls` |
 | `overlay` | 否 | 原生 sing-box JSON，覆盖在底模之上 |
-| `template_url` | 否 | 远程底模地址，仅支持 https，替代服务端内嵌底模 |
+| `template_url` | 否 | 远程底模地址，仅支持 https，替代服务端内嵌底模；Mac 用 `template.json`，iOS 用 `template-ios.json`，见 [04-ios-tailscale.md](./04-ios-tailscale.md) |
 
 写法要点：
 
