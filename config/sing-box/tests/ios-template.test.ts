@@ -2,14 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
+import {
+  asArray,
+  assertMyDirectAndProxyBeforeServices,
+  assertMyProxyDnsBeforeChinaMax,
+  assertMyProxyQuicBeforeExempt,
+  assertRejectBeforeClashMode,
+} from "./lib/contracts.ts";
 
 const load = async (name: string) =>
   JSON.parse(await Bun.file(resolve(import.meta.dir, "..", name)).text());
 const ios = await load("template-ios.json");
 const mac = await load("template.json");
 
-const asArray = <T>(v: T | T[] | undefined): T[] =>
-  v === undefined ? [] : Array.isArray(v) ? v : [v];
 const rules = ios.route.rules as Array<Record<string, any>>;
 
 // --- 提取的契约断言函数（供正向契约测试与变异验证复用）---
@@ -39,41 +44,6 @@ export const assertMagicDns = (dns: Record<string, any>) => {
   expect(server?.accept_default_resolvers ?? false).toBe(false);
   expect(server?.type).toBe("tailscale");
   expect(server?.endpoint).toBe("ts-ep");
-};
-
-export const assertRejectBeforeClashMode = (rules: Array<Record<string, any>>) => {
-  const firstClashMode = rules.findIndex((r) => r.clash_mode !== undefined);
-  expect(firstClashMode).toBeGreaterThan(-1);
-  rules.forEach((r, i) => {
-    if (r.action === "reject") expect(i).toBeLessThan(firstClashMode);
-  });
-};
-
-export const assertMyDirectAndProxyBeforeServices = (
-  rules: Array<Record<string, any>>,
-  outbounds: Array<{ tag: string; type: string }>,
-) => {
-  const serviceOutbounds = new Set(
-    outbounds
-      .filter((o) => o.type === "selector" || o.type === "urltest")
-      .map((o) => o.tag),
-  );
-  for (const generic of ["direct", "proxy", "torrent", "download", "ts-ep"])
-    serviceOutbounds.delete(generic);
-  const myDirect = rules.findIndex(
-    (r) => r.outbound === "direct" && asArray(r.rule_set).includes("MyDirect"),
-  );
-  const myProxy = rules.findIndex(
-    (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
-  );
-  const firstService = rules.findIndex(
-    (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
-  );
-  expect(myDirect).toBeGreaterThanOrEqual(0);
-  expect(myProxy).toBeGreaterThanOrEqual(0);
-  expect(firstService).toBeGreaterThan(-1);
-  expect(myDirect).toBeLessThan(firstService);
-  expect(myProxy).toBeLessThan(firstService);
 };
 
 export const IOS_MODULES_WHITELIST = [
@@ -152,6 +122,14 @@ describe("共享顺序契约（iOS 侧）", () => {
   test("MyDirect/MyProxy 排在所有服务规则之前（ADR-0007）", () => {
     assertMyDirectAndProxyBeforeServices(rules, ios.outbounds);
   });
+
+  test("MyProxy 的 QUIC 拒绝先于国内豁免（ADR-0011）", () => {
+    assertMyProxyQuicBeforeExempt(rules);
+  });
+
+  test("MyProxy-dns 先于 ChinaMax-dns（ADR-0011）", () => {
+    assertMyProxyDnsBeforeChinaMax(ios.dns.rules);
+  });
 });
 
 // iOS 差异面必须显式登记：modules-ios/ 出现白名单外的文件即失败，
@@ -199,6 +177,28 @@ describe("变异验证：断言能拦住坏情况", () => {
     const [moved] = r.splice(proxyIdx, 1);
     r.push(moved);
     expect(() => assertMyDirectAndProxyBeforeServices(r, ios.outbounds)).toThrow();
+  });
+
+  test("MyProxy 的 QUIC 拒绝移到国内豁免之后 → assertMyProxyQuicBeforeExempt 必须失败", () => {
+    const bad = clone(ios);
+    const r = bad.route.rules;
+    const idx = r.findIndex(
+      (x: any) => x.action === "reject" && asArray(x.rule_set).includes("MyProxy"),
+    );
+    const [moved] = r.splice(idx, 1);
+    const exemptIdx = r.findIndex((x: any) => x.network === "udp" && x.outbound === "direct");
+    r.splice(exemptIdx + 1, 0, moved);
+    expect(() => assertMyProxyQuicBeforeExempt(r)).toThrow();
+  });
+
+  test("MyProxy-dns 移到 ChinaMax-dns 之后 → assertMyProxyDnsBeforeChinaMax 必须失败", () => {
+    const bad = clone(ios);
+    const d = bad.dns.rules;
+    const idx = d.findIndex((x: any) => asArray(x.rule_set).includes("MyProxy-dns"));
+    const [moved] = d.splice(idx, 1);
+    const chinaIdx = d.findIndex((x: any) => asArray(x.rule_set).includes("ChinaMax-dns"));
+    d.splice(chinaIdx + 1, 0, moved);
+    expect(() => assertMyProxyDnsBeforeChinaMax(d)).toThrow();
   });
 
   test("路由 preferred_by 改成不存在的 tag → assertPreferredByTsEp 必须失败（防 postmortem-014 恒真坑）", () => {

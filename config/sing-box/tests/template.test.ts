@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
+import {
+  asArray,
+  assertMyDirectAndProxyBeforeServices,
+  assertMyProxyDnsBeforeChinaMax,
+  assertMyProxyQuicBeforeExempt,
+  assertRejectBeforeClashMode,
+} from "./lib/contracts.ts";
 
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
 
-// 内核 merge 的输出会把单元素数组写成标量、省略默认值 `action: "route"`、
+// 内核 merge 的输出会省略默认值 `action: "route"`、
 // 把 default_domain_resolver 收成字符串，断言要对两种形态都成立。
-const asArray = <T>(v: T | T[] | undefined): T[] =>
-  v === undefined ? [] : Array.isArray(v) ? v : [v];
 const actionOf = (rule: { action?: string }): string => rule.action ?? "route";
 const resolverServer = (v: unknown): string | undefined =>
   typeof v === "string" ? v : (v as { server?: string } | undefined)?.server;
@@ -67,13 +72,7 @@ describe("template.json structural verification", () => {
     expect(reject).toBeDefined();
     expect(rules.indexOf(exempt)).toBeLessThan(rules.indexOf(reject));
 
-    // MyProxy 是用户显式要求走代理的清单，与 ChinaMax 重叠的域名（如 minimax.io）
-    // 不能被国内豁免直连：先 reject 降级 TCP，再由服务规则走代理（ADR-0011）。
-    const myProxyReject = quicRules.find(
-      (r) => r.action === "reject" && asArray(r.rule_set).includes("MyProxy"),
-    );
-    expect(myProxyReject?.no_drop).toBe(true);
-    expect(rules.indexOf(myProxyReject)).toBeLessThan(rules.indexOf(exempt));
+    assertMyProxyQuicBeforeExempt(rules);
 
     // 豁免必须排在广告/黑名单拦截之后：国内 CDN 承载大量统计域名（hm.baidu.com
     // 同属 ChinaMax 与 Advertising，loggw-ex.alipay.com 同属 ChinaMax 与 MyReject），
@@ -91,13 +90,7 @@ describe("template.json structural verification", () => {
 
 
   test("MyProxy-dns 先于 ChinaMax-dns，重叠域名不被国内解析抢先（ADR-0011）", () => {
-    const dnsRules = template.dns?.rules ?? [];
-    const mine = dnsRules.findIndex((r) => asArray(r.rule_set).includes("MyProxy-dns"));
-    const china = dnsRules.findIndex((r) => asArray(r.rule_set).includes("ChinaMax-dns"));
-    expect(mine).toBeGreaterThanOrEqual(0);
-    expect(mine).toBeLessThan(china);
-    expect(dnsRules[mine].server).toBe("dns-fakeip");
-    expect(asArray(dnsRules[mine].query_type)).toEqual(["A", "AAAA"]);
+    assertMyProxyDnsBeforeChinaMax(template.dns?.rules ?? []);
   });
 
   test("configures prefer_ipv4 DNS strategy", () => {
@@ -313,48 +306,13 @@ describe("template.json structural verification", () => {
     }
   });
 
-  test("拦截规则先于 clash_mode 与分流服务", () => {
-    // ADR-0008：clash_mode 只能决定"业务走哪条线路"，不能顺手放行广告与黑名单。
-    // 排在 clash_mode 之前，global 模式下黑名单才仍然被拦截。
-    const rules = template.route?.rules ?? [];
-    const firstClashModeIndex = rules.findIndex((r) => r.clash_mode !== undefined);
-    expect(firstClashModeIndex).toBeGreaterThan(-1);
-
-    const rejectIndices = rules
-      .map((r, i) => (r.action === "reject" ? i : -1))
-      .filter((i) => i >= 0);
-    expect(rejectIndices.length).toBeGreaterThan(0);
-    // 含 QUIC 兜底：守卫必须在 clash_mode 之前，direct 模式下境外 QUIC 才仍被拒
-    // （旧序 clash_mode: direct 在前会让该模式下 QUIC 全放行，见 ADR-0008 决策 6）。
-    for (const i of rejectIndices) {
-      expect(i).toBeLessThan(firstClashModeIndex);
-    }
+  test("拦截规则先于 clash_mode（ADR-0008）", () => {
+    // 含 QUIC 兜底：守卫必须在 clash_mode 之前，direct 模式下境外 QUIC 才仍被拒（ADR-0008 决策 6）。
+    assertRejectBeforeClashMode(template.route?.rules ?? []);
   });
 
   test("MyDirect/MyProxy 排在所有服务规则之前（ADR-0007）", () => {
-    const rules = template.route?.rules ?? [];
-    const myDirect = rules.findIndex(
-      (r) => r.outbound === "direct" && asArray(r.rule_set).includes("MyDirect"),
-    );
-    const myProxy = rules.findIndex(
-      (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
-    );
-    // 服务分流：出站为具体策略组（非 direct/proxy 等通用出站）
-    const serviceOutbounds = new Set(
-      (template.outbounds ?? [])
-        .filter((o) => o.type === "selector" || o.type === "urltest")
-        .map((o) => o.tag),
-    );
-    for (const generic of ["direct", "proxy", "torrent", "download", "ts-ep"])
-      serviceOutbounds.delete(generic);
-    const firstService = rules.findIndex(
-      (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
-    );
-    expect(myDirect).toBeGreaterThanOrEqual(0);
-    expect(myProxy).toBeGreaterThanOrEqual(0);
-    expect(firstService).toBeGreaterThan(-1);
-    expect(myDirect).toBeLessThan(firstService);
-    expect(myProxy).toBeLessThan(firstService);
+    assertMyDirectAndProxyBeforeServices(template.route?.rules ?? [], template.outbounds ?? []);
   });
 
   test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {

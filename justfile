@@ -88,9 +88,9 @@ template-build:
     cp config/sing-box/modules/*.json "$d"
     cp config/sing-box/modules-ios/*.json "$d"
     {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
-    # 报告哪份产物变了，方便确认改动范围没超出预期
+    # 报告哪份产物变了，方便确认改动范围没超出预期；对比 HEAD，已暂存的改动也算变化
     for t in template.json template-ios.json; do
-        if git diff --quiet -- "config/sing-box/$t"; then
+        if git diff --quiet HEAD -- "config/sing-box/$t"; then
             echo "✅ config/sing-box/$t 未变化"
         else
             echo "📝 config/sing-box/$t 已更新"
@@ -117,11 +117,10 @@ template-ios-check:
     #!/usr/bin/env bash
     set -euo pipefail
     d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
-    trap 'rm -rf "$d"' EXIT
+    trap 'rm -rf "$d" "$d.merged.json"' EXIT
     cp config/sing-box/modules/*.json "$d"
     cp config/sing-box/modules-ios/*.json "$d"
-    {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null 2>&1
-    trap 'rm -rf "$d" "$d.merged.json"' EXIT
+    {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null
     if ! diff -u config/sing-box/template-ios.json "$d.merged.json"; then
         echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-build"
         exit 1
@@ -133,17 +132,24 @@ template-ios-check:
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
-# 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败
+# 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
+# iOS 查合并产物：modules-ios/ 单独 check 缺共享模块会报错，产物与源码的一致性由 template-ios-check 保证。
 check-deprecated:
     #!/usr/bin/env bash
-    out=$({{sing_box_cmd}} check -C config/sing-box/modules 2>&1)
-    rc=$?
-    printf '%s\n' "$out"
-    [ "$rc" -eq 0 ] || exit "$rc"
-    if printf '%s\n' "$out" | grep -qi deprecated; then
-        echo "❌ config/sing-box/modules 存在废弃写法（见上方 WARN）"
-        exit 1
-    fi
+    set -uo pipefail
+    # -D 把内核工作目录放到临时目录，Tailscale 状态目录等相对路径不落进仓库
+    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-deprecated.XXXXXX")"
+    trap 'rm -rf "$work"' EXIT
+    for target in "-C $PWD/config/sing-box/modules" "-c $PWD/config/sing-box/template-ios.json"; do
+        out=$({{sing_box_cmd}} check -D "$work" $target 2>&1)
+        rc=$?
+        printf '%s\n' "$out"
+        [ "$rc" -eq 0 ] || exit "$rc"
+        if printf '%s\n' "$out" | grep -qi deprecated; then
+            echo "❌ ${target#* } 存在废弃写法（见上方 WARN）"
+            exit 1
+        fi
+    done
 
 
 # --- 规则产物 ---
