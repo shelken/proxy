@@ -1,5 +1,5 @@
 //! iOS 底模走真实装配（节点注入、策略组展开、保留标签）后必须仍被内核接受（ADR-0010）。
-//! 底模含 `endpoints` 与指向 endpoint 的路由目标，装配器只认 outbounds，这里锁住两者不互相打架。
+//! 底模含 `endpoints` 与指向 endpoint 的路由目标，这里锁住装配不丢 endpoint、节点不与其撞名。
 
 use sbtools::assemble::finalize;
 use sbtools::config::reject_path_fields;
@@ -57,6 +57,39 @@ fn ios_template_assembles_and_passes_kernel_check() {
     assert!(
         out.status.success(),
         "装配后的 iOS 配置应通过内核 check，实际: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// endpoint 标签与 outbound 共用一个命名空间，订阅节点撞上 `ts-ep` 必须让位，
+/// 否则内核报重复 tag，整份配置起不来。
+#[test]
+fn node_named_like_endpoint_is_renamed() {
+    if !kernel_available() {
+        eprintln!("跳过：内核不可用");
+        return;
+    }
+    let mut tpl: Value =
+        serde_json::from_str(include_str!("../../../config/sing-box/template-ios.json"))
+            .expect("iOS 底模应为合法 JSON");
+    finalize(&mut tpl, vec![ss("ts-ep", "192.0.2.10")]).expect("装配应成功");
+
+    let dir = std::env::temp_dir().join(format!("sbtools-ios-dup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("临时目录");
+    let path = dir.join("assembled.json");
+    std::fs::write(&path, serde_json::to_vec(&tpl).expect("序列化")).expect("写候选配置");
+    let out = std::process::Command::new(resolve_singbox_binary())
+        .args(["check", "-D"])
+        .arg(&dir)
+        .arg("-c")
+        .arg(&path)
+        .output()
+        .expect("启动内核");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success(),
+        "节点名撞 endpoint 标签后内核应仍接受，实际: {}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );

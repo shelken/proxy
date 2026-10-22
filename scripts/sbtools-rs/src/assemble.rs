@@ -4,17 +4,16 @@
 use serde_json::{Value, json};
 use std::io::Read;
 
-/// 保留标签 = 底模 route.rules 引用的出站标签；节点名撞上时必须让位。
+/// 保留标签 = 底模 outbounds 与 endpoints 的标签；两者与节点共用一个 tag 命名空间，
+/// 节点名撞上时必须让位，否则内核报 duplicate outbound/endpoint tag。
 pub fn reserved_tags(template: &Value) -> Vec<String> {
-    template["outbounds"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|o| o["tag"].as_str())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    ["outbounds", "endpoints"]
+        .iter()
+        .filter_map(|k| template[*k].as_array())
+        .flatten()
+        .filter_map(|o| o["tag"].as_str())
+        .map(str::to_string)
+        .collect()
 }
 
 /// 订阅原文 → 节点数组。base64 整段或纯 URI 列表均可；坏行带行号报错。
