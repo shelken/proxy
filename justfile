@@ -81,13 +81,8 @@ template-build:
     set -euo pipefail
     # mac：直接从 modules 合并（文件名前缀决定数组顺序）
     {{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
-    # iOS：modules 为底，modules-ios 同名替换并新增（ADR-0010）。
-    # 分两步 cp 是为了兼容 GNU cp 的 -C 目录覆盖行为（户检 014）
-    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
-    trap 'rm -rf "$d"' EXIT
-    cp config/sing-box/modules/*.json "$d"
-    cp config/sing-box/modules-ios/*.json "$d"
-    {{sing_box_cmd}} merge config/sing-box/template-ios.json -C "$d"
+    # iOS：modules 为底，modules-ios 同名替换并新增（ADR-0010）
+    scripts/merge-ios-template.sh config/sing-box/template-ios.json
     # 报告哪份产物变了，方便确认改动范围没超出预期；对比 HEAD，已暂存的改动也算变化
     for t in template.json template-ios.json; do
         if git diff --quiet HEAD -- "config/sing-box/$t"; then
@@ -116,16 +111,14 @@ template-check:
 template-ios-check:
     #!/usr/bin/env bash
     set -euo pipefail
-    d="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios.XXXXXX")"
-    trap 'rm -rf "$d" "$d.merged.json"' EXIT
-    cp config/sing-box/modules/*.json "$d"
-    cp config/sing-box/modules-ios/*.json "$d"
-    {{sing_box_cmd}} merge "$d.merged.json" -C "$d" >/dev/null
-    if ! diff -u config/sing-box/template-ios.json "$d.merged.json"; then
+    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios-check.XXXXXX")"
+    trap 'rm -rf "$work"' EXIT
+    scripts/merge-ios-template.sh "$work/merged.json" >/dev/null
+    if ! diff -u config/sing-box/template-ios.json "$work/merged.json"; then
         echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-build"
         exit 1
     fi
-    {{sing_box_cmd}} check -D "$d" -c "$PWD/config/sing-box/template-ios.json"
+    {{sing_box_cmd}} check -D "$work" -c "$PWD/config/sing-box/template-ios.json"
     echo "✅ template-ios.json 检查一致"
 
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
