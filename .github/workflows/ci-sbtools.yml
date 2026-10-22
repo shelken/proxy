@@ -92,7 +92,7 @@ jobs:
       # kernel-routing.test.js 需要真实 tun0 设备，只能在 Lima 跑。
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
       - name: run template structural tests
         run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts
         working-directory: .
