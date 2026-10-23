@@ -9,6 +9,10 @@
 ### Fixed
 
 - *(sing-box)* 底模护栏补齐 iOS 废弃写法检查与共享断言变异 ([#128](https://github.com/shelken/proxy/pull/128))
+- *(sbtools)* 订阅节点名撞上 iOS 底模的 endpoint 标签 `ts-ep` 时自动改名，避免内核报重复 tag 拒绝启动 ([#128](https://github.com/shelken/proxy/pull/128))
+- *(sing-box)* 恢复广播与组播的 TUN 排除，修复沙箱 e2e 失败 ([#132](https://github.com/shelken/proxy/pull/132))
+- *(sing-box)* iOS 底模同样排除组播与有限广播 ([#133](https://github.com/shelken/proxy/pull/133))
+- *(deps)* 升级 rustls-webpki 与 webpki-roots 修复 2 项 RustSec 漏洞 ([#129](https://github.com/shelken/proxy/pull/129))
 
 ## [0.7.3](https://github.com/shelken/proxy/compare/v0.7.2...v0.7.3) - 2026-10-11
 
