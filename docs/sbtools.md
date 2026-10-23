@@ -168,24 +168,35 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 02-base.json      服务端装配好的底模（含节点、策略组）
 ```
 
-实测（sing-box 1.14.1；当前固定版本见 `.mise.toml`，升级后本节结论需重跑）：生效顺序由**文件路径字典序**决定，与 `-c` 的 argv 顺序、文件 mtime 都无关
+实测（sing-box 1.14.3，即 `.mise.toml` 固定版本；1.14.1 的旧结论见下方版本差异）：生效顺序由**文件路径字典序**决定，与 `-c` 的 argv 顺序、文件 mtime 都无关
 
 | 类型 | 行为 | 在本层序下的结果 |
 | :--- | :--- | :--- |
 | 标量（`log.level`、`dns.strategy`、`route.final`） | **字典序先者胜** | `01-overlay` 压过 `02-base`，设备可覆盖底模标量 |
 | 数组（`route.rules`） | 按字典序拼接，不覆盖 | `00-direct` 的规则排最前，反回环优先命中 |
-| 同名 tag（`dns.servers` 等） | **最后者胜**，且不报错 | 与上面两条方向相反：`02-base` 反而胜出，**按 tag 覆盖不受支持**（见 §9 已知遗留） |
+| `dns.servers` 同名 tag | 1.14.2 及以前：合并产物中两条并存，运行期后者替换前者（末者胜）；**1.14.3 起：`check` 与 `run` 直接 FATAL** | **按 tag 覆盖不可用**（见 §9） |
+| `inbounds` / `outbounds` / `http_clients` 同名 tag | 合并阶段即 FATAL（1.14.0-1.14.3 一致） | **按 tag 覆盖不可用** |
 
-> 标量方向易被误记成「后者胜」。判据：标量取**首份**出现的值，故要让 overlay 生效它必须排在**前**；同名 tag 取**末份**，两者要求相反，一个字典序无法同时满足。
+> 标量方向易被误记成「后者胜」。判据：标量取**首份**出现的值，故要让 overlay 生效它必须排在**前**。同名 tag 与它要求相反，一个字典序无法同时满足，故**按 tag 覆盖在两种内核语义下都不可用**：旧版静默让 `02-base` 胜出，1.14.3 起直接报错。
+
+`merge` 自身只做结构合并，不看 tag 语义：同名 `dns.servers` 在 1.14.0-1.14.3 的合并产物里都是**两条并存**。重复检测分两层，这是 `dns.servers` 跨版本行为不同的原因：`inbounds` / `outbounds` / `http_clients` 由 `option.checkOptions` 在反序列化阶段拦截（`option/options.go`），因此 `merge` 就失败；`dns.servers` 不在该清单内，直到运行期建 DNS 传输时才检查（`dns/transport_manager.go`），1.14.2 及以前该处是「替换旧的」逻辑，1.14.3 改为报错
 
 复现
 
 ```bash
 # 层名与顺序的唯一定义处：server.rs 的 LAYER_DIRECT / LAYER_OVERLAY / LAYER_BASE
-mise exec -- sing-box merge --help
+d=$(mktemp -d)
+printf '%s' '{"dns":{"servers":[{"type":"udp","tag":"shared","server":"9.9.9.9"}]}}' \
+  > "$d/01-overlay.json"
+printf '%s' '{"dns":{"servers":[{"type":"udp","tag":"shared","server":"1.1.1.1"}]}}' \
+  > "$d/02-base.json"
+mise exec -- sing-box merge "$d/result.json" -c "$d/01-overlay.json" -c "$d/02-base.json"
+python3 -c "import json,sys;print([(s['tag'],s['server']) for s in json.load(open(sys.argv[1]))['dns']['servers']])" \
+  "$d/result.json"   # 两条并存，证明 merge 不看 tag
+mise exec -- sing-box check -c "$d/result.json"   # 1.14.3 起在此 FATAL
 ```
 
-`sing-box` 版本固定在容器镜像里。升版本必须重跑合并语义验证，因为该行为随实现变化
+`sing-box` 版本固定在容器镜像里。升版本必须重跑 `cargo test`（`duplicate_dns_server_tag_is_rejected_not_overridden` 会因内核语义变化失败），因为该行为随实现变化
 
 ## 7. 配置文件
 
@@ -309,7 +320,7 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 
 ## 9. 已知遗留
 
-- 设备 `overlay` 只能做**标量覆盖**（`log.level` 这类）与**追加入栈**，不能按 tag 覆盖底模已有的 `dns.servers` 条目。原 `local.json` 链路的按 tag 替换语义未迁移（当前无使用需求，见 `docs/adr/0002`）。
+- 设备 `overlay` 只能做**标量覆盖**（`log.level` 这类）与**追加入栈**，不能按 tag 覆盖底模已有的 `dns.servers` 条目。原 `local.json` 链路的按 tag 替换语义未迁移（当前无使用需求，见 `docs/adr/0002`）。同名 tag 在 1.14.2 及以前静默取末份，1.14.3 起直接 FATAL，语义与版本边界见 §6
 
 ## 10. 关键文件
 

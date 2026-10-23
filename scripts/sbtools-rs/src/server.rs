@@ -770,4 +770,42 @@ mod tests {
             "无 overlay 时应保留底模的 resolver"
         );
     }
+
+    /// 守 merge 的「同名 tag 不可覆盖」契约，并钉住 1.14.3 起的新语义。
+    ///
+    /// 结构合并本身不看 tag 语义：同名 `dns.servers` 在合并产物里**两条并存**，
+    /// 不会互相覆盖。1.14.2 及以前运行期是「后来者替换先到者」，表现为 `02-base`
+    /// 静默胜出；1.14.3 起建 DNS 传输时直接报 `duplicate DNS server tag`。
+    ///
+    /// 方向与 `overlay_scalar_wins_over_base_after_merge` 相反，这正是「一个字典序
+    /// 无法同时满足标量覆盖与按 tag 覆盖」的证据：若用 overlay 按 tag 换底模的 DNS
+    /// server，本 pin 版本下产出的配置**起不来**，devices 拿到的是一个坏订阅。
+    #[test]
+    fn duplicate_dns_server_tag_is_rejected_not_overridden() {
+        if let Some(reason) = kernel_unavailable_reason() {
+            eprintln!("skip: {reason}");
+            return;
+        }
+        let base = json!({
+            "dns": {
+                "servers": [{"type": "udp", "tag": "shared", "server": "192.0.2.53"}],
+                "final": "shared"
+            }
+        });
+        let overlay = json!({
+            "dns": {"servers": [{"type": "udp", "tag": "shared", "server": "198.51.100.53"}]}
+        });
+
+        let merged = merge_overlay(&base, Some(&overlay)).expect("结构合并应成功");
+        let servers = merged["dns"]["servers"].as_array().expect("servers 为数组");
+        assert_eq!(servers.len(), 2, "同名 tag 在合并产物中并存，而非互相覆盖");
+        assert_eq!(servers[0]["tag"], json!("shared"));
+        assert_eq!(servers[1]["tag"], json!("shared"));
+
+        let err = kernel_check(&merged).expect_err("同名 tag 的产物不得通过 check");
+        assert!(
+            err.contains("duplicate DNS server tag"),
+            "内核应拒绝同名 DNS server tag，实际: {err}"
+        );
+    }
 }
