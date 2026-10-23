@@ -35,7 +35,11 @@ template_url: https://raw.githubusercontent.com/shelken/proxy/main/config/sing-b
 | :--- | :--- |
 | `template_url` | 指向 `template-ios.json`，替代 Mac 使用的 `template.json`。远端文件更新后，下次拉取订阅即生效，不需要重启服务端 |
 
-按 [01-mac-sfm.md](./01-mac-sfm.md) 的方式 `encode` 生成订阅 URL，再把 URL 导入 iOS 客户端的远程配置
+按 [01-mac-sfm.md](./01-mac-sfm.md) 的方式 `encode` 生成订阅 URL，再把 URL 导入 iOS 客户端的远程配置。用 `-c` 指向 iOS 这份配置，其余与 Mac 相同，远程配置的自动更新间隔建议 1440 分钟（24 小时）
+
+```bash
+sbtools encode -s https://sub.example.com -c ~/.config/sing-box/config-ios.yaml
+```
 
 底模已通过 sbtools 的远程底模校验：只含合法 JSON，不含 `certificate_path` 等禁用字段，体积远小于 1 MB 上限
 
