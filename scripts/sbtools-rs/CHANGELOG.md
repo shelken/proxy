@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.5](https://github.com/shelken/proxy/compare/v0.7.4...v0.7.5) - 2026-10-23
+
+### Other
+
+- *(sbtools)* 钉住同名 tag 不可覆盖的内核语义
+
 ## [0.7.4](https://github.com/shelken/proxy/compare/v0.7.3...v0.7.4) - 2026-10-23
 
 ### Added
