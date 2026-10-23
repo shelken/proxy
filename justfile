@@ -49,6 +49,10 @@ vm-delete:
     limactl delete --force {{vm_name}}
 
 # --- 沙箱测试 ---
+# VM 内核对齐 .mise.toml：不一致就替换。引导会自动调用，这里给不经引导的入口用
+vm-kernel-sync:
+    @bun run scripts/sandbox-loop.ts --kernel-only
+
 # 闭环引导：取 HEAD 的 CI 产物 → 拷入 VM → VM 内起服务端 → 取回它实际响应的配置
 # 后处理为可驱动内核的形式。配置来源是服务端产物，不再是本地等价实现（ADR-0003）。
 sandbox-loop:
@@ -59,13 +63,13 @@ test-sandbox: sandbox-loop
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests
 
 # 只跑闭环相关测试（引导已完成时用，省一次产物下载与会话启动）
-test-loop:
+test-loop: vm-kernel-sync
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests/loop.test.ts
 
 
 
 # DNS 对照只依赖合成上游，可在服务端产物构建前验证模板策略。
-test-dns name="":
+test-dns name="": vm-kernel-sync
     {{lima_shell}} /opt/proxy-test/bin/bun --no-env-file test {{repo_in_guest}}/config/sing-box/tests/dns-behavior.test.js --test-name-pattern '{{name}}'
 
 # 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
