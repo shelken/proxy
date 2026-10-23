@@ -24,7 +24,7 @@ repos:
         name: sing-box 底模检查
         entry: just check-template
         language: system
-        files: ^config/sing-box/
+        files: ^(config/sing-box/|scripts/merge-ios-template\.sh$)
         pass_filenames: false
       - id: check-justfile
         name: justfile 废弃写法检查
