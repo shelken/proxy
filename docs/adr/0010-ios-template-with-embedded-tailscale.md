@@ -15,7 +15,7 @@ iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并
 ## Decision
 
 1. 新增 `config/sing-box/modules-ios/`，同名文件替换 `modules/` 中的对应文件，其余文件新增，合并后产出 `template-ios.json`，经现有 `template_url` 机制使用
-2. iOS 的 `00-inbounds.json` 去掉三个私网排除，保留 `fe80::/10`。未被 Tailscale 认领的私网流量进入 sing-box 后仍由 `ip_is_private` 直连
+2. iOS 的 `00-inbounds.json` 去掉三个私网排除，保留 `fe80::/10`，并与 Mac 一致排除 `224.0.0.0/4` 与 `255.255.255.255/32`。未被 Tailscale 认领的私网流量进入 sing-box 后仍由 `ip_is_private` 直连；组播与广播 Tailscale 不转发（[tailscale#11134](https://github.com/tailscale/tailscale/issues/11134)），收进 TUN 只会妨碍本地局域网发现（2026-10-23 补充）
 3. 新增 `tailscale` endpoint `ts-ep`（`accept_routes`，不开 `system_interface`，不设 exit node）与 `dns-ts`。`accept_default_resolvers` 为 false，普通互联网 DNS 分流不变
 4. MagicDNS 规则（`preferred_by: dns-ts`）排在 FakeIP 之前；路由规则 `preferred_by: ts-ep` 排在 `ip_is_private → direct` 之前
 5. `inbound: ts-ep` 的 `reject` 在路由层排在全部规则之首，包括 `sniff` 与 DNS 劫持；在 DNS 层排在 `dns.rules` 之首，早于 MagicDNS 与静态应答。手机只作为 Tailnet 客户端，正常查询来自 `tun-in`，不受影响

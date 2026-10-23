@@ -74,13 +74,16 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
     assertPreferredByTsEp(rules);
   });
 
-  test("tun 不再排除私网段，子网路由才能进入 sing-box；链路本地仍排除", () => {
+  test("tun 不再排除私网段，子网路由才能进入 sing-box；链路本地、组播与有限广播仍排除", () => {
     const tun = ios.inbounds.find((i) => i.type === "tun");
     const excluded = asArray<string>(tun.route_exclude_address);
     for (const cidr of ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]) {
       expect(excluded).not.toContain(cidr);
     }
-    expect(excluded).toContain("fe80::/10");
+    // Tailscale 不转发组播与广播（tailscale#11134），收进 TUN 只会让 Bonjour 等局域网发现失效
+    for (const cidr of ["fe80::/10", "224.0.0.0/4", "255.255.255.255/32"]) {
+      expect(excluded).toContain(cidr);
+    }
   });
 
   test("tailscale endpoint 只接收子网路由，不做 exit node，不开系统接口", () => {
