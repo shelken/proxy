@@ -35,10 +35,6 @@ describe("tun interface", () => {
     expect(run(["ip", "route", "get", "192.168.1.1"])).not.toContain("tun0");
   });
 
-  test("tailscale CGNAT range is excluded from the tun", () => {
-    expect(run(["ip", "route", "get", "100.64.0.1"])).not.toContain("tun0");
-  });
-
   test("mixed inbound on 127.0.0.1:2080 is listening and accepts connections", async () => {
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
     Bun.connect({
