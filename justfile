@@ -49,6 +49,10 @@ vm-delete:
     limactl delete --force {{vm_name}}
 
 # --- 沙箱测试 ---
+# VM 内核对齐 .mise.toml：不一致就替换。引导会自动调用，这里给不经引导的入口用
+vm-kernel-sync:
+    @bun run scripts/sandbox-loop.ts --kernel-only
+
 # 闭环引导：取 HEAD 的 CI 产物 → 拷入 VM → VM 内起服务端 → 取回它实际响应的配置
 # 后处理为可驱动内核的形式。配置来源是服务端产物，不再是本地等价实现（ADR-0003）。
 sandbox-loop:
@@ -59,13 +63,13 @@ test-sandbox: sandbox-loop
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests
 
 # 只跑闭环相关测试（引导已完成时用，省一次产物下载与会话启动）
-test-loop:
+test-loop: vm-kernel-sync
     {{lima_shell}} /opt/proxy-test/bin/bun test /work/sing-box/tests/loop.test.ts
 
 
 
 # DNS 对照只依赖合成上游，可在服务端产物构建前验证模板策略。
-test-dns name="":
+test-dns name="": vm-kernel-sync
     {{lima_shell}} /opt/proxy-test/bin/bun --no-env-file test {{repo_in_guest}}/config/sing-box/tests/dns-behavior.test.js --test-name-pattern '{{name}}'
 
 # 内核命令：优先用环境变量 SING_BOX，缺省走 mise exec -- sing-box
@@ -73,11 +77,24 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 
 # --- 生产底模装配与校验 ---
-# 从 config/sing-box/modules 构建 template.json
-# 用官方 merge：文件名（前缀数字）决定 route.rules / outbounds 的数组顺序
+# 单入口：一次重建 mac 与 iOS 两份底模。
+# 开发时只跑这一条命令，无需记住两个产物各自怎么生成；
+# 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
-    @{{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
-    @just check-singbox
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # mac：直接从 modules 合并（文件名前缀决定数组顺序）
+    {{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
+    # iOS：modules 为底，modules-ios 同名替换并新增（ADR-0010）
+    scripts/merge-ios-template.sh config/sing-box/template-ios.json
+    # 报告哪份产物变了，方便确认改动范围没超出预期；对比 HEAD，已暂存的改动也算变化
+    for t in template.json template-ios.json; do
+        if git diff --quiet HEAD -- "config/sing-box/$t"; then
+            echo "✅ config/sing-box/$t 未变化"
+        else
+            echo "📝 config/sing-box/$t 已更新"
+        fi
+    done
 
 # 校验 template.json 与 modules 一致：用内核重跑一次逐字节比对
 template-check:
@@ -92,21 +109,44 @@ template-check:
     fi
     echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
 
+# iOS 底模由 just template-build 一并生成，不再单独提供 build 入口
+
+# 校验 template-ios.json 与 modules + modules-ios 一致
+template-ios-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios-check.XXXXXX")"
+    trap 'rm -rf "$work"' EXIT
+    scripts/merge-ios-template.sh "$work/merged.json" >/dev/null
+    if ! diff -u config/sing-box/template-ios.json "$work/merged.json"; then
+        echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-build"
+        exit 1
+    fi
+    {{sing_box_cmd}} check -D "$work" -c "$PWD/config/sing-box/template-ios.json"
+    echo "✅ template-ios.json 检查一致"
+
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
-# 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败
+# 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
+# iOS 查合并产物：modules-ios/ 单独 check 缺共享模块会报错，产物与源码的一致性由 template-ios-check 保证。
 check-deprecated:
     #!/usr/bin/env bash
-    out=$({{sing_box_cmd}} check -C config/sing-box/modules 2>&1)
-    rc=$?
-    printf '%s\n' "$out"
-    [ "$rc" -eq 0 ] || exit "$rc"
-    if printf '%s\n' "$out" | grep -qi deprecated; then
-        echo "❌ config/sing-box/modules 存在废弃写法（见上方 WARN）"
-        exit 1
-    fi
+    set -uo pipefail
+    # -D 把内核工作目录放到临时目录，Tailscale 状态目录等相对路径不落进仓库
+    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-deprecated.XXXXXX")"
+    trap 'rm -rf "$work"' EXIT
+    for target in "-C $PWD/config/sing-box/modules" "-c $PWD/config/sing-box/template-ios.json"; do
+        out=$({{sing_box_cmd}} check -D "$work" $target 2>&1)
+        rc=$?
+        printf '%s\n' "$out"
+        [ "$rc" -eq 0 ] || exit "$rc"
+        if printf '%s\n' "$out" | grep -qi deprecated; then
+            echo "❌ ${target#* } 存在废弃写法（见上方 WARN）"
+            exit 1
+        fi
+    done
 
 
 # --- 规则产物 ---
@@ -136,9 +176,10 @@ check-rust-test:
 # sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
 check-template:
     @just template-check
+    @just template-ios-check
     @just check-singbox
     @just check-deprecated
-    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts
+    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts
 
 # 全量检查（手动跑 / CI 同口径）
 verify: check-rust-fast check-rust-test check-template rules-check

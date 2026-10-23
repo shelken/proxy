@@ -100,7 +100,7 @@ function tunsConfig(extraRules = []) {
 }
 
 describe("TUN 路由排除与 DNS 劫持", () => {
-  test("环回与有限广播不进 TUN，公网进 TUN，私网排除", async () => {
+  test("环回、有限广播与组播不进 TUN，公网进 TUN，私网排除", async () => {
     const dir = join(ROOT, "excludes");
     await rm(dir, { recursive: true, force: true });
     const core = await start(tunsConfig(), dir);
@@ -110,6 +110,8 @@ describe("TUN 路由排除与 DNS 劫持", () => {
       expect(run(["ip", "route", "get", "1.1.1.1"])).toContain("tun0");
       expect(run(["ip", "route", "get", "192.168.1.1"])).not.toContain("tun0");
       expect(run(["ip", "route", "get", "255.255.255.255"])).not.toContain("tun0");
+      // mDNS/Bonjour 等局域网发现走组播，进 TUN 会被 sing-box 当普通流量分流
+      expect(run(["ip", "route", "get", "224.0.0.251"])).not.toContain("tun0");
       expect(run(["ip", "route", "get", "127.0.0.1"])).toContain(" lo");
     } finally {
       await core.stop();

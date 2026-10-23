@@ -23,10 +23,5 @@
       matchUpdateTypes: ["minor", "patch"],
       groupName: "cargo dependencies (non-major)",
     },
-    {
-      description: "限制 ureq 维持在 2.x，避免 v3 破坏性升级与 Rust 2024 要求",
-      matchPackageNames: ["ureq"],
-      allowedVersions: "<3.0.0",
-    },
   ],
 }

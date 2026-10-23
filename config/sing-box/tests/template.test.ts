@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
+import {
+  asArray,
+  assertMyDirectAndProxyBeforeServices,
+  assertMyProxyDnsBeforeChinaMax,
+  assertMyProxyQuicBeforeExempt,
+  assertRejectBeforeClashMode,
+} from "./lib/contracts.ts";
 
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
 
-// 内核 merge 的输出会把单元素数组写成标量、省略默认值 `action: "route"`、
+// 内核 merge 的输出会省略默认值 `action: "route"`、
 // 把 default_domain_resolver 收成字符串，断言要对两种形态都成立。
-const asArray = <T>(v: T | T[] | undefined): T[] =>
-  v === undefined ? [] : Array.isArray(v) ? v : [v];
 const actionOf = (rule: { action?: string }): string => rule.action ?? "route";
 const resolverServer = (v: unknown): string | undefined =>
   typeof v === "string" ? v : (v as { server?: string } | undefined)?.server;
@@ -52,16 +57,41 @@ describe("template.json structural verification", () => {
   });
 
 
-  test("blocks QUIC / HTTP3 on UDP 443 and 80", () => {
+  test("QUIC 守卫排在拦截之后，国内直连的 HTTP/3 才放行", () => {
     const rules = template.route?.rules ?? [];
-    const quicRule = rules.find(
-      (r) => r.network === "udp" && r.action === "reject",
+    const quicRules = rules.filter(
+      (r) => r.network === "udp" && asArray(r.port).includes(443),
     );
-    expect(quicRule).toBeDefined();
-    expect(quicRule.port).toContain(443);
-    expect(quicRule.port).toContain(80);
+    // 两条成套：先给国内直连放行，再兜底 reject。单留 reject 会让国内 CDN 的
+    // HTTP/3 无差别降级；只放行不 reject 则代理侧 QUIC 打进承载差的机场 UDP。
+    const exempt = quicRules.find((r) => r.outbound === "direct");
+    const reject = quicRules.find(
+      (r) => r.action === "reject" && r.rule_set === undefined,
+    );
+    expect(exempt).toBeDefined();
+    expect(reject).toBeDefined();
+    expect(rules.indexOf(exempt)).toBeLessThan(rules.indexOf(reject));
+
+    assertMyProxyQuicBeforeExempt(rules);
+
+    // 豁免必须排在广告/黑名单拦截之后：国内 CDN 承载大量统计域名（hm.baidu.com
+    // 同属 ChinaMax 与 Advertising，loggw-ex.alipay.com 同属 ChinaMax 与 MyReject），
+    // 豁免若抢先，这些域名走 HTTP/3 时会被放行为 direct，与拦截被截胡是同一类病。
+    const adReject = rules.find(
+      (r) => r.action === "reject" && asArray(r.rule_set).includes("Advertising"),
+    );
+    expect(adReject).toBeDefined();
+    expect(rules.indexOf(adReject)).toBeLessThan(rules.indexOf(exempt));
+
+    // no_drop：默认 method 在 30s 内触发超过 50 次会退化为静默丢包（不回 ICMP），
+    // 客户端只能等 QUIC 超时，正是"国内网站首屏卡顿"的来源。置 true 恒回 ICMP。
+    expect(reject?.no_drop).toBe(true);
   });
 
+
+  test("MyProxy-dns 先于 ChinaMax-dns，重叠域名不被国内解析抢先（ADR-0011）", () => {
+    assertMyProxyDnsBeforeChinaMax(template.dns?.rules ?? []);
+  });
 
   test("configures prefer_ipv4 DNS strategy", () => {
     expect(template.dns?.strategy).toBe("prefer_ipv4");
@@ -76,7 +106,7 @@ describe("template.json structural verification", () => {
     expect(template.dns?.final).not.toBe(fakeip?.tag);
     // A/AAAA 查询导流到 fakeip
     const fakeipRule = (template.dns?.rules ?? []).find(
-      (r) => r.server === fakeip?.tag,
+      (r) => r.server === fakeip?.tag && r.query_type,
     );
     expect(fakeipRule?.query_type).toContain("A");
     expect(fakeipRule?.query_type).toContain("AAAA");
@@ -276,6 +306,15 @@ describe("template.json structural verification", () => {
     }
   });
 
+  test("拦截规则先于 clash_mode（ADR-0008）", () => {
+    // 含 QUIC 兜底：守卫必须在 clash_mode 之前，direct 模式下境外 QUIC 才仍被拒（ADR-0008 决策 6）。
+    assertRejectBeforeClashMode(template.route?.rules ?? []);
+  });
+
+  test("MyDirect/MyProxy 排在所有服务规则之前（ADR-0007）", () => {
+    assertMyDirectAndProxyBeforeServices(template.route?.rules ?? [], template.outbounds ?? []);
+  });
+
   test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
     const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>
@@ -290,24 +329,32 @@ describe("template.json structural verification", () => {
     expect(rejectIndex).toBeLessThan(fakeipIndex);
   });
 
-  test("routes bittorrent and download tools directly without proxy", () => {
+  test("BT 仅按协议嗅探分流，默认直连而非固定出站", () => {
     const sniffer = template.route?.rules?.[0]?.sniffer ?? [];
     expect(sniffer).toContain("bittorrent");
 
     const rules = template.route?.rules ?? [];
     const btRule = rules.find((r) => r.protocol === "bittorrent");
-    expect(btRule?.outbound).toBe("direct");
+    expect(btRule?.outbound).toBe("torrent");
 
-    const dlRule = rules.find((r) => r.rule_set?.includes("torrent"));
-    expect(dlRule?.outbound).toBe("direct");
+    // torrent rule_set 已退役（process_name/端口是死代码或误伤，见 PR 评估）：
+    // BT 分流只认 protocol: bittorrent，tracker 域名落 final proxy。
+    expect((template.route?.rule_set ?? []).map((rs) => rs.tag)).not.toContain("torrent");
+    expect(rules.some((r) => asArray(r.rule_set).includes("torrent"))).toBe(false);
+    expect((template.route?.rules ?? []).some((r) => asArray(r.rule_set).includes("torrent"))).toBe(false);
 
-    // torrent-dns 应在 FakeIP 之前由直连 DNS 解析真实 IP
-    const dnsRules = template.dns?.rules ?? [];
-    const dlDnsRule = dnsRules.find((r) => r.rule_set?.includes("torrent-dns"));
-    expect(dlDnsRule?.server).toBe("dns-direct-cn");
+    // 组必须存在且默认可直连：候选含 direct，默认值就是 direct。
+    // 改成 direct 之外的默认值会让 BT 大流量打进代理节点，这条断言守住它。
+    const group = (template.outbounds ?? []).find((o) => o.tag === "torrent");
+    expect(group).toBeDefined();
+    expect(group?.type).toBe("selector");
+    expect(asArray(group?.outbounds)).toContain("direct");
+    expect(asArray(group?.outbounds)).toContain("proxy");
+    expect(group?.default).toBe("direct");
 
-    const fakeipIndex = dnsRules.findIndex((r) => r.server === "dns-fakeip");
-    const dlDnsIndex = dnsRules.indexOf(dlDnsRule);
-    expect(dlDnsIndex).toBeLessThan(fakeipIndex);
+    // 无 torrent 清单 → 无 torrent-dns 伴生，DNS 侧不得再引用它。
+    const dnsRuleSets = (template.dns?.rules ?? []).flatMap((r) => asArray(r.rule_set));
+    expect(dnsRuleSets).not.toContain("torrent-dns");
+    expect((template.route?.rule_set ?? []).map((rs) => rs.tag)).not.toContain("torrent-dns");
   });
 });

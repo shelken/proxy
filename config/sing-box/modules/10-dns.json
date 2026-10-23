@@ -88,8 +88,17 @@
       },
       {
         "rule_set": [
-          "ChinaMax-dns",
-          "torrent-dns"
+          "MyProxy-dns"
+        ],
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "dns-fakeip"
+      },
+      {
+        "rule_set": [
+          "ChinaMax-dns"
         ],
         "server": "dns-direct-cn"
       },
@@ -128,16 +137,16 @@
       },
       {
         "type": "remote",
-        "tag": "ChinaMax-dns",
+        "tag": "MyProxy-dns",
         "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy-dns.srs",
         "update_interval": "1d"
       },
       {
         "type": "remote",
-        "tag": "torrent-dns",
+        "tag": "ChinaMax-dns",
         "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
         "update_interval": "1d"
       }
     ]

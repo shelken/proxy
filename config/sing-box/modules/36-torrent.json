@@ -1,0 +1,24 @@
+{
+  "route": {
+    "rules": [
+      {
+        "protocol": "bittorrent",
+        "action": "route",
+        "outbound": "torrent"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "torrent",
+      "outbounds": [
+        "direct",
+        "selfhost",
+        "proxy"
+      ],
+      "default": "direct",
+      "interrupt_exist_connections": true
+    }
+  ]
+}

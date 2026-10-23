@@ -1,0 +1,25 @@
+{
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": [
+        "198.51.100.1/30",
+        "fdfe:dcba:9876::1/126"
+      ],
+      "auto_route": true,
+      "dns_mode": "hijack",
+      "route_exclude_address": [
+        "224.0.0.0/4",
+        "255.255.255.255/32",
+        "fe80::/10"
+      ]
+    },
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ]
+}

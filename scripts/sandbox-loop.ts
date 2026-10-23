@@ -75,6 +75,19 @@ function ensureBinary(): void {
   const head = host(["git", "rev-parse", "HEAD"]).out.trim();
   if (!head) fail("解析 HEAD", "git rev-parse HEAD 无输出");
 
+  // CI 产物不包含工作区改动，必须在复用缓存前核对构建输入。
+  const status = host(["git", "status", "--porcelain", "--", ...BINARY_INPUTS]);
+  if (status.code !== 0) fail("检查二进制输入", status.err.trim());
+  const dirty = status.out.trim();
+  if (dirty) {
+    fail(
+      "二进制输入未提交",
+      `以下文件有未提交改动，不会体现在任何 CI 产物里（假绿风险）：\n` +
+        `  ${dirty.replaceAll("\n", "\n  ")}\n` +
+        `  先提交并推送分支，再执行 gh workflow run release-sbtools.yml --ref <分支> 并等它跑完`,
+    );
+  }
+
   const stamp = resolve(ARTIFACT_DIR, "commit");
   if (existsSync(LOCAL_BINARY) && existsSync(stamp)) {
     const cached = readFileSync(stamp, "utf-8").trim();
@@ -180,7 +193,9 @@ function listArtifactRuns(): ArtifactRun[] {
  * 改动它同样会改变产物（版本本身不在此列，它由 Cargo.toml 决定，见上面的路径）。
  */
 const BINARY_INPUTS = [
-  "scripts/sbtools-rs",
+  "scripts/sbtools-rs/src",
+  "scripts/sbtools-rs/Cargo.toml",
+  "scripts/sbtools-rs/build.rs",
   "Cargo.toml",
   "Cargo.lock",
   "config/sing-box/template.json",
@@ -234,15 +249,23 @@ function verifyLocalArtifacts(): void {
 
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
 function pushToGuest(): void {
-  verifyLocalArtifacts();
+  // 崩溃可能留下服务端；替换 inode 避免原地覆写触发 ETXTBSY。
   const r = guest(`
+    set -e
+    sudo -n pkill -9 -x sbtools 2>/dev/null || true
+    for _ in $(seq 1 100); do pgrep -x sbtools >/dev/null || break; sleep 0.05; done
+    pgrep -x sbtools >/dev/null && { echo "残留 sbtools 未在 5s 内退出" >&2; exit 1; }
     mkdir -p /work
-    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}
-    chmod +x ${GUEST_BINARY}
+    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sbtools ${GUEST_BINARY}.new
+    chmod +x ${GUEST_BINARY}.new
+    mv -f ${GUEST_BINARY}.new ${GUEST_BINARY}
     rm -rf ${WORK}
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
+    # tests/ 整目录在 VM 内跑，iOS 结构测试还要读 iOS 底模与 modules-ios/ 白名单
+    cp ${REPO_IN_GUEST}/config/sing-box/template-ios.json ${WORK}/template-ios.json
+    cp -r ${REPO_IN_GUEST}/config/sing-box/modules-ios ${WORK}/modules-ios
     cp -r ${REPO_IN_GUEST}/config/sing-box/tests/. ${WORK}/tests/
   `);
   if (r.code !== 0) fail("同步到 VM", r.err.trim());
@@ -423,8 +446,50 @@ print(f"outbounds={len(d['outbounds'])} rule_set={len(d['route']['rule_set'])} "
       f"inbounds={[i['tag'] for i in d['inbounds']]}")
 `;
 
+/**
+ * VM 内核必须与 `.mise.toml` 声明的版本一致，否则沙箱测的不是生产内核。
+ *
+ * lima.yaml 的 provision 只在首次创建时装内核（已存在即跳过），升级 `.mise.toml`
+ * 后旧 VM 会一直停在旧版本。所以每次进沙箱前核对一次，不一致就替换。
+ * 下载在宿主做：VM 的代理变量指向宿主地址，VM 内不可达（见 startServer）。
+ */
+export function ensureGuestKernel(): void {
+  const versionOf = (out: string) => out.match(/^sing-box version (\S+)/m)?.[1];
+  const want = host([
+    "mise", "config", "get", "--file", resolve(import.meta.dir, "../.mise.toml"), "tools.sing-box",
+  ]).out.trim();
+  if (!want) fail("读取内核版本", ".mise.toml 的 tools.sing-box 为空");
+  const have = versionOf(guest(`${SB} version`).out);
+  if (have === want) return;
+
+  console.log(`[引导] VM 内核 ${have ?? "缺失"} 与 .mise.toml ${want} 不一致，替换中`);
+  const name = `sing-box-${want}-linux-arm64`;
+  const dir = resolve(ARTIFACT_DIR, "kernel");
+  mkdirSync(dir, { recursive: true });
+  const tgz = resolve(dir, `${name}.tar.gz`);
+  const url = `https://github.com/SagerNet/sing-box/releases/download/v${want}/${name}.tar.gz`;
+  const dl = host(["curl", "-fsSL", "-o", tgz, url]);
+  if (dl.code !== 0) fail("下载内核", `${url}: ${dl.err.trim()}`);
+  const x = host(["tar", "-xzf", tgz, "-C", dir]);
+  if (x.code !== 0) fail("解压内核", x.err.trim());
+
+  // 先装到 .new 再 mv：替换 inode，避免覆写正在运行的内核触发 ETXTBSY
+  const r = guest(`
+    set -e
+    sudo -n install -m 0755 ${REPO_IN_GUEST}/.sandbox-artifacts/kernel/${name}/sing-box ${SB}.new
+    sudo -n mv -f ${SB}.new ${SB}
+  `);
+  if (r.code !== 0) fail("替换 VM 内核", r.err.trim());
+  const now = versionOf(guest(`${SB} version`).out);
+  if (now !== want) fail("替换 VM 内核", `替换后为 ${now ?? "无法执行"}，期望 ${want}`);
+  console.log(`[引导] VM 内核已更新为 ${want}`);
+}
+
 export function bootstrap(options: LoopOptions = {}): void {
+  // 宿主侧校验先行：产物与本地规则缺失时不必碰 VM
   ensureBinary();
+  verifyLocalArtifacts();
+  ensureGuestKernel();
   pushToGuest();
   // 后处理脚本本身也要在 VM 内可读
   const put = guest("cat > /work/sandbox-prepare.py", PREPARE_SCRIPT);
@@ -434,5 +499,6 @@ export function bootstrap(options: LoopOptions = {}): void {
 }
 
 if (import.meta.main) {
-  bootstrap();
+  if (process.argv.includes("--kernel-only")) ensureGuestKernel();
+  else bootstrap();
 }

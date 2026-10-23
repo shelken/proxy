@@ -1,0 +1,12 @@
+{
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "ts-ep"
+        ],
+        "action": "reject"
+      }
+    ]
+  }
+}

@@ -69,10 +69,15 @@
         "server": "dns-local-system"
       },
       {
-        "rule_set": [
-          "ChinaMax-dns",
-          "torrent-dns"
+        "query_type": [
+          "A",
+          "AAAA"
         ],
+        "rule_set": "MyProxy-dns",
+        "server": "dns-fakeip"
+      },
+      {
+        "rule_set": "ChinaMax-dns",
         "server": "dns-direct-cn"
       },
       {
@@ -108,6 +113,8 @@
         "10.0.0.0/8",
         "172.16.0.0/12",
         "192.168.0.0/16",
+        "224.0.0.0/4",
+        "255.255.255.255/32",
         "fe80::/10"
       ]
     },
@@ -219,6 +226,17 @@
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
       "tolerance": 50,
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "torrent",
+      "outbounds": [
+        "direct",
+        "selfhost",
+        "proxy"
+      ],
+      "default": "direct",
       "interrupt_exist_connections": true
     },
     {
@@ -363,7 +381,7 @@
         "selfhost",
         "proxy",
         "direct",
-        "(?i)(vps|hys|港)"
+        "(?i)(vps|hy2|港)"
       ],
       "default": "selfhost",
       "interrupt_exist_connections": true
@@ -421,40 +439,8 @@
         "action": "hijack-dns"
       },
       {
-        "clash_mode": "direct",
-        "outbound": "direct"
-      },
-      {
-        "clash_mode": "global",
-        "outbound": "proxy"
-      },
-      {
         "ip_is_private": true,
         "outbound": "direct"
-      },
-      {
-        "network": "udp",
-        "port": [
-          443,
-          80
-        ],
-        "action": "reject"
-      },
-      {
-        "protocol": "bittorrent",
-        "outbound": "direct"
-      },
-      {
-        "port_range": "6881:6889",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": "torrent",
-        "outbound": "direct"
-      },
-      {
-        "rule_set": "Download",
-        "outbound": "download"
       },
       {
         "rule_set": [
@@ -466,13 +452,61 @@
         "action": "reject"
       },
       {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "rule_set": "MyProxy",
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "network": "udp",
+        "port": [
+          443,
+          80
+        ],
+        "action": "reject",
+        "no_drop": true
+      },
+      {
+        "clash_mode": "direct",
+        "outbound": "direct"
+      },
+      {
+        "clash_mode": "global",
+        "outbound": "proxy"
+      },
+      {
+        "protocol": "bittorrent",
+        "outbound": "torrent"
+      },
+      {
+        "rule_set": "Download",
+        "outbound": "download"
+      },
+      {
         "rule_set": [
           "ChinaMax",
           "Lan",
           "MyDirect",
           "cftunnel",
           "geoip-cn",
-          "torrent",
           "Microsoft",
           "PayPal",
           "Apple"
@@ -593,26 +627,14 @@
       },
       {
         "type": "remote",
+        "tag": "MyProxy-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
         "tag": "ChinaMax-dns",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent-dns",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent-dns.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "torrent",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/torrent.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "Download",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
         "update_interval": "24h0m0s"
       },
       {
@@ -637,6 +659,12 @@
         "type": "remote",
         "tag": "Privacy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "Download",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
         "update_interval": "24h0m0s"
       },
       {

@@ -24,3 +24,4 @@ rules:
       - http-intake.logs.us5.datadoghq.com
   - domain_keyword:
       - analytics-api
+      - datadoghq
