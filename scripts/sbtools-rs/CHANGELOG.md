@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.4](https://github.com/shelken/proxy/compare/v0.7.3...v0.7.4) - 2026-10-23
+
+### Added
+
+- *(sing-box)* iOS 底模内嵌 Tailscale，MyProxy 先于国内直连豁免 ([#127](https://github.com/shelken/proxy/pull/127))
+
+### Fixed
+
+- *(sing-box)* 底模护栏补齐 iOS 废弃写法检查与共享断言变异 ([#128](https://github.com/shelken/proxy/pull/128))
+
 ## [0.7.3](https://github.com/shelken/proxy/compare/v0.7.2...v0.7.3) - 2026-10-11
 
 ### Fixed
