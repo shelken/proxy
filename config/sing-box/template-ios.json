@@ -133,7 +133,11 @@
       ],
       "dns_mode": "hijack",
       "auto_route": true,
-      "route_exclude_address": "fe80::/10"
+      "route_exclude_address": [
+        "224.0.0.0/4",
+        "255.255.255.255/32",
+        "fe80::/10"
+      ]
     },
     {
       "type": "mixed",

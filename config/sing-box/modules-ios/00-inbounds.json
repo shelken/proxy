@@ -10,6 +10,8 @@
       "auto_route": true,
       "dns_mode": "hijack",
       "route_exclude_address": [
+        "224.0.0.0/4",
+        "255.255.255.255/32",
         "fe80::/10"
       ]
     },
