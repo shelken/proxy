@@ -13,6 +13,7 @@ on:
       - "config/sing-box/modules/**"
       - "config/sing-box/modules-ios/**"
       - "config/sing-box/template-ios.json"
+      - "scripts/merge-ios-template.sh"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -81,9 +82,7 @@ jobs:
           trap 'rm -rf "$tmp" "$ios"' EXIT
           sing-box merge "$tmp" -C config/sing-box/modules
           diff -u config/sing-box/template.json "$tmp"
-          cp config/sing-box/modules/*.json "$ios"
-          cp config/sing-box/modules-ios/*.json "$ios"
-          sing-box merge "$tmp" -C "$ios"
+          SING_BOX=sing-box scripts/merge-ios-template.sh "$tmp"
           diff -u config/sing-box/template-ios.json "$tmp"
           sing-box check -D "$ios" -c "$PWD/config/sing-box/template-ios.json"
         working-directory: .

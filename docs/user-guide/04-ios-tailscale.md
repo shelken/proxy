@@ -59,7 +59,8 @@ template_url: https://raw.githubusercontent.com/shelken/proxy/main/config/sing-b
 
 | 项目 | Mac `template.json` | iOS `template-ios.json` |
 | :--- | :--- | :--- |
-| TUN 排除私网 | 排除 `10/8`、`172.16/12`、`192.168/16` | 只排除 `fe80::/10`，私网流量进入 sing-box 再分流 |
+| TUN 排除私网 | 排除 `10/8`、`172.16/12`、`192.168/16` | 不排除私网，流量进入 sing-box 再分流 |
+| TUN 排除组播与广播 | 排除 `224/4`、`255.255.255.255` | 相同 |
 | Tailscale | 无 | 内嵌 endpoint `ts-ep` 与 MagicDNS |
 | Tailnet 入站 | 无 | 路由与 DNS 均拒绝来自 `ts-ep` 的入站，手机只作客户端 |
 
