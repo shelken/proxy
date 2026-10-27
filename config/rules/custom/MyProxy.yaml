@@ -2,7 +2,6 @@ rules:
   - domain_suffix:
       - poe.com
       - fastgpt.run
-      - huggingface.co
       - minimax.io
       - arc.net
       - arcboosts.com
@@ -34,12 +33,19 @@ rules:
       - nodeseek.com
       - imgur.com
       - api.revenuecat.com
+      - discord.com
+      - discord.gg
+      - discordapp.com
+      - hcaptcha.com
+      # 解决 Telegram 等 App 不推送
+      - push.apple.com
       - v2ex.com
       - in.appcenter.ms
       - nvidia.com
   - domain_keyword:
       - bybit
       - miaona
+      - bybdc
   - ip_cidr:
       - 1.1.1.1/32,no-resolve
       - 8.8.8.8/32,no-resolve

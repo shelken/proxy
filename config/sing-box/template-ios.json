@@ -388,11 +388,12 @@
       "type": "selector",
       "tag": "japansite",
       "outbounds": [
+        "jp",
         "proxy",
         "selfhost",
         "(?i)(日本|川日|东京|大阪|JP|Japan)"
       ],
-      "default": "proxy",
+      "default": "jp",
       "interrupt_exist_connections": true
     },
     {
@@ -548,6 +549,10 @@
       {
         "rule_set": "MyDirect",
         "outbound": "direct"
+      },
+      {
+        "rule_set": "MySelfhost",
+        "outbound": "selfhost"
       },
       {
         "rule_set": "MyProxy",
@@ -706,6 +711,12 @@
         "type": "remote",
         "tag": "MyProxy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MySelfhost",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MySelfhost.srs",
         "update_interval": "24h0m0s"
       },
       {

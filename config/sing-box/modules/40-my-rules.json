@@ -10,6 +10,13 @@
       },
       {
         "rule_set": [
+          "MySelfhost"
+        ],
+        "action": "route",
+        "outbound": "selfhost"
+      },
+      {
+        "rule_set": [
           "MyProxy"
         ],
         "action": "route",
@@ -29,6 +36,13 @@
         "tag": "MyProxy",
         "format": "binary",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MySelfhost",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MySelfhost.srs",
         "update_interval": "1d"
       }
     ]

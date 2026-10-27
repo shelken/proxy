@@ -71,6 +71,8 @@ sbtools encode -s https://sub.example.com
 
 配置改动后重新执行 `encode`，并将新 URL 覆盖至 SFM，避免继续拉取旧配置
 
+底模中的 `MySelfhost` 规则先于 `MyProxy`，用于让特定服务固定走 `selfhost`，规则内容见 `config/rules/custom/MySelfhost.yaml`。`japansite` 默认选择日本自动测速组 `jp`，可在客户端策略组中切换
+
 ## 安全边界
 
 - 加密采用 X25519 + HKDF-SHA256 + AES-256-GCM，每次 `encode` 使用新临时密钥对
