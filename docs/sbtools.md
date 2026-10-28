@@ -142,17 +142,14 @@ sequenceDiagram
 
 ### 反回环直连规则
 
-节点服务器的 IP 若被二次代理会形成回环。规则在节点全集确定后生成，作为独立输入层 `00-direct` 参与合并，字典序保证它在最终产物里最先命中
+节点域名和 IP 字面量的直连规则在节点全集确定后生成，作为独立输入层 `00-direct` 参与合并，字典序保证它在最终产物里最先命中
 
 > 规则**不放进底模**：底模排在 overlay 之后，放进去会被 overlay 的路由规则挤到后面而失去保护。
 
 ```text
 IP server      → ip_cidr（v4 /32、v6 /128）
-域名 server    → domain 列表 + 尽力解析 IPv4 → ip_cidr
-解析顺序       → 系统 getaddrinfo → AliDNS DoH（https://223.5.5.5/resolve）→ 只留 domain 规则
+域名 server    → domain 列表，不在服务端解析 IP
 ```
-
-服务端无 TUN 劫持，不需要 fakeip 排除
 
 ### 实例复用
 

@@ -2,7 +2,6 @@
 //! 语义对齐旧 endpoint.ts 的 buildConfig / mergeLocalConfig。
 
 use serde_json::{Value, json};
-use std::io::Read;
 
 /// 保留标签 = 底模 outbounds 与 endpoints 的标签；两者与节点共用一个 tag 命名空间，
 /// 节点名撞上时必须让位，否则内核报 duplicate outbound/endpoint tag。
@@ -70,9 +69,7 @@ fn assign_tags(nodes: &mut [Value], reserved: &[String]) {
     }
 }
 
-/// 节点全集 → 反回环直连规则（纯内存，由调用方决定归属）。
-/// IP server → ip_cidr(/32|/128)；域名 server → domain + 尽力解析 IPv4 → ip_cidr。
-/// 服务端视角解析：系统 getaddrinfo → DoH 兜底；两级都失败则只留 domain 规则。
+/// 节点全集 → 反回环直连规则：域名保持原样，IP 字面量生成对应 CIDR。
 pub fn generate_node_direct_rule(nodes: &[Value], _template: &Value) -> Option<Value> {
     let mut domains: Vec<String> = Vec::new();
     let mut cidrs: Vec<String> = Vec::new();
@@ -99,13 +96,6 @@ pub fn generate_node_direct_rule(nodes: &[Value], _template: &Value) -> Option<V
                 continue;
             }
             domains.push(server.to_string());
-            // 服务端视角解析：系统 getaddrinfo（无 TUN/fakeip 场景）→ DoH 兜底
-            if let Some(ip) = system_resolve_a(server).or_else(|| doh_resolve_a(server)) {
-                let cidr = format!("{ip}/32");
-                if !cidrs.contains(&cidr) {
-                    cidrs.push(cidr);
-                }
-            }
         }
     }
     if domains.is_empty() && cidrs.is_empty() {
@@ -120,42 +110,6 @@ pub fn generate_node_direct_rule(nodes: &[Value], _template: &Value) -> Option<V
     }
     rule.insert("outbound".into(), json!("direct"));
     Some(Value::Object(rule))
-}
-
-/// std getaddrinfo 解析：返回首个 IPv4。服务端无 TUN 劫持，无需 fakeip 排除。
-fn system_resolve_a(domain: &str) -> Option<String> {
-    use std::net::ToSocketAddrs;
-    (domain, 0u16)
-        .to_socket_addrs()
-        .ok()?
-        .find_map(|a| match a.ip() {
-            std::net::IpAddr::V4(v4) => Some(v4.to_string()),
-            std::net::IpAddr::V6(_) => None,
-        })
-}
-
-/// AliDNS DoH JSON API：返回首个合法 IPv4 A 记录；任何失败静默 None。
-fn doh_resolve_a(domain: &str) -> Option<String> {
-    let url = format!("https://223.5.5.5/resolve?name={domain}&type=A");
-    let res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(5))
-        .get(&url)
-        .call()
-        .ok()?;
-    let mut body = String::new();
-    std::io::Read::take(res.into_body().into_reader(), 64 * 1024 + 1)
-        .read_to_string(&mut body)
-        .ok()?;
-    if body.len() > 64 * 1024 {
-        return None;
-    }
-    let v: Value = serde_json::from_str(&body).ok()?;
-    v["Answer"]
-        .as_array()?
-        .iter()
-        .filter(|a| a["type"] == 1)
-        .filter_map(|a| a["data"].as_str())
-        .find(|d| d.parse::<std::net::Ipv4Addr>().is_ok())
-        .map(str::to_string)
 }
 
 /// 正则字符串 → regex（TS 版 (?i) 前缀语义对齐）。非法正则必须报错：
@@ -544,9 +498,7 @@ mod tests {
         );
     }
 
-    /// 回归：节点反回环规则生成——在"所有节点确定后"（collect_nodes 之后）调用，
-    /// 覆盖 IP/IPv6/域名三类 server；域名用保留 TLD `.invalid` 保证解析必败，
-    /// 测试封闭不依赖网络。
+    /// 节点全集确定后生成域名和 IP 字面量的直连规则。
     #[test]
     fn node_direct_rule_generated_after_collect() {
         let tpl = crate::template::embedded_template().expect("内嵌底模");
@@ -586,7 +538,6 @@ mod tests {
     }
 
     /// 同一 server 出现多次时不得产生重复 cidr（重复项会被 sing-box 拒）。
-    /// 只用 IP 字面量：域名会走本机解析，结果随环境变（TUN 劫持返回 fakeip）。
     #[test]
     fn node_direct_rule_deduplicates() {
         let tpl = crate::template::embedded_template().expect("内嵌底模");
