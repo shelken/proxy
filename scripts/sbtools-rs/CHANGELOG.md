@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/shelken/proxy/compare/v0.7.4...v0.8.0) - 2026-10-28
+
+### Fixed
+
+- *(sbtools)* 按请求汇总未支持节点参数并修正 HTTP 验收 ([#140](https://github.com/shelken/proxy/pull/140))
+
+### Other
+
+- *(sbtools)* 移除节点域名二次解析 ([#139](https://github.com/shelken/proxy/pull/139))
+- *(sbtools)* 钉住同名 tag 不可覆盖的内核语义
+
 ## [0.7.4](https://github.com/shelken/proxy/compare/v0.7.3...v0.7.4) - 2026-10-23
 
 ### Added
