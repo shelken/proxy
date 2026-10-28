@@ -1,7 +1,7 @@
 //! 节点 URI 解析：hysteria2 / hy2、anytls、shadowsocks（SIP002 + legacy）。
 //! 语义对齐旧 endpoint.ts，无法识别的输入 fail-fast。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -44,9 +44,13 @@ fn extract_unsupported_query_names(query: &str, supported: &[&str]) -> Vec<Strin
     names
 }
 
-fn warn_unknown_query(query: &str, supported: &[&str]) {
+fn record_unsupported_queries(
+    query: &str,
+    supported: &[&str],
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) {
     for name in extract_unsupported_query_names(query, supported) {
-        eprintln!("[sbtools] 节点 URL 参数 {name} 未应用");
+        *unsupported_queries.entry(name).or_default() += 1;
     }
 }
 
@@ -69,11 +73,15 @@ fn decode_userinfo_password(u: &url::Url) -> String {
 }
 
 /// hysteria2:// 或 hy2:// → sing-box hysteria2 出站。
-pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
+pub fn parse_hysteria2(
+    raw: &str,
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) -> Result<Value, String> {
     let u = parse_url(raw)?;
-    warn_unknown_query(
+    record_unsupported_queries(
         u.query().unwrap_or(""),
         &["sni", "insecure", "obfs", "obfs-password"],
+        unsupported_queries,
     );
     let tag = tag_from_hash(&u, "selfhost");
     let auth = decode_userinfo_password(&u);
@@ -103,9 +111,12 @@ pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
 }
 
 /// anytls:// → sing-box anytls 出站（字段语义按官方 anytls.md）。
-pub fn parse_anytls(raw: &str) -> Result<Value, String> {
+pub fn parse_anytls(
+    raw: &str,
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) -> Result<Value, String> {
     let u = parse_url(raw)?;
-    warn_unknown_query(
+    record_unsupported_queries(
         u.query().unwrap_or(""),
         &[
             "sni",
@@ -116,6 +127,7 @@ pub fn parse_anytls(raw: &str) -> Result<Value, String> {
             "idle-session-timeout",
             "min-idle-session",
         ],
+        unsupported_queries,
     );
     let default_tag = format!(
         "AnyTLS {}:{}",
@@ -169,7 +181,10 @@ pub fn parse_anytls(raw: &str) -> Result<Value, String> {
 }
 
 /// shadowsocks URI（SIP002 及 legacy base64 整段格式）→ sing-box 出站。
-pub fn parse_shadowsocks(raw: &str) -> Result<Value, String> {
+pub fn parse_shadowsocks(
+    raw: &str,
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) -> Result<Value, String> {
     use base64::Engine;
 
     let (tag, main_all) = match raw.find('#') {
@@ -181,7 +196,7 @@ pub fn parse_shadowsocks(raw: &str) -> Result<Value, String> {
         .unwrap_or(main_all)
         .to_string();
     if let Some(q) = main_part.find('?') {
-        warn_unknown_query(&main_part[q + 1..], &[]);
+        record_unsupported_queries(&main_part[q + 1..], &[], unsupported_queries);
         main_part.truncate(q);
     }
 
@@ -251,16 +266,19 @@ pub fn parse_shadowsocks(raw: &str) -> Result<Value, String> {
 }
 
 /// 入口分发：按 scheme 分派到具体解析器。
-pub fn parse_node_uri(uri: &str) -> Result<Value, String> {
+pub fn parse_node_uri(
+    uri: &str,
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) -> Result<Value, String> {
     let trimmed = uri.trim();
     if trimmed.starts_with("hysteria2://") || trimmed.starts_with("hy2://") {
-        return parse_hysteria2(trimmed);
+        return parse_hysteria2(trimmed, unsupported_queries);
     }
     if trimmed.starts_with("anytls://") {
-        return parse_anytls(trimmed);
+        return parse_anytls(trimmed, unsupported_queries);
     }
     if trimmed.starts_with("ss://") {
-        return parse_shadowsocks(trimmed);
+        return parse_shadowsocks(trimmed, unsupported_queries);
     }
     let scheme = trimmed.split("://").next().unwrap_or(trimmed);
     Err(format!(
@@ -286,7 +304,7 @@ mod tests {
     /// tls.enabled 必须恒为 true，漏掉它会让节点以明文协商从而静默失效。
     #[test]
     fn hy2_uri_maps_to_hysteria2_outbound() {
-        let node = parse_node_uri(HY2_URI).expect("hy2 解析失败");
+        let node = parse_node_uri(HY2_URI, &mut BTreeMap::new()).expect("hy2 解析失败");
         assert_eq!(node["type"], json!("hysteria2"));
         assert_eq!(node["tag"], json!("selfhost"));
         assert_eq!(node["server"], json!("192.0.2.1"));
@@ -300,7 +318,8 @@ mod tests {
     /// hysteria2 缺省端口回落 443，缺省 tag 回落 selfhost。
     #[test]
     fn hy2_defaults_when_uri_omits_port_and_tag() {
-        let node = parse_node_uri("hysteria2://pass@192.0.2.9").expect("hy2 解析失败");
+        let node = parse_node_uri("hysteria2://pass@192.0.2.9", &mut BTreeMap::new())
+            .expect("hy2 解析失败");
         assert_eq!(node["server_port"], json!(443));
         assert_eq!(node["tag"], json!("selfhost"));
         // sni 缺省取 host
@@ -310,7 +329,7 @@ mod tests {
     /// anytls 出站字段映射：端口、TLS SNI，且密码为空时必须报错而不是产出空密码节点。
     #[test]
     fn anytls_uri_maps_fields_and_requires_password() {
-        let node = parse_node_uri(ANYTLS_URI).expect("anytls 解析失败");
+        let node = parse_node_uri(ANYTLS_URI, &mut BTreeMap::new()).expect("anytls 解析失败");
         assert_eq!(node["type"], json!("anytls"));
         assert_eq!(node["tag"], json!("AnyNode"));
         assert_eq!(node["server"], json!("192.0.2.2"));
@@ -319,21 +338,24 @@ mod tests {
         assert_eq!(node["tls"]["enabled"], json!(true));
         assert_eq!(node["tls"]["server_name"], json!("cdn.example.net"));
 
-        let err = parse_node_uri("anytls://@192.0.2.2:8443#t").expect_err("缺密码应报错");
+        let err = parse_node_uri("anytls://@192.0.2.2:8443#t", &mut BTreeMap::new())
+            .expect_err("缺密码应报错");
         assert!(err.contains("anytls"), "实际: {err}");
     }
 
     /// anytls 缺省 tag 形如 `AnyTLS host:port`，用于无 fragment 的节点可辨识。
     #[test]
     fn anytls_default_tag_uses_host_and_port() {
-        let node = parse_node_uri("anytls://pass@192.0.2.7").expect("anytls 解析失败");
+        let node = parse_node_uri("anytls://pass@192.0.2.7", &mut BTreeMap::new())
+            .expect("anytls 解析失败");
         assert_eq!(node["tag"], json!("AnyTLS 192.0.2.7:443"));
     }
 
     /// SIP002：userinfo 是 base64(method:password)，解出的 method/password 必须各自就位。
     #[test]
     fn ss_sip002_uri_decodes_base64_userinfo() {
-        let node = parse_node_uri(&ss_sip002_uri()).expect("ss SIP002 解析失败");
+        let node =
+            parse_node_uri(&ss_sip002_uri(), &mut BTreeMap::new()).expect("ss SIP002 解析失败");
         assert_eq!(node["type"], json!("shadowsocks"));
         assert_eq!(node["tag"], json!("HK-01"));
         assert_eq!(node["server"], json!("192.0.2.10"));
@@ -348,7 +370,8 @@ mod tests {
         use base64::Engine;
         let inner =
             base64::engine::general_purpose::STANDARD.encode("aes-128-gcm:fx@192.0.2.11:8388");
-        let node = parse_node_uri(&format!("ss://{inner}#JP-01")).expect("ss legacy 解析失败");
+        let node = parse_node_uri(&format!("ss://{inner}#JP-01"), &mut BTreeMap::new())
+            .expect("ss legacy 解析失败");
         assert_eq!(node["type"], json!("shadowsocks"));
         assert_eq!(node["tag"], json!("JP-01"));
         assert_eq!(node["server"], json!("192.0.2.11"));
@@ -361,8 +384,11 @@ mod tests {
     fn ss_uri_parses_ipv6_literal_host() {
         use base64::Engine;
         let userinfo = base64::engine::general_purpose::STANDARD.encode("aes-128-gcm:fx");
-        let node = parse_node_uri(&format!("ss://{userinfo}@[2001:db8::10]:8388#v6"))
-            .expect("ss IPv6 解析失败");
+        let node = parse_node_uri(
+            &format!("ss://{userinfo}@[2001:db8::10]:8388#v6"),
+            &mut BTreeMap::new(),
+        )
+        .expect("ss IPv6 解析失败");
         assert_eq!(node["server"], json!("2001:db8::10"));
         assert_eq!(node["server_port"], json!(8388));
     }
@@ -370,10 +396,11 @@ mod tests {
     /// 非 ss URI：报错必须含协议名，否则用户拿到「解析失败」无从定位是哪一行。
     #[test]
     fn unsupported_scheme_reports_scheme_name() {
-        let err = parse_node_uri("vmess://xxx").expect_err("vmess 应被拒绝");
+        let err = parse_node_uri("vmess://xxx", &mut BTreeMap::new()).expect_err("vmess 应被拒绝");
         assert!(err.contains("vmess"), "实际: {err}");
 
-        let err2 = parse_node_uri("trojan://pass@a.example:443").expect_err("trojan 应被拒绝");
+        let err2 = parse_node_uri("trojan://pass@a.example:443", &mut BTreeMap::new())
+            .expect_err("trojan 应被拒绝");
         assert!(err2.contains("trojan"), "实际: {err2}");
     }
 
@@ -396,15 +423,15 @@ mod tests {
     #[test]
     fn hy2_and_anytls_and_ss_with_unknown_params_still_parse() {
         let hy2 = "hy2://pass@192.0.2.1:8388?sni=example.com&unknown_opt=1#tag1";
-        let node = parse_node_uri(hy2).expect("hy2 解析应该成功");
+        let node = parse_node_uri(hy2, &mut BTreeMap::new()).expect("hy2 解析应该成功");
         assert_eq!(node["type"], json!("hysteria2"));
 
         let anytls = "anytls://pass@192.0.2.2:8443?sni=example.com&custom=val#tag2";
-        let node2 = parse_node_uri(anytls).expect("anytls 解析应该成功");
+        let node2 = parse_node_uri(anytls, &mut BTreeMap::new()).expect("anytls 解析应该成功");
         assert_eq!(node2["type"], json!("anytls"));
 
         let ss = "ss://YWVzLTEyOC1nY206Zng=@192.0.2.10:8388?plugin=obfs#tag3";
-        let node3 = parse_node_uri(ss).expect("ss 解析应该成功");
+        let node3 = parse_node_uri(ss, &mut BTreeMap::new()).expect("ss 解析应该成功");
         assert_eq!(node3["type"], json!("shadowsocks"));
     }
 }

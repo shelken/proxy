@@ -226,6 +226,10 @@ beforeAll(async () => {
       const path = new URL(req.url).pathname;
       if (path === "/sub-line") return new Response(SUB_LINES);
       if (path === "/sub-b64") return new Response(SUB_B64);
+      if (path === "/sub-options" || path === "/sub-options-b64") {
+        const uri = `hy2://fixture@192.0.2.21:443?disable-chrome-parrot=private-value&prefer-ipv6=private-value#${path.slice(1)}`;
+        return new Response(path.endsWith("-b64") ? Buffer.from(uri).toString("base64") : uri);
+      }
       if (path === "/sub-fail") return new Response("boom", { status: 500 });
       if (path === "/sub-garbage") return new Response("not-base64!!");
       if (path === "/sub-huge") return new Response("A".repeat(5 * 1024 * 1024 + 16));
@@ -324,20 +328,33 @@ describe("server 端点基础", () => {
     expect(res.status).toBe(414);
   }, 20000);
 
-  test("Hysteria2 未支持的参数在服务端日志提示", async () => {
+  test("未支持的参数按请求汇总，重复刷新独立计数且不输出参数值", async () => {
     const dir = fixtureDir("node-options");
     const cfg = join(dir, "config.yaml");
-    writeFileSync(cfg, "nodes:\n  - hy2://test-pass@192.0.2.20:443?disable-chrome-parrot=1&prefer-ipv6=1#node-options\n");
-    const artifact = await fetchSub("node-options-sub", await encodeOk("node-options-encode", ["-s", MAIN, "-c", cfg]));
-    expect(outboundOf(artifact, "node-options")?.type).toBe("hysteria2");
-    for (const fragment of ["节点 URL 参数 disable-chrome-parrot 未应用", "节点 URL 参数 prefer-ipv6 未应用"]) {
+    const query = "sni=example.com&disable-chrome-parrot=private-value&prefer-ipv6=private-value&prefer-ipv6=private-value";
+    const nodes = Array.from({ length: 50 }, (_, i) => `hy2://fixture@192.0.2.20:443?${query}#node-options-${i}`);
+    nodes.push(`anytls://fixture@192.0.2.22:443?${query}#node-options-anytls`);
+    nodes.push(`ss://${Buffer.from("aes-128-gcm:fixture").toString("base64")}@192.0.2.23:8388?disable-chrome-parrot=private-value&prefer-ipv6=private-value#node-options-ss`);
+    writeFileSync(cfg, `subs:\n  - ${SUBS}/sub-options\n  - ${SUBS}/sub-options-b64\nnodes:\n${nodes.map((uri) => `  - ${uri}`).join("\n")}\n`);
+    const url = await encodeOk("node-options-encode", ["-s", MAIN, "-c", cfg]);
+    for (let poll = 0; poll < 2; poll++) {
+      const offset = mainServer.state.stderr.length;
+      const artifact = await fetchSub(`node-options-sub-${poll}`, url);
+      expect(outboundOf(artifact, "node-options-0")?.type).toBe("hysteria2");
+      expect(outboundOf(artifact, "node-options-anytls")?.type).toBe("anytls");
+      expect(outboundOf(artifact, "node-options-ss")?.type).toBe("shadowsocks");
       const deadline = Date.now() + 5000;
-      while (!mainServer.state.stderr.includes(fragment) && Date.now() < deadline) {
+      while (!mainServer.state.stderr.slice(offset).includes("GET /sub -> 200") && Date.now() < deadline) {
         await Bun.sleep(20);
       }
-      expect(mainServer.state.stderr).toContain(fragment);
+      const stderr = mainServer.state.stderr.slice(offset);
+      expect(stderr.split("\n").filter((line) => line.startsWith("[sbtools] 节点 URL 参数 "))).toEqual([
+        "[sbtools] 节点 URL 参数 disable-chrome-parrot 未应用（54 个节点）",
+        "[sbtools] 节点 URL 参数 prefer-ipv6 未应用（54 个节点）",
+      ]);
+      expect(stderr).not.toContain("private-value");
     }
-  }, 30000);
+  }, 60000);
 });
 
 describe("encode 与默认 HOME 配置路径", () => {

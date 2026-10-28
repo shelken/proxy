@@ -18,11 +18,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-/// 载荷参数防御性上限：handle_sub 内部处理的最大字节数（128KB）。
-///
-/// HTTP GET /sub 的 query string 超过底层 HTTP 协议栈上限（~64KB）时会直接返回 414 URI Too Long。
-/// 此常量作为 handle_sub 内部装配逻辑的防御性安全上限。
-const MAX_QUERY_LEN: usize = 128 * 1024;
 /// 订阅响应体单请求上限。
 const MAX_SUB_BODY: usize = 5 * 1024 * 1024;
 
@@ -250,9 +245,6 @@ fn handle_sub(
     secret_key: &crypto::CryptoStaticSecret,
     query_d: &str,
 ) -> Result<(String, template::TemplateSource), String> {
-    if query_d.len() > MAX_QUERY_LEN {
-        return Err(format!("请求参数超过 {}KB 上限", MAX_QUERY_LEN / 1024));
-    }
     let plaintext = crypto::decrypt_payload(secret_key, query_d)?;
     let payload = parse_payload(&plaintext)?;
     let (base, direct_layer, source) = assemble_base(&payload)?;
@@ -801,14 +793,5 @@ mod tests {
             err.contains("duplicate DNS server tag"),
             "内核应拒绝同名 DNS server tag，实际: {err}"
         );
-    }
-
-    #[test]
-    fn handle_sub_rejects_payload_exceeding_max_query_len() {
-        let (sk_hex, _) = crypto::generate_keypair_hex();
-        let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
-        let overlong = "a".repeat(MAX_QUERY_LEN + 1);
-        let err = handle_sub(&sk, &overlong).expect_err("超长 payload 应当被拒绝");
-        assert!(err.contains("上限"), "实际: {err}");
     }
 }
