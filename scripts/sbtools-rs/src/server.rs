@@ -119,7 +119,6 @@ fn assemble_base(
     let nodes = assemble::collect_nodes(&input.sources, &input)?;
 
     let (mut tpl, source) = template::load_template(payload.template_url.as_deref())?;
-    // 反回环直连规则（服务端 DNS 视角尽力解析；失败则只保留 domain 规则）
     let direct_layer = assemble::generate_node_direct_rule(&nodes, &tpl)
         .map(|rule| json!({"route": {"rules": [rule]}}));
     assemble::finalize(&mut tpl, nodes)?;
@@ -668,16 +667,12 @@ mod tests {
         serde_json::from_str(&merged).expect("合法 JSON")
     }
 
-    /// 节点为纯域名且解析失败时，规则仍须生成，只保留 domain 分支。
-    /// `.invalid` 是保留 TLD，解析必败，测试封闭不依赖网络。
-    ///
-    /// 断言落在反回环层（规则生成产物）上，不经过内核：置顶语义由
-    /// `node_direct_rule_is_pinned_to_first_position` 在合并产物上覆盖。
+    /// 域名节点只生成 domain 规则，避免为解析出的地址创建直连规则。
     #[test]
-    fn node_direct_rule_is_pinned_even_without_resolved_ip() {
+    fn node_direct_rule_for_domain_does_not_add_resolved_ip() {
         let payload = Payload {
             subs: vec![],
-            nodes: vec!["hy2://pass@node.invalid:8388#dom".into()],
+            nodes: vec!["hy2://pass@localhost:8388#dom".into()],
             overlay: None,
             template_url: None,
         };
@@ -685,7 +680,8 @@ mod tests {
         let rule = &direct_layer.expect("应生成反回环层")["route"]["rules"][0];
 
         assert_eq!(rule["outbound"], json!("direct"));
-        assert_eq!(rule["domain"], json!(["node.invalid"]));
+        assert_eq!(rule["domain"], json!(["localhost"]));
+        assert!(rule.get("ip_cidr").is_none());
     }
 
     /// 无 overlay 时 merge 仍须产出配置；overlay 存在时覆盖底模同名标量。
