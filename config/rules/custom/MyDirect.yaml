@@ -18,6 +18,7 @@ rules:
       - steamserver.net
       - icloud.com.cn
       - ipinfo.io
+      - ip.im
       - ip.sb
       - ident.me
       - myip.com

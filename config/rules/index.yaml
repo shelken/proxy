@@ -40,6 +40,7 @@ Japan: config/rules/custom/Japan.yaml
 MyDirect: config/rules/custom/MyDirect.yaml
 MyProxy: config/rules/custom/MyProxy.yaml
 MyReject: config/rules/custom/MyReject.yaml
+MySelfhost: config/rules/custom/MySelfhost.yaml
 OpenAI: config/rules/custom/OpenAI.yaml
 opencode: config/rules/custom/opencode.yaml
 ptcg: config/rules/custom/ptcg.yaml

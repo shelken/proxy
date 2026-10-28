@@ -24,11 +24,12 @@
       "type": "selector",
       "tag": "japansite",
       "outbounds": [
+        "jp",
         "proxy",
         "selfhost",
         "(?i)(日本|川日|东京|大阪|JP|Japan)"
       ],
-      "default": "proxy",
+      "default": "jp",
       "interrupt_exist_connections": true
     }
   ]

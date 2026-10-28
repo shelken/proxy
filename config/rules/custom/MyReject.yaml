@@ -18,6 +18,8 @@ rules:
       - iads.unity3d.com
       - estimatedeferbulk.com
       - upc.zztfly.com
+      - siftscience.com
+      - immersivetranslate.com
   - domain:
       - msmp.abchina.com.cn
       - browser-intake-us5-datadoghq.com
@@ -25,3 +27,4 @@ rules:
   - domain_keyword:
       - analytics-api
       - datadoghq
+      - tmfmazu4
