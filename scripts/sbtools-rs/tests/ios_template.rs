@@ -1,7 +1,7 @@
 //! iOS 底模走真实装配（节点注入、策略组展开、保留标签）后必须仍被内核接受（ADR-0010）。
 //! 底模含 `endpoints` 与指向 endpoint 的路由目标，这里锁住装配不丢 endpoint、节点不与其撞名。
 
-use sbtools::assemble::finalize;
+use sbtools::assemble::{NodeSet, finalize};
 use sbtools::config::reject_path_fields;
 use sbtools::template::resolve_singbox_binary;
 use serde_json::{Value, json};
@@ -36,7 +36,7 @@ fn ios_template_assembles_and_passes_kernel_check() {
     // 客户端走 template_url 下载底模时同样要过这一关，state_directory 不在禁用字段内
     reject_path_fields(&tpl).expect("iOS 底模应通过远程底模的路径字段校验");
     let nodes = vec![ss("HK-01", "192.0.2.10"), ss("JP-01", "192.0.2.11")];
-    finalize(&mut tpl, nodes).expect("装配应成功");
+    finalize(&mut tpl, NodeSet { nodes, declared: 0 }).expect("装配应成功");
     assert_eq!(
         tpl["endpoints"][0]["tag"], "ts-ep",
         "装配不应丢失 endpoints"
@@ -73,7 +73,14 @@ fn node_named_like_endpoint_is_renamed() {
     let mut tpl: Value =
         serde_json::from_str(include_str!("../../../config/sing-box/template-ios.json"))
             .expect("iOS 底模应为合法 JSON");
-    finalize(&mut tpl, vec![ss("ts-ep", "192.0.2.10")]).expect("装配应成功");
+    finalize(
+        &mut tpl,
+        NodeSet {
+            nodes: vec![ss("ts-ep", "192.0.2.10")],
+            declared: 0,
+        },
+    )
+    .expect("装配应成功");
 
     let dir = std::env::temp_dir().join(format!("sbtools-ios-dup-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("临时目录");

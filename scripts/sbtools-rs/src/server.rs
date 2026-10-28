@@ -119,7 +119,7 @@ fn assemble_base(
     let nodes = assemble::collect_nodes(&input.sources, &input)?;
 
     let (mut tpl, source) = template::load_template(payload.template_url.as_deref())?;
-    let direct_layer = assemble::generate_node_direct_rule(&nodes, &tpl)
+    let direct_layer = assemble::generate_node_direct_rule(&nodes.nodes, &tpl)
         .map(|rule| json!({"route": {"rules": [rule]}}));
     assemble::finalize(&mut tpl, nodes)?;
     Ok((tpl, direct_layer, source))

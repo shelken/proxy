@@ -22,7 +22,7 @@
       "type": "selector",
       "tag": "selfhost",
       "outbounds": [
-        "(?i)(vps|hy2|selfhost)"
+        "@declared"
       ],
       "interrupt_exist_connections": true
     },

@@ -148,7 +148,7 @@
       "type": "selector",
       "tag": "selfhost",
       "outbounds": [
-        "(?i)(vps|hy2|selfhost)"
+        "@declared"
       ],
       "interrupt_exist_connections": true
     },
@@ -521,6 +521,10 @@
         "outbound": "direct"
       },
       {
+        "rule_set": "MySelfhost",
+        "outbound": "selfhost"
+      },
+      {
         "rule_set": "MyProxy",
         "outbound": "proxy"
       },
@@ -677,6 +681,12 @@
         "type": "remote",
         "tag": "MyProxy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "MySelfhost",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MySelfhost.srs",
         "update_interval": "24h0m0s"
       },
       {

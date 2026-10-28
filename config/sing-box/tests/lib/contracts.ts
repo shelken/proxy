@@ -36,11 +36,19 @@ export const assertMyDirectAndProxyBeforeServices = (
   const myProxy = rules.findIndex(
     (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
   );
+  const mySelfhost = rules.findIndex(
+    (r) => r.outbound === "selfhost" && asArray(r.rule_set).includes("MySelfhost"),
+  );
   const firstService = rules.findIndex(
-    (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
+    (r) =>
+      r.outbound !== undefined &&
+      serviceOutbounds.has(r.outbound) &&
+      !asArray(r.rule_set).includes("MySelfhost"),
   );
   expect(myDirect).toBeGreaterThanOrEqual(0);
   expect(myProxy).toBeGreaterThanOrEqual(0);
+  expect(mySelfhost).toBeGreaterThanOrEqual(0);
+  expect(mySelfhost).toBeLessThan(myProxy);
   expect(firstService).toBeGreaterThan(-1);
   expect(myDirect).toBeLessThan(firstService);
   expect(myProxy).toBeLessThan(firstService);

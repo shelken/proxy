@@ -132,7 +132,11 @@ fn compile_pattern(item: &str) -> Result<regex::Regex, String> {
 ///
 /// 判活是「能否传递地落到具体节点」：只有直接含节点 / direct，或引用到已判活的组，才算活。
 /// 迭代到不再变化（最小不动点），保证剔除空组后不留悬空引用。
-fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, String> {
+fn populate_selectors(
+    template: &Value,
+    tags: &[String],
+    declared_tags: &[String],
+) -> Result<Vec<Value>, String> {
     let declared: Vec<&Value> = template["outbounds"]
         .as_array()
         .map(|a| {
@@ -159,6 +163,10 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
                 let Some(item_str) = item.as_str() else {
                     continue;
                 };
+                if item_str == TOKEN_DECLARED {
+                    expanded.extend(declared_tags.iter().cloned());
+                    continue;
+                }
                 if is_node_or_direct(item_str) || group_tags.contains(item_str) {
                     expanded.push(item_str.to_string());
                     continue;
@@ -236,6 +244,23 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
 /// 订阅抓取函数类型。抽成别名以免在结构体字段里内联复杂类型。
 pub type SubscriptionFetcher = Box<dyn Fn(&str) -> Result<String, String>>;
 
+/// 节点全集 + 每个节点的来源。
+///
+/// 来源决定成员资格：`selfhost` 这类基础设施池只收 `nodes:` 直写的节点，
+/// 不能靠 tag 正则猜——机场节点自称 `vps-hk` 会被误收，自建节点改中文名会被漏收。
+#[derive(Default, Debug)]
+pub struct NodeSet {
+    pub nodes: Vec<Value>,
+    /// 前 `declared` 个来自 `nodes:` 直写，其余来自订阅。
+    pub declared: usize,
+}
+
+/// 策略组成员里的令牌：展开为 `nodes:` 直写节点的标签。
+///
+/// 写成模板数据而不是装配器分支：池的成员语义留在模板里可见，
+/// 装配器只认识令牌本身，不出现任何具体组名。
+const TOKEN_DECLARED: &str = "@declared";
+
 #[derive(Default)]
 pub struct AssembleInput {
     /// `|` 分隔的源列表：订阅 URL 与私有节点 URI 任意混合。
@@ -246,7 +271,7 @@ pub struct AssembleInput {
 
 /// 解析全部源 → 节点全集（私有节点保序前插，机场订阅原序追加）。
 /// 这是"所有节点确定"的唯一时点：反回环规则必须在此之后、装配之前生成。
-pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>, String> {
+pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<NodeSet, String> {
     let mut private_nodes: Vec<Value> = Vec::new();
     let mut airport_nodes: Vec<Value> = Vec::new();
 
@@ -262,31 +287,37 @@ pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>,
         }
     }
 
+    let declared = private_nodes.len();
     let mut nodes = private_nodes;
     nodes.extend(airport_nodes);
     if nodes.is_empty() {
         return Err("未解析出任何节点：请检查源列表内容".into());
     }
-    Ok(nodes)
+    Ok(NodeSet { nodes, declared })
 }
 
 /// 节点全集 + 底模 → 填充完 outbounds 的完整配置（纯内存，零网络）。
-pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
+pub fn finalize(template: &mut Value, node_set: NodeSet) -> Result<(), String> {
     // 远程底模可能缺这一层；缺失时直接报错，避免产出的配置静默丢掉全部策略组
     if !template["outbounds"].is_array() {
         return Err("底模缺少 outbounds 数组".into());
     }
 
     let reserved = reserved_tags(template);
-    let mut nodes = nodes;
+    let NodeSet {
+        mut nodes,
+        declared,
+    } = node_set;
     assign_tags(&mut nodes, &reserved);
     let tags: Vec<String> = nodes
         .iter()
         .filter_map(|n| n["tag"].as_str())
         .map(str::to_string)
         .collect();
+    // 改名后按原顺序切片取直写节点：assign_tags 不改顺序
+    let declared_tags: Vec<String> = tags[..declared].to_vec();
 
-    let selectors = populate_selectors(template, &tags)?;
+    let selectors = populate_selectors(template, &tags, &declared_tags)?;
 
     let mut outbounds = vec![json!({"type": "direct", "tag": "direct"})];
     outbounds.extend(nodes);
@@ -325,12 +356,172 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
             *detour = Value::from(fallback);
         }
     }
+    prune_route_targets(template, &available, fallback);
     Ok(())
+}
+
+/// 路由目标完整性：`route.rules[].outbound` 与 `route.final` 必须落在出站集合内。
+///
+/// 内核 `check` 不校验这两个位置（实测：引用未声明 tag 时 check 通过），
+/// 缺失的引用只在**命中该规则时**报 `outbound not found`。所以这里必须自己收口：
+/// 悬空规则整条移除，`final` 回退到仍存在的出口。
+///
+/// 移除而不是改指别的出口：路由目标是用户的明确意图（如邮件固定走自建），
+/// 悄悄改指 proxy 等于把流量送去用户明确排除的线路。
+fn prune_route_targets(
+    template: &mut Value,
+    available: &std::collections::HashSet<String>,
+    fallback: &str,
+) {
+    let Some(rules) = template["route"]["rules"].as_array_mut() else {
+        return;
+    };
+    rules.retain(|rule| {
+        let Some(target) = rule.get("outbound").and_then(|v| v.as_str()) else {
+            return true;
+        };
+        if target == "direct" || available.contains(target) {
+            return true;
+        }
+        let what = rule
+            .get("rule_set")
+            .and_then(|v| {
+                v.as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    .or_else(|| v.as_str())
+            })
+            .or_else(|| {
+                rule.get("domain")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("?");
+        eprintln!(
+            "[sbtools] 路由规则 (rule_set={what}) 的目标 '{target}' 无节点已剔除，整条规则移除"
+        );
+        false
+    });
+    if let Some(target) = template["route"]["final"].as_str()
+        && target != "direct"
+        && !available.contains(target)
+    {
+        eprintln!("[sbtools] route.final '{target}' 不存在，回退 '{fallback}'");
+        template["route"]["final"] = Value::from(fallback);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：`@declared` 池只收 `nodes:` 直写节点，按来源而不是 tag 名判定。
+    ///
+    /// 修复前池成员是正则 `(?i)(vps|hy2|selfhost)`，两个方向都错：
+    /// 机场节点自称 `vps-hk` 会混进池（邮件走机场），
+    /// 自建节点改名成中文则漏收（邮件直接失败）。
+    #[test]
+    fn declared_pool_selects_by_origin_not_name() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+
+        // 一个机场节点自称 vps-hk，一个自建节点叫中文名
+        let airport = json!({"type": "direct", "tag": "vps-hk"});
+        let mine = json!({"type": "direct", "tag": "自建"});
+        finalize(
+            &mut tpl,
+            NodeSet {
+                nodes: vec![mine, airport],
+                declared: 1,
+            },
+        )
+        .expect("装配");
+
+        let pool = tpl["outbounds"]
+            .as_array()
+            .expect("outbounds")
+            .iter()
+            .find(|o| o["tag"] == "selfhost")
+            .expect("selfhost 池应存在");
+        assert_eq!(
+            pool["outbounds"],
+            json!(["自建"]),
+            "池只应包含直写节点，机场节点即使叫 vps-hk 也不得混入"
+        );
+    }
+
+    /// 回归：没有直写节点时池被剔除，引用它的路由规则整条移除，
+    /// 不留下内核只在命中时才报错的悬空引用。
+    #[test]
+    fn route_rules_to_pruned_pool_are_removed() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        finalize(
+            &mut tpl,
+            NodeSet {
+                nodes: vec![json!({"type": "direct", "tag": "HK-01"})],
+                declared: 0,
+            },
+        )
+        .expect("装配");
+
+        assert!(
+            !tpl["outbounds"]
+                .as_array()
+                .expect("outbounds")
+                .iter()
+                .any(|o| o["tag"] == "selfhost"),
+            "无直写节点时池应被剔除"
+        );
+        assert!(
+            !tpl["route"]["rules"]
+                .as_array()
+                .expect("rules")
+                .iter()
+                .any(|r| r["rule_set"] == "MySelfhost"),
+            "指向已剔除池的规则必须整条移除"
+        );
+    }
+
+    /// 不变量：装配产物里任何路由目标都必须落在出站集合内。
+    #[test]
+    fn assembled_route_targets_all_resolve() {
+        for declared in [0, 1] {
+            let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+            let nodes = vec![
+                json!({"type": "direct", "tag": "mine"}),
+                json!({"type": "direct", "tag": "HK-01"}),
+            ];
+            finalize(&mut tpl, NodeSet { nodes, declared }).expect("装配");
+
+            let defined: std::collections::HashSet<&str> = tpl["outbounds"]
+                .as_array()
+                .expect("outbounds")
+                .iter()
+                .filter_map(|o| o["tag"].as_str())
+                .chain(
+                    tpl["endpoints"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|e| e["tag"].as_str()),
+                )
+                .collect();
+
+            for rule in tpl["route"]["rules"].as_array().expect("rules") {
+                if let Some(target) = rule["outbound"].as_str() {
+                    assert!(
+                        target == "direct" || defined.contains(target),
+                        "declared={declared}: 规则目标 {target} 不在出站集合内"
+                    );
+                }
+            }
+            let final_target = tpl["route"]["final"].as_str().expect("final");
+            assert!(
+                final_target == "direct" || defined.contains(final_target),
+                "declared={declared}: route.final {final_target} 不在出站集合内"
+            );
+        }
+    }
 
     /// 回归：(?i) 前缀必须保留大小写不敏感语义。
     /// 修复前 strip 掉前缀后直接编译，小写节点名（hk-02 等）全部漏匹配。
@@ -368,7 +559,14 @@ mod tests {
                 "tag": "broken-filter",
                 "outbounds": ["([unclosed", "direct"]
             }));
-        let err = finalize(&mut tpl, Vec::new()).expect_err("非法过滤模式必须失败");
+        let err = finalize(
+            &mut tpl,
+            NodeSet {
+                nodes: Vec::new(),
+                declared: 0,
+            },
+        )
+        .expect_err("非法过滤模式必须失败");
         assert!(err.contains("不是合法正则"), "实际: {err}");
     }
 
@@ -420,14 +618,14 @@ mod tests {
     #[test]
     fn dangling_group_refs_are_pruned() {
         let mut tpl = crate::template::embedded_template().expect("内嵌底模");
-        let input = AssembleInput {
-            // 只有日本/新加坡节点：selfhost 组展开为空被剔除
-            sources: "hy2://pass@192.0.2.1:8388#jp-osaka-01|\
-                      hy2://pass@192.0.2.2:8388#sg-singapore-01"
-                .into(),
-            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        // 只有订阅节点、没有 `nodes:` 直写：selfhost 池展开为空被剔除
+        let nodes = NodeSet {
+            nodes: vec![
+                json!({"type": "direct", "tag": "jp-osaka-01"}),
+                json!({"type": "direct", "tag": "sg-singapore-01"}),
+            ],
+            declared: 0,
         };
-        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
         finalize(&mut tpl, nodes).expect("装配");
 
         let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
@@ -508,7 +706,7 @@ mod tests {
         };
 
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let rule = generate_node_direct_rule(&nodes, &tpl).expect("应生成反回环规则");
+        let rule = generate_node_direct_rule(&nodes.nodes, &tpl).expect("应生成反回环规则");
         assert_eq!(rule["outbound"], "direct");
         let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
         for expected in ["192.0.2.1/32", "2001:db8::1/128"] {
@@ -548,7 +746,7 @@ mod tests {
             fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
         };
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let rule = generate_node_direct_rule(&nodes, &tpl).expect("应生成反回环规则");
+        let rule = generate_node_direct_rule(&nodes.nodes, &tpl).expect("应生成反回环规则");
         let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
         assert_eq!(
             cidrs.len(),
@@ -682,7 +880,11 @@ mod tests {
             &airport_body(),
         );
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let tags: Vec<&str> = nodes.iter().filter_map(|n| n["tag"].as_str()).collect();
+        let tags: Vec<&str> = nodes
+            .nodes
+            .iter()
+            .filter_map(|n| n["tag"].as_str())
+            .collect();
         assert_eq!(
             tags,
             vec!["selfhost", "AnyNode", "HK-01", "JP-01"],
@@ -847,15 +1049,18 @@ mod tests {
         assert_eq!(detour, "hk", "组存在时不得误改 detour");
     }
 
-    /// selector 与 urltest 组按模式命中对应节点。
+    /// selector 与 urltest 组按模式命中对应节点；池按来源命中直写节点。
     #[test]
     fn groups_are_populated() {
         let mut tpl = crate::template::embedded_template().expect("内嵌底模");
-        let input = input_with_fetcher(
-            "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@192.0.2.2:8388#hk-02",
-            "",
-        );
-        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        // 第一个是 nodes: 直写（进 selfhost 池），第二个是订阅节点（只进地区组）
+        let nodes = NodeSet {
+            nodes: vec![
+                json!({"type": "direct", "tag": "selfhost-node"}),
+                json!({"type": "direct", "tag": "hk-02"}),
+            ],
+            declared: 1,
+        };
         finalize(&mut tpl, nodes).expect("装配");
 
         let outbounds = tpl["outbounds"].as_array().expect("outbounds 为数组");
@@ -866,7 +1071,7 @@ mod tests {
         assert_eq!(
             selfhost["outbounds"],
             json!(["selfhost-node"]),
-            "selfhost 组模式 (?i)(vps|hy2|selfhost) 应命中让位后的 selfhost-node"
+            "池只收 nodes: 直写节点"
         );
 
         let hk = outbounds
