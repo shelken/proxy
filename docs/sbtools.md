@@ -96,13 +96,13 @@ ECIES（X25519 + HKDF-SHA256 + AES-256-GCM），每次 `encode` 采用新临时�
 ```mermaid
 sequenceDiagram
     participant SFM as SFM / 客户端
-    participant H as tiny_http
+    participant H as HTTP 服务
     participant Hd as handle_sub
     participant As as assemble
     participant CLI as sing-box CLI
 
     SFM->>H: GET /sub?d=<密文>
-    H->>H: query 长度 ≤ 128KB
+    H->>H: 检查请求长度
     H->>Hd: decrypt_payload
     Note over Hd: 失败 → 403
     Hd->>Hd: parse_payload（防御性校验）
@@ -131,10 +131,11 @@ sequenceDiagram
 | 码 | 触发 |
 | :--- | :--- |
 | 403 | 密文 Base64URL 非法、长度不足、GCM 校验失败（错误公钥加密或篡改） |
-| 400 | 缺少 `d`、超查询长度上限、载荷结构非法、订阅抓取失败、CLI 合并失败 |
+| 400 | 缺少 `d`、载荷结构非法、订阅抓取失败、CLI 合并失败 |
 | 404 | 未匹配的路径或非 GET 方法 |
+| 414 | HTTP 服务拒绝超长 URL |
 
-日志只输出方法与路径，**不含 query string**，因此密文与明文都不落盘
+请求日志只输出方法与路径，**不含 query string**；节点参数提示只输出参数名，不输出参数值
 
 ```text
 [sbtools server] GET /sub -> 200 (1258ms, 底模: remote)
@@ -209,6 +210,8 @@ mise exec -- sing-box check -c "$d/result.json"   # 1.14.3 起在此 FATAL
 | `template_url` | 否 | 远程底模 URL，仅 `https`，配置后替代内嵌底模 |
 
 `subs` 与 `nodes` 至少一个非空
+
+未支持的节点 URI 查询参数会在服务端日志提示，参数值不会输出
 
 ```yaml
 subs:

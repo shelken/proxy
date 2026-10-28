@@ -1,6 +1,8 @@
 //! 节点 URI 解析：hysteria2 / hy2、anytls、shadowsocks（SIP002 + legacy）。
 //! 语义对齐旧 endpoint.ts，无法识别的输入 fail-fast。
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 fn parse_url(raw: &str) -> Result<url::Url, String> {
@@ -17,6 +19,35 @@ fn query_get(url: &url::Url, key: &str) -> Option<String> {
     url.query_pairs()
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.into_owned())
+}
+
+fn extract_unsupported_query_names(query: &str, supported: &[&str]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut names = Vec::new();
+    for (key, _) in url::form_urlencoded::parse(query.as_bytes()) {
+        if key.is_empty() || supported.contains(&key.as_ref()) {
+            continue;
+        }
+        let name = if key.len() <= 64
+            && key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            key.into_owned()
+        } else {
+            "<无法显示>".to_string()
+        };
+        if seen.insert(name.clone()) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+fn warn_unknown_query(query: &str, supported: &[&str]) {
+    for name in extract_unsupported_query_names(query, supported) {
+        eprintln!("[sbtools] 节点 URL 参数 {name} 未应用");
+    }
 }
 
 fn tag_from_hash(url: &url::Url, default: &str) -> String {
@@ -40,6 +71,10 @@ fn decode_userinfo_password(u: &url::Url) -> String {
 /// hysteria2:// 或 hy2:// → sing-box hysteria2 出站。
 pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
     let u = parse_url(raw)?;
+    warn_unknown_query(
+        u.query().unwrap_or(""),
+        &["sni", "insecure", "obfs", "obfs-password"],
+    );
     let tag = tag_from_hash(&u, "selfhost");
     let auth = decode_userinfo_password(&u);
     let port: u16 = u.port().unwrap_or(443);
@@ -70,6 +105,18 @@ pub fn parse_hysteria2(raw: &str) -> Result<Value, String> {
 /// anytls:// → sing-box anytls 出站（字段语义按官方 anytls.md）。
 pub fn parse_anytls(raw: &str) -> Result<Value, String> {
     let u = parse_url(raw)?;
+    warn_unknown_query(
+        u.query().unwrap_or(""),
+        &[
+            "sni",
+            "insecure",
+            "alpn",
+            "fp",
+            "idle-session-check-interval",
+            "idle-session-timeout",
+            "min-idle-session",
+        ],
+    );
     let default_tag = format!(
         "AnyTLS {}:{}",
         u.host_str().unwrap_or(""),
@@ -134,6 +181,7 @@ pub fn parse_shadowsocks(raw: &str) -> Result<Value, String> {
         .unwrap_or(main_all)
         .to_string();
     if let Some(q) = main_part.find('?') {
+        warn_unknown_query(&main_part[q + 1..], &[]);
         main_part.truncate(q);
     }
 
@@ -327,5 +375,36 @@ mod tests {
 
         let err2 = parse_node_uri("trojan://pass@a.example:443").expect_err("trojan 应被拒绝");
         assert!(err2.contains("trojan"), "实际: {err2}");
+    }
+
+    #[test]
+    fn query_names_filters_supported_and_deduplicates() {
+        let query = "sni=a.com&insecure=1&foo=1&bar=2&foo=3";
+        let unsupported = extract_unsupported_query_names(query, &["sni", "insecure"]);
+        assert_eq!(unsupported, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn query_names_masks_invalid_characters_and_overlong() {
+        let overlong_key = "a".repeat(65);
+        let query = format!("normal-key=1&bad%key=2&{overlong_key}=3");
+        let unsupported = extract_unsupported_query_names(&query, &[]);
+        // 多个无法显示的畸形 key 也会被统一去重为单个 <无法显示>
+        assert_eq!(unsupported, vec!["normal-key", "<无法显示>"]);
+    }
+
+    #[test]
+    fn hy2_and_anytls_and_ss_with_unknown_params_still_parse() {
+        let hy2 = "hy2://pass@192.0.2.1:8388?sni=example.com&unknown_opt=1#tag1";
+        let node = parse_node_uri(hy2).expect("hy2 解析应该成功");
+        assert_eq!(node["type"], json!("hysteria2"));
+
+        let anytls = "anytls://pass@192.0.2.2:8443?sni=example.com&custom=val#tag2";
+        let node2 = parse_node_uri(anytls).expect("anytls 解析应该成功");
+        assert_eq!(node2["type"], json!("anytls"));
+
+        let ss = "ss://YWVzLTEyOC1nY206Zng=@192.0.2.10:8388?plugin=obfs#tag3";
+        let node3 = parse_node_uri(ss).expect("ss 解析应该成功");
+        assert_eq!(node3["type"], json!("shadowsocks"));
     }
 }

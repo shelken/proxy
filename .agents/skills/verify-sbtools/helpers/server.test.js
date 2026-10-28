@@ -319,11 +319,25 @@ describe("server 端点基础", () => {
     expect(garbage.body).toMatch(/Base64URL/);
   }, 20000);
 
-  test("/sub 超长参数 400（128KB 查询上限）", async () => {
-    const { res, body } = await callEndpoint("sub-overlong", `${MAIN}/sub?d=${"A".repeat(128 * 1024 + 10)}`);
-    expect(res.status).toBe(400);
-    expect(body).toContain("上限");
+  test("/sub 超长 URL 返回 414", async () => {
+    const { res } = await callEndpoint("sub-overlong", `${MAIN}/sub?d=${"A".repeat(128 * 1024 + 10)}`);
+    expect(res.status).toBe(414);
   }, 20000);
+
+  test("Hysteria2 未支持的参数在服务端日志提示", async () => {
+    const dir = fixtureDir("node-options");
+    const cfg = join(dir, "config.yaml");
+    writeFileSync(cfg, "nodes:\n  - hy2://test-pass@192.0.2.20:443?disable-chrome-parrot=1&prefer-ipv6=1#node-options\n");
+    const artifact = await fetchSub("node-options-sub", await encodeOk("node-options-encode", ["-s", MAIN, "-c", cfg]));
+    expect(outboundOf(artifact, "node-options")?.type).toBe("hysteria2");
+    for (const fragment of ["节点 URL 参数 disable-chrome-parrot 未应用", "节点 URL 参数 prefer-ipv6 未应用"]) {
+      const deadline = Date.now() + 5000;
+      while (!mainServer.state.stderr.includes(fragment) && Date.now() < deadline) {
+        await Bun.sleep(20);
+      }
+      expect(mainServer.state.stderr).toContain(fragment);
+    }
+  }, 30000);
 });
 
 describe("encode 与默认 HOME 配置路径", () => {

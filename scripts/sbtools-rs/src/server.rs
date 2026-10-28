@@ -18,7 +18,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-/// 请求参数上限：URL 查询串（d=）最大字节数。
+/// 载荷参数防御性上限：handle_sub 内部处理的最大字节数（128KB）。
+///
+/// HTTP GET /sub 的 query string 超过底层 HTTP 协议栈上限（~64KB）时会直接返回 414 URI Too Long。
+/// 此常量作为 handle_sub 内部装配逻辑的防御性安全上限。
 const MAX_QUERY_LEN: usize = 128 * 1024;
 /// 订阅响应体单请求上限。
 const MAX_SUB_BODY: usize = 5 * 1024 * 1024;
@@ -301,11 +304,6 @@ async fn handle_sub_route(
         eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms)");
         return (StatusCode::BAD_REQUEST, "缺少 d 参数").into_response();
     };
-    if d.len() > MAX_QUERY_LEN {
-        let elapsed = started.elapsed().as_millis();
-        eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms, 载荷过长)");
-        return (StatusCode::BAD_REQUEST, "d 参数过长").into_response();
-    }
 
     let Ok(permit) = state.merge_semaphore.clone().try_acquire_owned() else {
         let elapsed = started.elapsed().as_millis();
@@ -803,5 +801,14 @@ mod tests {
             err.contains("duplicate DNS server tag"),
             "内核应拒绝同名 DNS server tag，实际: {err}"
         );
+    }
+
+    #[test]
+    fn handle_sub_rejects_payload_exceeding_max_query_len() {
+        let (sk_hex, _) = crypto::generate_keypair_hex();
+        let sk = crypto::parse_private_key_hex(&sk_hex).unwrap();
+        let overlong = "a".repeat(MAX_QUERY_LEN + 1);
+        let err = handle_sub(&sk, &overlong).expect_err("超长 payload 应当被拒绝");
+        assert!(err.contains("上限"), "实际: {err}");
     }
 }
