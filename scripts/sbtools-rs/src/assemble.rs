@@ -1,6 +1,8 @@
 //! 装配：源列表 → 完整 sing-box 配置（订阅解析 + 标签唯一化 + 策略组填充 + local 覆盖）。
 //! 语义对齐旧 endpoint.ts 的 buildConfig / mergeLocalConfig。
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 /// 保留标签 = 底模 outbounds 与 endpoints 的标签；两者与节点共用一个 tag 命名空间，
@@ -16,7 +18,10 @@ pub fn reserved_tags(template: &Value) -> Vec<String> {
 }
 
 /// 订阅原文 → 节点数组。base64 整段或纯 URI 列表均可；坏行带行号报错。
-pub fn parse_subscription_body(body: &str) -> Result<Vec<Value>, String> {
+pub fn parse_subscription_body(
+    body: &str,
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) -> Result<Vec<Value>, String> {
     let mut decoded = body.trim().to_string();
     if !decoded.contains("://") {
         let normalized: String = decoded.chars().filter(|c| !c.is_whitespace()).collect();
@@ -40,7 +45,7 @@ pub fn parse_subscription_body(body: &str) -> Result<Vec<Value>, String> {
         .iter()
         .enumerate()
         .map(|(i, line)| {
-            crate::node::parse_node_uri(line)
+            crate::node::parse_node_uri(line, unsupported_queries)
                 .map_err(|e| format!("订阅第 {} 行解析失败：{e}", i + 1))
         })
         .collect()
@@ -249,6 +254,7 @@ pub struct AssembleInput {
 pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>, String> {
     let mut private_nodes: Vec<Value> = Vec::new();
     let mut airport_nodes: Vec<Value> = Vec::new();
+    let mut unsupported_queries = BTreeMap::new();
 
     for source in sources.split('|').map(str::trim).filter(|s| !s.is_empty()) {
         if source.starts_with("http://") || source.starts_with("https://") {
@@ -256,9 +262,12 @@ pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>,
                 Some(f) => f(source)?,
                 None => crate::template::http_get(source)?,
             };
-            airport_nodes.extend(parse_subscription_body(&body)?);
+            airport_nodes.extend(parse_subscription_body(&body, &mut unsupported_queries)?);
         } else {
-            private_nodes.push(crate::node::parse_node_uri(source)?);
+            private_nodes.push(crate::node::parse_node_uri(
+                source,
+                &mut unsupported_queries,
+            )?);
         }
     }
 
@@ -266,6 +275,9 @@ pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>,
     nodes.extend(airport_nodes);
     if nodes.is_empty() {
         return Err("未解析出任何节点：请检查源列表内容".into());
+    }
+    for (name, count) in unsupported_queries {
+        eprintln!("[sbtools] 节点 URL 参数 {name} 未应用（{count} 个节点）");
     }
     Ok(nodes)
 }
@@ -590,7 +602,8 @@ mod tests {
     /// 顺序错了会让节点入池顺序变，进而影响策略组候选池。
     #[test]
     fn subscription_body_decodes_lines_in_order() {
-        let nodes = parse_subscription_body(&airport_body()).expect("订阅解析失败");
+        let nodes =
+            parse_subscription_body(&airport_body(), &mut BTreeMap::new()).expect("订阅解析失败");
         let tags: Vec<String> = nodes
             .iter()
             .filter_map(|n| n["tag"].as_str().map(str::to_string))
@@ -605,20 +618,22 @@ mod tests {
         use base64::Engine;
         let bad_first = base64::engine::general_purpose::STANDARD
             .encode("vmess://broken\nss://YWVzLTEyOC1nY206Zng=@192.0.2.11:8388#JP-01");
-        let err = parse_subscription_body(&bad_first).expect_err("首行坏应报错");
+        let err =
+            parse_subscription_body(&bad_first, &mut BTreeMap::new()).expect_err("首行坏应报错");
         assert!(err.contains("订阅第 1 行"), "实际: {err}");
 
         let userinfo = base64::engine::general_purpose::STANDARD.encode("aes-128-gcm:fx");
         let bad_last = base64::engine::general_purpose::STANDARD
             .encode(format!("ss://{userinfo}@192.0.2.10:8388#HK-01\ntrojan://x"));
-        let err2 = parse_subscription_body(&bad_last).expect_err("末行坏应报错");
+        let err2 =
+            parse_subscription_body(&bad_last, &mut BTreeMap::new()).expect_err("末行坏应报错");
         assert!(err2.contains("订阅第 2 行"), "实际: {err2}");
     }
 
     /// 空订阅正文直接报错，不产出空节点列表（否则下游会产出空策略组）。
     #[test]
     fn subscription_body_rejects_empty() {
-        let err = parse_subscription_body("   ").expect_err("空订阅应报错");
+        let err = parse_subscription_body("   ", &mut BTreeMap::new()).expect_err("空订阅应报错");
         assert!(err.contains("订阅内容"), "实际: {err}");
     }
 

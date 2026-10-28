@@ -7,7 +7,8 @@
 - `encode` 覆盖短旗标、长旗标、参数顺序和默认配置路径
 - `roundtrip` 覆盖真实加密、解密、节点装配、overlay 合并和反回环规则
 - `subscription` 覆盖 URI 行与 Base64 订阅抓取
-- `server-http` 覆盖 `/healthz`、`/pubkey`、`/sub`，以及 `/sub` 的三档错误：坏密文 403、缺 `d`/超 128KB/装配失败 400、非 GET 或未知路径 404
+- `server-http` 覆盖 `/healthz`、`/pubkey`、`/sub`，以及坏密文 403、缺 `d` 或装配失败 400、非 GET 或未知路径 404、超长 URL 414
+- `node-options` 覆盖三种节点协议、URI/Base64 机场订阅与私有节点共用参数统计；每次请求按参数名提示涉及节点数，同一节点的重复参数只计一次，重复刷新独立计数且不输出参数值
 - `dynamic-template` 覆盖公开 HTTPS 模板下载
 - `clipboard` 覆盖 macOS 实际剪切板写入与原内容恢复
 

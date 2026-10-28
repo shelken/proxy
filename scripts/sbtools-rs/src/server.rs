@@ -18,8 +18,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-/// 请求参数上限：URL 查询串（d=）最大字节数。
-const MAX_QUERY_LEN: usize = 128 * 1024;
 /// 订阅响应体单请求上限。
 const MAX_SUB_BODY: usize = 5 * 1024 * 1024;
 
@@ -247,9 +245,6 @@ fn handle_sub(
     secret_key: &crypto::CryptoStaticSecret,
     query_d: &str,
 ) -> Result<(String, template::TemplateSource), String> {
-    if query_d.len() > MAX_QUERY_LEN {
-        return Err(format!("请求参数超过 {}KB 上限", MAX_QUERY_LEN / 1024));
-    }
     let plaintext = crypto::decrypt_payload(secret_key, query_d)?;
     let payload = parse_payload(&plaintext)?;
     let (base, direct_layer, source) = assemble_base(&payload)?;
@@ -301,11 +296,6 @@ async fn handle_sub_route(
         eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms)");
         return (StatusCode::BAD_REQUEST, "缺少 d 参数").into_response();
     };
-    if d.len() > MAX_QUERY_LEN {
-        let elapsed = started.elapsed().as_millis();
-        eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms, 载荷过长)");
-        return (StatusCode::BAD_REQUEST, "d 参数过长").into_response();
-    }
 
     let Ok(permit) = state.merge_semaphore.clone().try_acquire_owned() else {
         let elapsed = started.elapsed().as_millis();
