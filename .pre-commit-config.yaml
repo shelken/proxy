@@ -1,5 +1,5 @@
-# pre-commit 框架配置：按改动范围分组触发，与 ci-sbtools.yml 的 paths 口径一致。
-# 接线（每克隆一次）：pre-commit install
+# prek 钩子配置：按改动范围分组触发，与 ci-sbtools.yml 的 paths 口径一致。
+# 接线（每克隆一次）：mise run setup（即 prek install）
 # 临时跳过单次提交：git commit --no-verify
 # 沙箱网络行为测试（TUN/netns）不在这里跑：宿主机上会破坏在用的网络，
 # 走 just test-sandbox 在 VM 内执行。

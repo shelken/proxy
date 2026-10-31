@@ -84,7 +84,8 @@ jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) �
 环境准备：
 
 ```bash
-mise install
+mise install      # 装 sing-box (prek 由系统提供, 不在项目声明)
+mise run setup    # 装 git hook，每个克隆跑一次
 ```
 
 修改 `config/rules/` 下的清单或底模后，用这两条命令确认并重建规则产物：

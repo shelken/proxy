@@ -1,3 +1,6 @@
 [tools]
 sing-box = "1.14.3"
-pre-commit = "4.7.0"
+
+[tasks.setup]
+description = "首次环境初始化：装 git hook"
+run = "prek install"

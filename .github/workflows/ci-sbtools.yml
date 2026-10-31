@@ -1,4 +1,4 @@
-# sbtools Rust 门禁：严格 lint、全量测试。格式化由 pre-commit 保证。
+# sbtools Rust 门禁：严格 lint、全量测试。格式化由 prek 钩子保证。
 # 严格规则同时写在 src/lib.rs 与 src/main.rs 的 cfg 属性里，本工作流只需 -D warnings。
 name: ci-sbtools
 

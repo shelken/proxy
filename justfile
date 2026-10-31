@@ -164,7 +164,7 @@ rules-check:
     @bun scripts/rules-compile.ts check
 
 
-# --- 提交前检查：按改动范围分组，pre-commit 用 files 只触发相关那组 ---
+# --- 提交前检查：按改动范围分组，prek 用 files 只触发相关那组 ---
 check-rust-fast:
     cargo fmt --all --check
     cargo machete
