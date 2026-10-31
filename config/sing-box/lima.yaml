@@ -7,7 +7,9 @@
 # lima 的 {{.Dir}} 是实例目录（~/.lima/<name>），不是项目目录。
 minimumLimaVersion: 2.0.0
 
-base: [template:_images/ubuntu-24.04]
+# 统一到 Ubuntu 26.04：与其它仓库、lima 官方 template:_images/ubuntu-26.04 同一份镜像，
+# 缓存里才不会堆多份 rootfs
+base: [template:_images/ubuntu-26.04]
 
 vmType: vz
 arch: aarch64
