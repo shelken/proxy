@@ -111,8 +111,12 @@ const mergeWithOverlay = (overlay: object) => {
       join(d, "02-base.json"),
     ]);
     expect(merge.exitCode).toBe(0);
-    const check = Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", out]);
-    expect(check.exitCode).toBe(0);
+    // auto_redirect 等项只有 Linux 内核认得，macOS 上本地 check 必然失败；
+    // 合并结果的内核校验由 CI（ubuntu）覆盖，这里仍校验结构
+    if (process.platform === "linux") {
+      const check = Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", out]);
+      expect(check.exitCode).toBe(0);
+    }
     return JSON.parse(readFileSync(out, "utf8"));
   } finally {
     rmSync(d, { recursive: true, force: true });
@@ -120,7 +124,9 @@ const mergeWithOverlay = (overlay: object) => {
 };
 
 describe("template-router.json 结构契约（ADR-0012）", () => {
-  test("通过 sing-box check", () => {
+  // auto_redirect 等项只有 Linux 内核认得，macOS 上本地 check 必然失败；
+  // 该断言由 CI（ubuntu）与 `just kernel-check-vm router` 覆盖
+  test.skipIf(process.platform !== "linux")("通过 sing-box check", () => {
     const d = mkdtempSync(join(tmpdir(), "router-check-"));
     try {
       expect(

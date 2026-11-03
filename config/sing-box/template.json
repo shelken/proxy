@@ -96,7 +96,7 @@
     {
       "tag": "rule-set-dl",
       "version": 2,
-      "detour": "proxy"
+      "detour": "rule-set-dl-group"
     }
   ],
   "inbounds": [
@@ -138,6 +138,17 @@
         "(?i)(港|HK|Hong)",
         "(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)",
         "(?i)(新加坡|坡|狮城|SG|Singapore)"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "1m0s",
+      "tolerance": 50,
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "urltest",
+      "tag": "rule-set-dl-group",
+      "outbounds": [
+        ".*"
       ],
       "url": "https://www.gstatic.com/generate_204",
       "interval": "1m0s",
