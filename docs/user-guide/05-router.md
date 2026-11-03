@@ -4,12 +4,12 @@
 
 ## 与 Mac 底模的差异
 
-| 位置 | Mac | 路由器 |
-| :--- | :--- | :--- |
-| tun | `auto_route` | `auto_route` + `auto_redirect`（nftables 接管转发流量，白名单的 `bypass` 依赖它） |
-| DNS 入口 | 只靠 tun 劫持 | 另有 `dns-in`，监听 53 端口，供把 DNS 指向旁路由的设备使用 |
-| clash API | `127.0.0.1:9090` | `0.0.0.0:9090`，面板可从局域网连接；`secret` 由 overlay 设置 |
-| `mixed-in` | `127.0.0.1:2080` | 不变 |
+| 位置       | Mac              | 路由器                                                                            |
+| :--------- | :--------------- | :-------------------------------------------------------------------------------- |
+| tun        | `auto_route`     | `auto_route` + `auto_redirect`（nftables 接管转发流量，白名单的 `bypass` 依赖它） |
+| DNS 入口   | 只靠 tun 劫持    | 另有 `dns-in`，监听 53 端口，供把 DNS 指向旁路由的设备使用                        |
+| clash API  | `127.0.0.1:9090` | `0.0.0.0:9090`，面板可从局域网连接；`secret` 由 overlay 设置                      |
+| `mixed-in` | `127.0.0.1:2080` | 不变                                                                              |
 
 ## 前置
 
@@ -37,9 +37,17 @@ overlay: |
     "route": {
       "rules": [
         {
-          "inbound": ["tun-in"],
-          "source_mac_address": ["<MAC1>", "<MAC2>"],
-          "invert": true,
+          "type": "logical",
+          "mode": "and",
+          "rules": [
+            { "inbound": ["tun-in"] },
+            {
+              "type": "logical",
+              "mode": "and",
+              "invert": true,
+              "rules": [{ "source_mac_address": ["<MAC1>", "<MAC2>"] }]
+            }
+          ],
           "action": "bypass",
           "outbound": "direct"
         }
@@ -48,12 +56,12 @@ overlay: |
   }
 ```
 
-| 规则 | 作用 |
-| :--- | :--- |
-| 路由规则 `bypass` | 名单外设备的连接在 `auto_redirect` 的预匹配阶段被旁路，由内核直接转发，不进 sing-box；不适用内核旁路的连接按 `outbound: direct` 直连 |
-| `inbound: tun-in` | 必填。缺了它，`dns-in` 收到的查询也会命中这条规则，被直连回本机 53 端口绕成环 |
-| DNS 规则 | 名单外设备若也把 DNS 指向旁路由，返回真实 IP 而不是 fakeip |
-| `clash_api.secret` | 必填。clash API 对局域网监听，没有 secret 时任何设备都能切换你的节点 |
+| 规则               | 作用                                                                                                                                                                                                                                      |
+| :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 路由规则 `bypass`  | 名单外设备的连接在 `auto_redirect` 的预匹配阶段被旁路，由内核直接转发，不进 sing-box；不适用内核旁路的连接按 `outbound: direct` 直连                                                                                                      |
+| `inbound: tun-in`  | 必填，且要放在外层 AND 里。`invert` 反转的是整条规则的所有条件：把 `inbound` 与 `invert` 写在同一层，`dns-in` 收到的查询（不满足 `tun-in`，整条为假）会被翻成命中，再被 `direct` 送回本机 53 端口绕成环，白名单设备的 DNS 也拿不到 fakeip |
+| DNS 规则           | 名单外设备若也把 DNS 指向旁路由，返回真实 IP 而不是 fakeip                                                                                                                                                                                |
+| `clash_api.secret` | 必填。clash API 对局域网监听，没有 secret 时任何设备都能切换你的节点                                                                                                                                                                      |
 
 overlay 的规则排在底模所有规则之前（只落后于服务端生成的反回环规则），所以这两条最先生效
 

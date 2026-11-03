@@ -40,13 +40,34 @@ export const assertGatewayTun = (inbounds: Array<Record<string, any>>) => {
 
 export const ROUTER_MODULES_WHITELIST = ["00-inbounds.json", "29-dns-in.json", "90-experimental.json"];
 
+// sing-box 的 invert 反转的是整条规则的所有条件（v1.14.3 route/rule/rule_abstract.go 的 Match()），
+// 所以「排除白名单」只能是外层 AND 限定 tun-in、内层只反转 MAC 的两层写法。把 inbound 和 invert
+// 放在同一层时，dns-in 进来的查询（不满足 tun-in，整条为假）会被翻成命中，被 direct 送回本机 53 端口。
+export const assertBypassScopedToTunInWithInvertedMac = (rule: Record<string, unknown>) => {
+  expect(rule.action).toBe("bypass");
+  expect(rule.outbound).toBe("direct");
+  expect(rule.type).toBe("logical");
+  expect(rule.mode).toBe("and");
+  expect(rule.invert).toBeUndefined();
+  const [scope, mac] = asArray<Record<string, unknown>>(rule.rules);
+  expect(asArray(scope.inbound)).toEqual(["tun-in"]);
+  expect(scope.invert).toBeUndefined();
+  expect(mac.type).toBe("logical");
+  expect(mac.invert).toBe(true);
+  const macRules = asArray<Record<string, unknown>>(mac.rules);
+  expect(macRules.length).toBe(1);
+  expect(asArray(macRules[0].source_mac_address).length).toBe(2);
+};
+
 // 与用户指南 05-router.md 的示例一致，MAC 为文档占位地址
+const WHITELIST_MACS = ["02:00:00:00:00:01", "02:00:00:00:00:02"];
+
 const WHITELIST_OVERLAY = {
   experimental: { clash_api: { secret: "test-secret" } },
   dns: {
     rules: [
       {
-        source_mac_address: ["02:00:00:00:00:01", "02:00:00:00:00:02"],
+        source_mac_address: WHITELIST_MACS,
         invert: true,
         server: "dns-local-system",
       },
@@ -55,9 +76,17 @@ const WHITELIST_OVERLAY = {
   route: {
     rules: [
       {
-        inbound: ["tun-in"],
-        source_mac_address: ["02:00:00:00:00:01", "02:00:00:00:00:02"],
-        invert: true,
+        type: "logical",
+        mode: "and",
+        rules: [
+          { inbound: ["tun-in"] },
+          {
+            type: "logical",
+            mode: "and",
+            invert: true,
+            rules: [{ source_mac_address: WHITELIST_MACS }],
+          },
+        ],
         action: "bypass",
         outbound: "direct",
       },
@@ -72,7 +101,15 @@ const mergeWithOverlay = (overlay: object) => {
     writeFileSync(join(d, "01-overlay.json"), JSON.stringify(overlay));
     writeFileSync(join(d, "02-base.json"), JSON.stringify(router));
     const out = join(d, "result.json");
-    const merge = Bun.spawnSync([SING_BOX, "merge", out, "-c", join(d, "01-overlay.json"), "-c", join(d, "02-base.json")]);
+    const merge = Bun.spawnSync([
+      SING_BOX,
+      "merge",
+      out,
+      "-c",
+      join(d, "01-overlay.json"),
+      "-c",
+      join(d, "02-base.json"),
+    ]);
     expect(merge.exitCode).toBe(0);
     const check = Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", out]);
     expect(check.exitCode).toBe(0);
@@ -86,7 +123,10 @@ describe("template-router.json 结构契约（ADR-0012）", () => {
   test("通过 sing-box check", () => {
     const d = mkdtempSync(join(tmpdir(), "router-check-"));
     try {
-      expect(Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", templatePath]).exitCode).toBe(0);
+      expect(
+        Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", templatePath])
+          .exitCode,
+      ).toBe(0);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
@@ -98,7 +138,9 @@ describe("template-router.json 结构契约（ADR-0012）", () => {
 
   test("tun 仍排除私网段：局域网互访不进 sing-box", () => {
     const tun = router.inbounds.find((i: any) => i.type === "tun");
-    expect(asArray<string>(tun.route_exclude_address)).toContain("192.168.0.0/16");
+    expect(asArray<string>(tun.route_exclude_address)).toContain(
+      "192.168.0.0/16",
+    );
   });
 
   test("dns-in 在 53 端口对局域网监听，并在 sniff 之前劫持", () => {
@@ -110,8 +152,11 @@ describe("template-router.json 结构契约（ADR-0012）", () => {
   });
 
   test("clash API 不只监听回环：homelab 的面板要能拉到连接", () => {
-    const controller: string = router.experimental.clash_api.external_controller;
-    expect(controller.startsWith("127.") || controller.startsWith("[::1]")).toBe(false);
+    const controller: string =
+      router.experimental.clash_api.external_controller;
+    expect(
+      controller.startsWith("127.") || controller.startsWith("[::1]"),
+    ).toBe(false);
   });
 
   test("mixed-in 保持回环，不对局域网开无认证代理", () => {
@@ -135,10 +180,8 @@ describe("白名单 overlay 示例（05-router.md）", () => {
     expect(merged.experimental.clash_api.secret).toBe("test-secret");
   });
 
-  test("bypass 规则排第一，且限定 tun-in：dns-in 的查询不会被 direct 送回本机", () => {
-    expect(mergedRules[0].action).toBe("bypass");
-    expect(asArray(mergedRules[0].inbound)).toEqual(["tun-in"]);
-    expect(mergedRules[0].invert).toBe(true);
+  test("bypass 规则排第一：外层限定 tun-in，只有 MAC 条件被反转", () => {
+    assertBypassScopedToTunInWithInvertedMac(mergedRules[0]);
   });
 
   test("名单外设备的 DNS 规则排在 dns.rules 第一", () => {
@@ -169,9 +212,9 @@ describe("共享顺序契约（路由器侧）", () => {
 
 describe("modules-router 差异面白名单", () => {
   test("modules-router/ 文件集合与登记一致", () => {
-    expect(readdirSync(resolve(import.meta.dir, "../modules-router")).sort()).toEqual(
-      [...ROUTER_MODULES_WHITELIST].sort(),
-    );
+    expect(
+      readdirSync(resolve(import.meta.dir, "../modules-router")).sort(),
+    ).toEqual([...ROUTER_MODULES_WHITELIST].sort());
   });
 });
 
@@ -192,5 +235,31 @@ describe("变异验证：断言能拦住坏情况", () => {
     const inbounds = clone(router.inbounds);
     delete inbounds.find((i: any) => i.type === "tun").auto_redirect;
     expect(() => assertGatewayTun(inbounds)).toThrow();
+  });
+
+  test("invert 拍回与 inbound 同层（单层写法）→ assertBypassScopedToTunInWithInvertedMac 必须失败", () => {
+    const flat = {
+      inbound: ["tun-in"],
+      source_mac_address: ["02:00:00:00:00:01", "02:00:00:00:00:02"],
+      invert: true,
+      action: "bypass",
+      outbound: "direct",
+    };
+    expect(() => assertBypassScopedToTunInWithInvertedMac(flat)).toThrow();
+  });
+
+  test("invert 提到外层（连 tun-in 一起反转）→ 断言必须失败", () => {
+    const outer = {
+      type: "logical",
+      mode: "and",
+      invert: true,
+      rules: [
+        { inbound: ["tun-in"] },
+        { source_mac_address: ["02:00:00:00:00:01"] },
+      ],
+      action: "bypass",
+      outbound: "direct",
+    };
+    expect(() => assertBypassScopedToTunInWithInvertedMac(outer)).toThrow();
   });
 });
