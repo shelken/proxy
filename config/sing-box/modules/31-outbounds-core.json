@@ -34,6 +34,9 @@
       "type": "selector",
       "tag": "selfhost",
       "outbounds": [
+        "(?i)hy2.*v6",
+        "(?i)anytls",
+        "(?i)hy2",
         "(?i)(vps|hy2|selfhost)"
       ],
       "interrupt_exist_connections": true
