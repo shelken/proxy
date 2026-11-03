@@ -20,6 +20,16 @@
     },
     {
       "type": "selector",
+      "tag": "rule-set-dl-group",
+      "outbounds": [
+        "(?i)anytls",
+        "selfhost",
+        ".*"
+      ],
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
       "tag": "selfhost",
       "outbounds": [
         "(?i)(vps|hy2|selfhost)"

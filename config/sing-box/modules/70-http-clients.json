@@ -2,7 +2,7 @@
   "http_clients": [
     {
       "tag": "rule-set-dl",
-      "detour": "proxy"
+      "detour": "rule-set-dl-group"
     }
   ]
 }

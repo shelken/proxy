@@ -96,7 +96,7 @@
     {
       "tag": "rule-set-dl",
       "version": 2,
-      "detour": "proxy"
+      "detour": "rule-set-dl-group"
     }
   ],
   "inbounds": [
@@ -142,6 +142,16 @@
       "url": "https://www.gstatic.com/generate_204",
       "interval": "1m0s",
       "tolerance": 50,
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "rule-set-dl-group",
+      "outbounds": [
+        "(?i)anytls",
+        "selfhost",
+        ".*"
+      ],
       "interrupt_exist_connections": true
     },
     {
