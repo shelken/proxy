@@ -148,6 +148,7 @@
       "type": "urltest",
       "tag": "rule-set-dl-group",
       "outbounds": [
+        "(?i)anytls",
         ".*"
       ],
       "url": "https://www.gstatic.com/generate_204",
