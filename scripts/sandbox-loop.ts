@@ -263,9 +263,11 @@ function pushToGuest(): void {
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
-    # tests/ 整目录在 VM 内跑，iOS 结构测试还要读 iOS 底模与 modules-ios/ 白名单
-    cp ${REPO_IN_GUEST}/config/sing-box/template-ios.json ${WORK}/template-ios.json
-    cp -r ${REPO_IN_GUEST}/config/sing-box/modules-ios ${WORK}/modules-ios
+    # tests/ 整目录在 VM 内跑，变体结构测试还要读各自的底模与 modules-<变体>/ 白名单
+    for v in ios router; do
+      cp ${REPO_IN_GUEST}/config/sing-box/template-$v.json ${WORK}/template-$v.json
+      cp -r ${REPO_IN_GUEST}/config/sing-box/modules-$v ${WORK}/modules-$v
+    done
     cp -r ${REPO_IN_GUEST}/config/sing-box/tests/. ${WORK}/tests/
   `);
   if (r.code !== 0) fail("同步到 VM", r.err.trim());

@@ -13,7 +13,9 @@ on:
       - "config/sing-box/modules/**"
       - "config/sing-box/modules-ios/**"
       - "config/sing-box/template-ios.json"
-      - "scripts/merge-ios-template.sh"
+      - "config/sing-box/modules-router/**"
+      - "config/sing-box/template-router.json"
+      - "scripts/merge-variant-template.sh"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -78,22 +80,24 @@ jobs:
         run: |
           set -euo pipefail
           tmp=$(mktemp)
-          ios=$(mktemp -d)
-          trap 'rm -rf "$tmp" "$ios"' EXIT
+          work=$(mktemp -d)
+          trap 'rm -rf "$tmp" "$work"' EXIT
           sing-box merge "$tmp" -C config/sing-box/modules
           diff -u config/sing-box/template.json "$tmp"
-          SING_BOX=sing-box scripts/merge-ios-template.sh "$tmp"
-          diff -u config/sing-box/template-ios.json "$tmp"
-          sing-box check -D "$ios" -c "$PWD/config/sing-box/template-ios.json"
+          for variant in ios router; do
+            SING_BOX=sing-box scripts/merge-variant-template.sh "$variant" "$tmp"
+            diff -u "config/sing-box/template-$variant.json" "$tmp"
+            sing-box check -D "$work" -c "$PWD/config/sing-box/template-$variant.json"
+          done
         working-directory: .
 
-      # 结构测试：本地 just check-template 只跑两个 .test.ts，CI 同语义。
+      # 结构测试：本地 just check-template 只跑这几个 .test.ts，CI 同语义。
       # kernel-routing.test.js 需要真实 tun0 设备，只能在 Lima 跑。
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
       - name: run template structural tests
-        run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts
+        run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
         working-directory: .
 
       - name: cargo test

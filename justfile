@@ -77,19 +77,20 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 
 # --- 生产底模装配与校验 ---
-# 单入口：一次重建 mac 与 iOS 两份底模。
-# 开发时只跑这一条命令，无需记住两个产物各自怎么生成；
+# 单入口：一次重建 mac、iOS 与路由器三份底模。
+# 开发时只跑这一条命令，无需记住各个产物各自怎么生成；
 # 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
     #!/usr/bin/env bash
     set -euo pipefail
     # mac：直接从 modules 合并（文件名前缀决定数组顺序）
     {{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
-    # iOS：modules 为底，modules-ios 同名替换并新增（ADR-0010）
-    scripts/merge-ios-template.sh config/sing-box/template-ios.json
+    # iOS / 路由器：modules 为底，modules-<变体> 同名替换并新增（ADR-0010、ADR-0012）
+    scripts/merge-variant-template.sh ios config/sing-box/template-ios.json
+    scripts/merge-variant-template.sh router config/sing-box/template-router.json
     # 报告哪份产物变了，方便确认改动范围没超出预期；对比 HEAD，已暂存的改动也算变化
-    for t in template.json template-ios.json; do
-        if git diff --quiet HEAD -- "config/sing-box/$t"; then
+    for t in template.json template-ios.json template-router.json; do
+        if git diff --quiet HEAD -- "config/sing-box/$t" 2>/dev/null && git ls-files --error-unmatch "config/sing-box/$t" >/dev/null 2>&1; then
             echo "✅ config/sing-box/$t 未变化"
         else
             echo "📝 config/sing-box/$t 已更新"
@@ -109,35 +110,39 @@ template-check:
     fi
     echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
 
-# iOS 底模由 just template-build 一并生成，不再单独提供 build 入口
+# 变体底模由 just template-build 一并生成，不单独提供 build 入口
 
-# 校验 template-ios.json 与 modules + modules-ios 一致
-template-ios-check:
+# 校验变体底模与 modules + modules-<变体> 一致，并通过内核 check
+template-variant-check variant:
     #!/usr/bin/env bash
     set -euo pipefail
-    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-ios-check.XXXXXX")"
+    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-{{variant}}-check.XXXXXX")"
     trap 'rm -rf "$work"' EXIT
-    scripts/merge-ios-template.sh "$work/merged.json" >/dev/null
-    if ! diff -u config/sing-box/template-ios.json "$work/merged.json"; then
-        echo "❌ template-ios.json 与 modules + modules-ios 不一致，请运行 just template-build"
+    scripts/merge-variant-template.sh {{variant}} "$work/merged.json" >/dev/null
+    if ! diff -u config/sing-box/template-{{variant}}.json "$work/merged.json"; then
+        echo "❌ template-{{variant}}.json 与 modules + modules-{{variant}} 不一致，请运行 just template-build"
         exit 1
     fi
-    {{sing_box_cmd}} check -D "$work" -c "$PWD/config/sing-box/template-ios.json"
-    echo "✅ template-ios.json 检查一致"
+    {{sing_box_cmd}} check -D "$work" -c "$PWD/config/sing-box/template-{{variant}}.json"
+    echo "✅ template-{{variant}}.json 检查一致"
+
+template-ios-check: (template-variant-check "ios")
+
+template-router-check: (template-variant-check "router")
 
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
 # 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
-# iOS 查合并产物：modules-ios/ 单独 check 缺共享模块会报错，产物与源码的一致性由 template-ios-check 保证。
+# 变体查合并产物：modules-<变体>/ 单独 check 缺共享模块会报错，产物与源码的一致性由 template-variant-check 保证。
 check-deprecated:
     #!/usr/bin/env bash
     set -uo pipefail
     # -D 把内核工作目录放到临时目录，Tailscale 状态目录等相对路径不落进仓库
     work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-deprecated.XXXXXX")"
     trap 'rm -rf "$work"' EXIT
-    for target in "-C $PWD/config/sing-box/modules" "-c $PWD/config/sing-box/template-ios.json"; do
+    for target in "-C $PWD/config/sing-box/modules" "-c $PWD/config/sing-box/template-ios.json" "-c $PWD/config/sing-box/template-router.json"; do
         out=$({{sing_box_cmd}} check -D "$work" $target 2>&1)
         rc=$?
         printf '%s\n' "$out"
@@ -177,9 +182,10 @@ check-rust-test:
 check-template:
     @just template-check
     @just template-ios-check
+    @just template-router-check
     @just check-singbox
     @just check-deprecated
-    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts
+    SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
 
 # 全量检查（手动跑 / CI 同口径）
 verify: check-rust-fast check-rust-test check-template rules-check

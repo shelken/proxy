@@ -19,6 +19,9 @@ sing-box 配置的公共骨架，包含双入站、内网穿透、分流策略�
 **iOS 底模**
 同一批 `modules/` 经 `modules-ios/` 替换与新增后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
 
+**路由器底模**
+同一批 `modules/` 经 `modules-router/` 替换与新增后合并出的底模，tun 开启 `auto_redirect` 作网关、另有 53 端口的 DNS 入口、clash API 对局域网监听；设备白名单不在底模里，由设备 overlay 的 `bypass` 规则决定
+
 **DNS 出口**
 访问真实 DNS 上游所使用的网络路径，可独立于应用的业务出口选择
 

@@ -1,0 +1,12 @@
+{
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "dns-in"
+        ],
+        "action": "hijack-dns"
+      }
+    ]
+  }
+}
