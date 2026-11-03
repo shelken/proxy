@@ -152,13 +152,14 @@
       "interrupt_exist_connections": true
     },
     {
-      "type": "selector",
+      "type": "urltest",
       "tag": "rule-set-dl-group",
       "outbounds": [
-        "(?i)anytls",
-        "selfhost",
         ".*"
       ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "1m0s",
+      "tolerance": 50,
       "interrupt_exist_connections": true
     },
     {
