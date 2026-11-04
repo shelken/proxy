@@ -20,6 +20,8 @@
 4. `90-experimental.json`：clash API 监听 `0.0.0.0:9090`；`secret` 不进底模，由设备 overlay 覆盖（标量，overlay 先者胜）
 5. 白名单写在设备 overlay：路由规则 `inbound: tun-in` + `source_mac_address` + `invert` + `action: bypass` + `outbound: direct`；DNS 规则 `source_mac_address` + `invert` → `dns-local-system`。写法见 `docs/user-guide/05-router.md`
 
+（上面的 4、5 两条按日期被 [0013](0013-capability-files-instead-of-variant-copies.md) 取代：clash API 的监听地址不再由变体写死，本网解析器 tag 统一为 `dns-lan`）
+
 ## 补充：白名单改用源 IP（`source_mac_address` 在透明 DNS 上取不到）
 
 **日期**：2026-11-04
@@ -29,7 +31,7 @@
 ## 补充：本网解析器、部署域名与放行清单也归 overlay
 
 **日期**：2026-11-04（#147、#148）
-（本节描述的机制已被下面的「收尾」一节取代，原文保留作为当时的记录）
+（本节描述的机制已被 [0013](0013-capability-files-instead-of-variant-copies.md) 取代，原文保留作为当时的记录）
 
 `00-inbounds.json` 的 tun 起初用默认的 `dns_mode: hijack`，`10-dns.json` 起初把本网名字交给 `dns-local-system`（`type: local`）并把部署域名与内网入口写死在底模。前者让设备显式指定的公网解析器在内核预匹配阶段被改写，后者让 RFC 保留后缀落进 mDNS 分支，两个问题都出在「哪个解析器回答哪些名字」被写死在共享底模。这次把这三项交给设备 overlay：
 
@@ -38,26 +40,6 @@
 3. `modules-router/00-inbounds.json`：`dns_mode` 由 `hijack` 改 `native`。`hijack` 配 `auto_redirect` 时内核在规则预匹配之前无差别把 53 端口 DNAT 到 tun 的 DNS 地址，规则层的 `bypass` 看不到这些包；`native` 只是不再做内核侧 DNS 接管，53 的接管回到 `29-dns-in.json` 与 `30-route-base-rules.json` 的规则里，顺序由 overlay 决定
 4. 设备 overlay 提供四样：`dns.servers` 的 `dns-lan`、部署域名与内网入口的两条 predefined 规则、放行解析器清单、白名单。`route.rules` 的顺序固定为 放行解析器 → 53 劫持 → 白名单 `bypass`：放行必须给设备留出口，白名单 `bypass` 匹配整台设备，放前面会把名单外设备的 DNS 一起放走
 5. `modules-router/` 的差异面由 `config/sing-box/tests/router-template.test.ts` 与 `just template-variant-check router` 保证；底模引用不到只有 overlay 才有的 `dns-lan`，终态装配的夹具是 `config/sing-box/tests/fixtures/router-overlay.json`（TEST-NET-1 占位地址），测试与 justfile 读同一份
-
-## 收尾：变体接口收窄到能力文件，本网解析器 tag 统一为 `dns-lan`
-
-**日期**：2026-11-04（#147、#148）
-
-上一节用「同名整文件替换」表达差异，代价落在接口形状上：合并只能在 `modules/` 之上替换或新增文件，删不掉条目，于是「这个角色不要这一片」只剩整份拷贝一种写法（`modules-router/10-dns.json` 132 行、`20-route-base.json`、`90-experimental.json`），共享底模一改，三份拷贝就静默漂移。
-
-决定把变体接口收窄到**能力文件**：底模按可独立变化的事实拆文件，变体不要某一份，就在变体目录放同名的空集文件（`{"dns":{"rules":[]}}`、`{"dns":{"servers":[]}}`），写显式空集而不是 `{}`，让「不要这一份」在文件里读得出来。本次拆出两份：部署域与内网入口的静态应答（只服务 mac / iOS）、本网解析器的定义。变体目录剩下的差异只有 `00-inbounds.json`（tun 的 `auto_redirect` 与 `dns_mode`）与 `29-dns-in.json`，没有任何共享文件的拷贝。
-
-配套的三处收敛：
-
-1. 本网解析器的 tag 在共享底模与三个角色之间统一为 `dns-lan`。`10-dns.json` 的五处 `server` 引用与 `20-route-base.json` 的 `default_domain_resolver` 都指向它，于是没有任何规则需要为改 tag 而抄文件：mac / iOS 用底模的 `type: local`（跟随宿主系统解析器），路由变体弃用它、改由设备 overlay 给主路由地址
-2. clash API 的监听地址不再由变体写死：底模与 Mac 一致只监听回环，设备 overlay 用标量覆盖
-3. 路由侧不再需要底模那份部署域静态应答：`ooooo.space` 已登记在 `config/rules/custom/MyDirect.yaml`（覆盖全部子域），随底模的 `MyDirect-dns → dns-lan` 交给主路由 dnsmasq 应答，与主路由上的固定租约同源；那份通配应答只服务 mac / iOS。前提已在局域网内实测（`dig @<主路由> cpa.int.ooooo.space A` → `192.168.69.46`，`int.ooooo.space` 无应答，与那两条规则的效果一致）
-
-两条约束落在文件名上，写进了 `CODING_STANDARDS.md`：文件名的字典序就是数组次序（两个能力文件都排在 `10-dns.json` 之前），而部署域那一份还必须排在 `09-tailscale-dns.json` 之后 —— iOS 的 `dns.rules` 首条必须是 ts-ep 入站拒绝（`docs/adr/0010`）。两个能力文件因此叫 `10-dns-deployment.json` 与 `10-dns-lan-resolver.json`，mac / iOS 的产物本次只有 tag 改名，数组次序一处未动。
-
-`dns_mode` 的两条路在沙箱 VM 内实测对照过（1.14.3，最小 tun + `auto_redirect`，`nft list table inet sing-box`）：`hijack` 有 8 条带 `dport 53` 的规则（4 条 DNAT 到 tun 的 DNS 地址加 4 条 pre-match），`native` 0 条。
-
-回退：要让路由侧重新拿到静态应答，把 `modules-router/10-dns-deployment.json` 的内容换成 `modules/10-dns-deployment.json` 的两条规则，`route.rules` 不动。跨仓时序：底模先进 `main` 而设备 overlay 还没更新的中间态不会起不来（旧 overlay 自带 `dns-lan` 与那两条规则），但会丢掉 clash API 的局域网监听。
 
 ## Consequences
 

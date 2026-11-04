@@ -1,6 +1,6 @@
 # 路由器：单臂旁路由与设备白名单
 
-在家里的一台 Linux 设备（单网口旁路由）上跑 sing-box，局域网设备把网关指向它。路由器底模 `template-router.json` 在 Mac 底模之上的差异见下表，哪些设备走代理由你自己的 overlay 决定，名单外的设备由内核直接转发给主路由。设计与取舍见 [ADR-0012](../adr/0012-router-template-for-side-router.md)
+在家里的一台 Linux 设备（单网口旁路由）上跑 sing-box，局域网设备把网关指向它。路由器底模 `template-router.json` 在 Mac 底模之上的差异见下表，哪些设备走代理由你自己的 overlay 决定，名单外的设备由内核直接转发给主路由。设计与取舍见 [ADR-0012](../adr/0012-router-template-for-side-router.md)、[ADR-0013](../adr/0013-capability-files-instead-of-variant-copies.md)
 
 ## 与 Mac 底模的差异
 
