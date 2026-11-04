@@ -1,6 +1,6 @@
 # 路由器：单臂旁路由与设备白名单
 
-在家里的一台 Linux 设备（单网口旁路由）上跑 sing-box，局域网设备把网关指向它。路由器底模 `template-router.json` 在 Mac 底模之上改了四处，哪些设备走代理由你自己的 overlay 决定，名单外的设备由内核直接转发给主路由。设计与取舍见 [ADR-0012](../adr/0012-router-template-for-side-router.md)
+在家里的一台 Linux 设备（单网口旁路由）上跑 sing-box，局域网设备把网关指向它。路由器底模 `template-router.json` 在 Mac 底模之上的差异见下表，哪些设备走代理由你自己的 overlay 决定，名单外的设备由内核直接转发给主路由。设计与取舍见 [ADR-0012](../adr/0012-router-template-for-side-router.md)
 
 ## 与 Mac 底模的差异
 
@@ -99,7 +99,9 @@ overlay 的规则排在底模所有规则之前（只落后于服务端生成的
 2. **53 劫持**：其余 DNS 查询仍由本机应答
 3. **白名单 `bypass`**：匹配的是「不在名单里」的整台设备，放在前面会把名单外设备的 DNS 也一起放走
 
-按 MAC 放行时，把 `source_ip_cidr` 换成 `source_mac_address`。但透明 DNS 的查询在 `auto_redirect` 的预匹配阶段取不到源 MAC，名单内设备会被当成名单外，拿到真实地址而不是 fakeip，所以按 IP 放行更可靠。名单里的地址要在主路由上配固定租约
+名单地址用 IP 或 MAC 都能写，但透明 DNS 的查询在 `auto_redirect` 的预匹配阶段取不到源 MAC，名单内设备会被当成名单外，拿到真实地址而不是 fakeip，所以按 IP 放行更可靠。名单里的地址要在主路由上配固定租约
+
+同时按 MAC 与 IP 放行（命中任一即放行）时，把条件合成一条内层 `or`，`invert` 放在 `or` 上：
 
 ```json
 {

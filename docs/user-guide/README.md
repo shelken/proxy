@@ -7,4 +7,4 @@
 | [02-overlay.md](./02-overlay.md) | overlay：覆盖底模、自定义 host 与通配应答的写法与限制 |
 | [03-lan-share.md](./03-lan-share.md) | 局域网共享本机代理：用 overlay 新增带认证的入口、开关与验证 |
 | [04-ios-tailscale.md](./04-ios-tailscale.md) | iOS 单 VPN：用 iOS 底模内嵌 Tailscale，同时代理与访问内网，含前置、登录、验证与排障 |
-| [05-router.md](./05-router.md) | 路由器：单臂旁路由用路由器底模，overlay 设备白名单（名单外内核直转），含前置、配置与验证 |
+| [05-router.md](./05-router.md) | 路由器：单臂旁路由用路由器底模，overlay 提供设备白名单、本网解析器与放行清单（名单外内核直转），含前置、配置与验证 |
