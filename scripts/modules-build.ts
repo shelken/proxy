@@ -130,8 +130,10 @@ let failed = false;
 
 for (const [role, output] of Object.entries(OUTPUTS)) {
   const { dir, cleanup } = await materialize(role);
-  const scratch = check ? await mkdtemp(join(tmpdir(), "sing-box-out-")) : null;
+  let scratch: string | null = null;
   try {
+    // 放进 try：这一步失败时也要走 cleanup，否则物化目录会残留
+    scratch = check ? await mkdtemp(join(tmpdir(), "sing-box-out-")) : null;
     const out = scratch ? join(scratch, "template.json") : join(CONFIG, output);
     const proc = Bun.spawnSync([...SING_BOX, "merge", out, "-C", dir], { stdio: ["ignore", "inherit", "inherit"] });
     if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败 (role ${role}): exit ${proc.exitCode}`);
