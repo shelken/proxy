@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
 import {
   asArray,
+  assertAllRuleSetsDeclared,
   assertMyDirectAndProxyBeforeServices,
   assertMyProxyDnsBeforeChinaMax,
   assertMyProxyQuicBeforeExempt,
@@ -236,13 +237,18 @@ describe("共享顺序契约（路由器侧）", () => {
   });
 });
 
-describe("modules.yaml 角色注册（ADR-0017）", () => {
+describe("modules.yaml 角色注册（ADR-0013）", () => {
   test("roles.router = 基准顺序 + 注册的网关差异，且顺序逐步一致", () => {
     assertRoleOrder("router", applyPatch(MAC_ORDER, ROUTER_DIFF));
   });
 
   test("fragments/router 的文件集合与登记的差异面一致", () => {
     assertFragmentDir("router", ROUTER_DIFF.fragments);
+  });
+
+  // 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+  test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
+    assertAllRuleSetsDeclared(router.route);
   });
 });
 

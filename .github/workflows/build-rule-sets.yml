@@ -13,7 +13,7 @@ on:
     paths:
       - "config/rules/index.yaml"
       - "config/rules/custom/**"
-      - "config/sing-box/template.json"
+      - "config/sing-box/**"
       - "scripts/rules-compile.ts"
       - "scripts/rules-compile.test.ts"
       - ".github/workflows/build-rule-sets.yml"

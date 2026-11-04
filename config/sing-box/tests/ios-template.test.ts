@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
 import {
   asArray,
+  assertAllRuleSetsDeclared,
   assertMyDirectAndProxyBeforeServices,
   assertMyProxyDnsBeforeChinaMax,
   assertMyProxyQuicBeforeExempt,
@@ -159,13 +160,18 @@ describe("共享顺序契约（iOS 侧）", () => {
 
 // iOS 差异面必须显式登记：roles.ios 与基准顺序的差异只能是注册的这一组，
 // fragments/ios 出现注册外的片段即失败，防止无意扩大共享底模的平台差异。
-describe("modules.yaml 角色注册（ADR-0017）", () => {
+describe("modules.yaml 角色注册（ADR-0013）", () => {
   test("roles.ios = 基准顺序 + 注册的 Tailscale 差异，且顺序逐步一致", () => {
     assertRoleOrder("ios", applyPatch(MAC_ORDER, IOS_DIFF));
   });
 
   test("fragments/ios 的文件集合与登记的差异面一致", () => {
     assertFragmentDir("ios", IOS_DIFF.fragments);
+  });
+
+  // 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+  test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
+    assertAllRuleSetsDeclared(ios.route);
   });
 });
 

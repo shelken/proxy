@@ -87,8 +87,6 @@ catalog:
 roles:
   mac:
     - { fragment: base/inbounds.json }
-    - { fragment: base/dns-lan-resolver.json }
-    - { fragment: base/dns-deployment.json }
     - { fragment: base/dns-policy.json }
     - { catalog: dns }
     - { fragment: base/route-globals.json }
@@ -127,8 +125,6 @@ roles:
   ios:
     - { fragment: ios/inbounds.json }
     - { fragment: ios/tailscale-dns.json }
-    - { fragment: base/dns-lan-resolver.json }
-    - { fragment: base/dns-deployment.json }
     - { fragment: base/dns-policy.json }
     - { catalog: dns }
     - { fragment: ios/tailscale-endpoint.json }
@@ -169,8 +165,6 @@ roles:
     - { fragment: base/experimental.json }
   router:
     - { fragment: router/inbounds.json }
-    - { fragment: base/dns-lan-resolver.json }
-    - { fragment: base/dns-deployment.json }
     - { fragment: base/dns-policy.json }
     - { catalog: dns }
     - { fragment: base/route-globals.json }

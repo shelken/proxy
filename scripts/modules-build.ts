@@ -5,7 +5,8 @@
 //
 // 用法:
 //   bun scripts/modules-build.ts            # 生成三份产物
-//   bun scripts/modules-build.ts --check    # 与磁盘产物比对，不同则退出码 1
+//   bun scripts/modules-build.ts --check    # 只与磁盘产物做逐字节比对，不同则退出码 1。
+//                                           # 顺序不变量与孤儿条目不在这里，由 bun test 覆盖；完整门禁是 just check-template
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -72,7 +73,9 @@ async function materialize(role: string): Promise<{ dir: string; cleanup: () => 
           : "service" in item
             ? `service-${item.service}`
             : `catalog-${item.catalog}`;
-      if (seen.has(slug)) throw new Error(`role ${role}: 条目 slug 重复 (${slug})，物化文件会互相覆盖`);
+      // 序号前缀保证文件名不重复，撞名指的是内容里的 tag：内核在 merge 期或 check 期对同名 tag 报 FATAL
+      if (seen.has(slug))
+        throw new Error(`role ${role}: 条目 slug 重复 (${slug})，会物化出重复 tag，内核在 merge 期或 check 期 FATAL`);
       seen.add(slug);
 
       let doc: unknown;

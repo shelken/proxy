@@ -17,9 +17,9 @@
 
 ## sing-box 与规则
 
-- `template.json`、`template-ios.json` 与 `template-router.json` 由 `just template-build`（`scripts/modules-build.ts`）一次重建：读 `config/sing-box/modules.yaml`，按 `roles.<角色>` 列表把片段物化成临时目录，再交给 `sing-box merge`。片段内容在 `config/sing-box/fragments/{base,ios,router}/`，决策见 `docs/adr/0017`；路由器底模不写任何设备数据（MAC、IP、secret），这些只放设备 overlay
-- 顺序在 `modules.yaml` 的 `roles` 列表里，不在文件名里：`roles.mac` 是基准顺序，`roles.ios` 与 `roles.router` 在它之上换片段、加片段；插队 = 在列表里挪一行，**片段改名不影响顺序**，改完只需更新表里的引用。每个平台**没有**哪些能力，由「条目不在该角色的列表里」表达
-- 新增服务 = 在 `modules.yaml` 的 `services` 里加一行（`rule_set`、`outbound`、selector 的候选与默认值），再在每个要用它的角色列表里加一条 `{ service: <outbound> }`；配套在 `config/rules/index.yaml` 登记 rule_set
+- `template.json`、`template-ios.json` 与 `template-router.json` 由 `just template-build`（`scripts/modules-build.ts`）一次重建：读 `config/sing-box/modules.yaml`，按 `roles.<角色>` 列表把片段物化成临时目录，再交给 `sing-box merge`。片段内容在 `config/sing-box/fragments/{base,ios,router}/`，决策见 `docs/adr/0013`；路由器底模不写任何设备数据（MAC、IP、secret），这些只放设备 overlay
+- 顺序在 `modules.yaml` 的 `roles` 列表里，不在文件名里：`roles.mac` 是基准顺序，`roles.ios` 与 `roles.router` 在它之上换片段、加片段；插队 = 在列表里挪一行。片段改名要连着改：`config/sing-box/tests/lib/manifest.ts` 的 `MAC_ORDER`，变体片段还要改各自测试里的 `IOS_DIFF.fragments` / `ROUTER_DIFF.fragments`。每个平台**没有**哪些能力，由「条目不在该角色的列表里」表达；关掉一个能力要同时删掉清单声明（`{ catalog: X }`）与用它的规则片段，只删声明会做出「规则引用未声明的 rule_set tag」的产物，而内核 `check` 与 `merge` 对此都退出码 0，只有产物测试的不变量能拦
+- 新增服务 = 改 5 处：`modules.yaml` 的 `services` 里加一行（`rule_set`、`outbound`、selector 的候选与默认值），三个角色列表各加一条 `{ service: <outbound> }`，`config/sing-box/tests/lib/manifest.ts` 的 `MAC_ORDER` 加一条；配套在 `config/rules/index.yaml` 登记 rule_set。漏条目或错位都会被 `assertRoleOrder` 拦下（变体的期望值是 `MAC_ORDER` 加注册补丁），表里留下没人引用的条目则由孤儿断言拦下
 - 服务顺序的三条策略由角色列表的条目顺序兑现：**拦截 > 模式开关 > 服务分流**（`base/reject.json` 早于 `base/quic-guard.json`：QUIC 的国内豁免会把同属 `ChinaMax` 的统计域名判成直连，实测 `hm.baidu.com` 同属 `Advertising`、`loggw-ex.alipay.com` 同属 `MyReject`，见 `docs/adr/0008`）；`base/reject.json` 早于 `base/clash-mode.json` 与全部服务条目，否则 `global` 模式会连同广告与黑名单一起放行，按域名关键词分流的规则也会截胡本该 reject 的域名；自有清单默认排在外部清单之前，避免宽泛的上游清单抢占自有域名，分流类 `MyDirect` 与 `MyProxy`（`base/own-lists.json`）排在所有服务条目之前；出站组默认 `direct` 的服务条目排到服务段末尾，避免默认直连组抢占代理流量；理由见 `docs/adr/0007-order-service-rules-own-lists-first.md`
 - 顺序改动会被测试抓住：`config/sing-box/tests/lib/manifest.ts` 存着基准顺序与两个变体的注册补丁，任何重排都会在 `bun test` 里显示成 diff（实测把 `clash-mode` 挪到 `reject` 之前会同时打红顺序断言与 ADR-0008 的语义断言）
 - merge 语义陷阱：同一层按路径字典序拼接，**标量取字典序最早者的那一份**。往前面插一个也写同一个标量的片段会静默夺权——不报错、不改数组结构，只把取值换掉；给已有能力补片段前先确认它写不写标量

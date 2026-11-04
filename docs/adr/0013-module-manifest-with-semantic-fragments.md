@@ -24,10 +24,12 @@
 ## Consequences
 
 - 「顺序」第一次有了唯一的、机器可读的真源：插队 = 在列表里挪一行，不再重命名文件，也不再需要号段留空
-- 与 ADR-0006 的「装配代码从 246 行降到 0」并存：这次新增了 155 行 TypeScript，但性质与那次删掉的装配器不同——旧装配器逐 key 拼接数组、硬编码字段顺序，还带 4 处正则把单元素数组压回单行；新脚本只做「读表 → 写片段 → 调内核」，不排序、不排版、不自己拼 JSON 文本，最终形态仍由 `sing-box merge` 决定。代价是装配不再是零代码，脚本本身变成要维护、要理解的资产；产物也不再能从输入直接推出来，必须跑一次内核
-- 位置约束从文件名搬进测试：基准顺序（mac 的 38 条）与两个变体的注册补丁是显式常量，任何重排都会在 `bun test` 里显示成 diff，逼一次复核。实测把 `clash-mode` 挪到 `reject` 之前，顺序断言与 ADR-0008 的语义断言会同时变红
+- 与 ADR-0006 的「装配代码从 246 行降到 0」并存：这次新增了 160 行 TypeScript，但性质与那次删掉的装配器不同——旧装配器逐 key 拼接数组、硬编码字段顺序，还带 4 处正则把单元素数组压回单行；新脚本只做「读表 → 写片段 → 调内核」，不排序、不排版、不自己拼 JSON 文本，最终形态仍由 `sing-box merge` 决定。代价是装配不再是零代码，脚本本身变成要维护、要理解的资产；产物也不再能从输入直接推出来，必须跑一次内核
+- 位置约束从文件名搬进测试：基准顺序（mac 的 36 条）与两个变体的注册补丁是显式常量，任何重排都会在 `bun test` 里显示成 diff，逼一次复核。实测把 `clash-mode` 挪到 `reject` 之前，顺序断言与 ADR-0008 的语义断言会同时变红
 - 手工同步的重复消失：服务条目按 `outbound` 查表，「服务名」不再与 `outbound` 并存
-- `fragments/` 下没人引用的片段是死文件，由「孤儿片段」断言拦下；改片段名只在表里改一处，顺序不受影响
-- 代价：新增服务要在 `modules.yaml` 里加 `services` 一行，再在每个用到它的角色列表里加一条（Mac / iOS / 路由器各一处）。漏一处仍是可能的，但漏了会在产物里显出位置与数量差异，而不是静默失效
-- 历史 ADR（0006 / 0007 / 0008 / 0009 / 0011）里的号段文件名按当时的事实保留，不再回改。旧文件与新片段**不是**逐条改名：`10-dns.json` 拆成三个 dns 片段、11 个出站文件并成 `base/outbound-groups.json`、`40-my-rules.json` 改名 `base/own-lists.json`，其余多数是同名去号段；现状以 `config/sing-box/fragments/` 与 `modules.yaml` 为准
+- `fragments/` 下没人引用的片段、表里 `services` / `catalog` 没被任何角色引用的条目都是死条目，由孤儿断言一起拦下。改片段名不是「只改表里一处」：`tests/lib/manifest.ts` 的 `MAC_ORDER` 要同步，变体片段还要改各自测试里的 `IOS_DIFF.fragments` / `ROUTER_DIFF.fragments`（`assertRoleOrder` 与 `assertFragmentDir` 都会红）
+- 产物多一条不变量：每个产物里 `route.rules[].rule_set` 引用的 tag 必须已在该产物的 `route.rule_set` 里声明。`catalog` 把「声明」与「引用」拆成两个条目之后，删掉 `{ catalog: X }` 而留下用它的规则片段会做出「引用未声明的 tag」这种产物，而内核 check 与 merge 都退出码 0（实测），只靠 `just template-build` 与 `just check-singbox` 看不见
+- 代价：新增服务要改 5 处：`modules.yaml` 的 `services` 一行、三个角色列表（Mac / iOS / 路由器）各一条 `{ service: <outbound> }`、`tests/lib/manifest.ts` 里 `MAC_ORDER` 一条。漏条目或错位都会被 `assertRoleOrder` 拦下（变体的期望值是 `MAC_ORDER` 加注册补丁，不是另抄一份），反方向的残留由孤儿断言盖住
+- 代价：变体侧仍是整份片段拷贝，不是对 base 片段的引用或补丁。`base/experimental.json` 与 `router/experimental.json` 只差一个标量（`external_controller` 的监听地址），`inbounds` 在三份产物里各有一份拷贝。这是改动前就有的形态（旧的 `modules-router/90-experimental.json` 同样是整份拷贝），本决策既没引入也没消除；「改 base 不传播到变体」目前没有断言，唯一提示是 `just template-build` 打印的「未变化」——base 改了而变体那份没跟着改时，对应产物会报未变化
+- 历史 ADR（0006 / 0007 / 0008 / 0009 / 0011）里的号段文件名按当时的事实保留，不再回改。旧文件与新片段**不是**逐条改名：`10-dns.json` 对应 `base/dns-policy.json`（规则集声明挪进表里的 `catalog.dns`）、11 个出站文件并成 `base/outbound-groups.json`、`41`–`69` 的 15 个服务文件并进表里的 `services`、`40-my-rules.json` 改名 `base/own-lists.json`，其余多数是同名去号段；现状以 `config/sing-box/fragments/` 与 `modules.yaml` 为准
 - 回滚：本决策是纯结构重构，三份产物逐字节不变，`git revert` 落地它的提交即可（被删的三个模块目录与变体合并脚本随该提交一并恢复）

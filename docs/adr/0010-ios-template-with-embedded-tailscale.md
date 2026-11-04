@@ -2,7 +2,7 @@
 
 **日期**：2026-10-17
 
-iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并存。iOS 底模与 Mac 共用 `fragments/base/` 的片段，另在 `config/sing-box/modules.yaml` 里有一份 `roles.ios`：`fragments/ios/inbounds.json` 顶替共享的入站片段，并追加 Tailscale 的 DNS、endpoint、入站拒绝与路由四个片段，合并出 `template-ios.json`，由 sing-box 内嵌的 `tailscale` endpoint 同时承载代理与内网访问。Mac 的 `template.json` 不变（布局在 2026-11-05 收敛为一张表加一层片段，见 `docs/adr/0017`）
+iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并存。iOS 底模与 Mac 共用 `fragments/base/` 的片段，另在 `config/sing-box/modules.yaml` 里有一份 `roles.ios`：`fragments/ios/inbounds.json` 顶替共享的入站片段，并追加 Tailscale 的 DNS、endpoint、入站拒绝与路由四个片段，合并出 `template-ios.json`，由 sing-box 内嵌的 `tailscale` endpoint 同时承载代理与内网访问。Mac 的 `template.json` 不变（布局在 2026-11-05 收敛为一张表加一层片段，见 `docs/adr/0013`）
 
 ## Context
 
@@ -28,4 +28,4 @@ iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并
 - iOS 用户的家庭网段若与 Tailscale 发布的子网相同，该目标会被送入 Tailnet。当前目标网段为 `192.168.69.x`，未见冲突
 - 入站拒绝只约束进入 sing-box 路由与 DNS 的流量。Tailscale 自身的 PeerAPI（Taildrop 等）由 Tailscale 授权控制，不经过 `route.rules`，要禁止收文件需检查 Tailnet 的文件共享策略。Tailscale SSH 默认未启用
 - 真实 Tailnet 登录、ACL、子网路由批准与锁屏、切网表现无法在沙箱验证，由设备验收
-- 回滚：从 `roles` 里去掉 `ios`、删除 `fragments/ios/` 与 `template-ios.json`，客户端移除 iOS 的 `template_url`；旧布局的恢复方式见 `docs/adr/0017`
+- 回滚：从 `roles` 里去掉 `ios`、删除 `fragments/ios/` 与 `template-ios.json`，客户端移除 iOS 的 `template_url`；旧布局的恢复方式见 `docs/adr/0013`

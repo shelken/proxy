@@ -37,8 +37,6 @@ export const roleKeys = (role: string): string[] => {
 // 顺序不是排版：文件名序同时决定 route.rules（首匹配优先）与 outbounds（客户端展示顺序）。
 export const MAC_ORDER = [
   "fragment:base/inbounds.json",
-  "fragment:base/dns-lan-resolver.json",
-  "fragment:base/dns-deployment.json",
   "fragment:base/dns-policy.json",
   "catalog:dns",
   "fragment:base/route-globals.json",
@@ -112,17 +110,18 @@ export const assertFragmentDir = (dirname: string, registered: string[]) => {
   );
 };
 
-/** fragments/ 下不得有孤儿片段：改了不生效的死文件，与「能力开关是不列入」互为反面 */
-export const assertNoOrphanFragments = () => {
-  const used = new Set(
-    Object.values(manifest.roles)
-      .flat()
-      .flatMap((item) => ("fragment" in item ? [item.fragment] : [])),
-  );
-  const all = readdirSync(FRAGMENTS_DIR, { withFileTypes: true }).flatMap((entry) =>
-    entry.isDirectory()
-      ? readdirSync(join(FRAGMENTS_DIR, entry.name)).map((f) => `${entry.name}/${f}`)
-      : [entry.name],
-  );
-  expect(all.filter((f) => !used.has(f))).toEqual([]);
+/** 表里不得有死条目：fragments/ 下没人引用的片段、services 里没被引用的服务、catalog 里没被引用的组。
+ *  与「能力开关是不列入」互为反面：删掉某个角色列表里的条目就是关掉它，表里那一行必须跟着消失 */
+export const assertNoOrphanEntries = () => {
+  const used = new Set(Object.values(manifest.roles).flat().map(itemKey));
+  const declared = [
+    ...readdirSync(FRAGMENTS_DIR, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? readdirSync(join(FRAGMENTS_DIR, entry.name)).map((f) => `fragment:${entry.name}/${f}`)
+        : [`fragment:${entry.name}`],
+    ),
+    ...manifest.services.map((svc) => `service:${svc.outbound}`),
+    ...Object.keys(manifest.catalog).map((name) => `catalog:${name}`),
+  ];
+  expect(declared.filter((key) => !used.has(key))).toEqual([]);
 };

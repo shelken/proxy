@@ -79,7 +79,7 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 # --- 生产底模装配与校验 ---
 # 单入口：一次重建 mac、iOS 与路由器三份底模。
 # 顺序与能力开关都写在 config/sing-box/modules.yaml：roles 列表的顺序就是合并顺序，
-# 条目不在列表里就等于没有这个能力；片段内容在 config/sing-box/fragments/（ADR-0017）。
+# 条目不在列表里就等于没有这个能力；片段内容在 config/sing-box/fragments/（ADR-0013）。
 # 开发时只跑这一条命令，无需记住各个产物各自怎么生成；
 # 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
