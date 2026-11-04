@@ -71,7 +71,8 @@ export const assertMyProxyDnsBeforeChinaMax = (dnsRules: Rule[]) => {
 
 // 规则引用的 rule_set tag 必须已声明。catalog 把「声明」与「引用」拆成两个条目之后，
 // 从角色列表里删掉 `{ catalog: X }` 而留下用它的规则片段，产物就长成「规则引用未声明的 tag」。
-// 内核对此只在运行期静默不命中，check 与 merge 都退出码 0（实测），所以只能在这里拦。
+// 内核对此只在运行期静默不命中，check 与 merge 都退出码 0（实测）。底模那份由 just rules-check 报出，
+// 两个变体产物没有别的门禁，只能在这里拦。
 export const assertAllRuleSetsDeclared = (route: {
   rules?: Rule[];
   rule_set?: Array<{ tag: string }>;
