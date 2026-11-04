@@ -51,7 +51,7 @@
 
 1. 本网解析器的 tag 在共享底模与三个角色之间统一为 `dns-lan`。`10-dns.json` 的五处 `server` 引用与 `20-route-base.json` 的 `default_domain_resolver` 都指向它，于是没有任何规则需要为改 tag 而抄文件：mac / iOS 用底模的 `type: local`（跟随宿主系统解析器），路由变体弃用它、改由设备 overlay 给主路由地址
 2. clash API 的监听地址不再由变体写死：底模与 Mac 一致只监听回环，设备 overlay 用标量覆盖
-3. 路由侧不再需要底模那份部署域静态应答：`ooooo.space` 已登记在 `config/rules/custom/MyDirect.yaml`（覆盖全部子域），随底模的 `MyDirect-dns → dns-lan` 交给主路由 dnsmasq 应答，与主路由上的固定租约同源；那份通配应答只服务 mac / iOS
+3. 路由侧不再需要底模那份部署域静态应答：`ooooo.space` 已登记在 `config/rules/custom/MyDirect.yaml`（覆盖全部子域），随底模的 `MyDirect-dns → dns-lan` 交给主路由 dnsmasq 应答，与主路由上的固定租约同源；那份通配应答只服务 mac / iOS。前提已在局域网内实测（`dig @<主路由> cpa.int.ooooo.space A` → `192.168.69.46`，`int.ooooo.space` 无应答，与那两条规则的效果一致）
 
 两条约束落在文件名上，写进了 `CODING_STANDARDS.md`：文件名的字典序就是数组次序（两个能力文件都排在 `10-dns.json` 之前），而部署域那一份还必须排在 `09-tailscale-dns.json` 之后 —— iOS 的 `dns.rules` 首条必须是 ts-ep 入站拒绝（`docs/adr/0010`）。两个能力文件因此叫 `10-dns-deployment.json` 与 `10-dns-lan-resolver.json`，mac / iOS 的产物本次只有 tag 改名，数组次序一处未动。
 

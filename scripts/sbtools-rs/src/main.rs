@@ -506,16 +506,16 @@ mod tests {
         let merged = serde_json::json!({
             "log": {"level": "debug"},
             "dns": {"rules": [
-                {"rule_set": "Lan-dns", "server": "dns-local-system"},
-                {"domain_suffix": ["ooooo.space"], "server": "dns-local-system"},
+                {"rule_set": "Lan-dns", "server": "dns-lan"},
+                {"domain_suffix": ["ooooo.space"], "server": "dns-lan"},
                 {"query_type": ["A", "AAAA"], "server": "dns-fakeip"}
             ]},
-            "route": {"final": "proxy", "default_domain_resolver": "dns-local-system"}
+            "route": {"final": "proxy", "default_domain_resolver": "dns-lan"}
         });
         let out = render_effective_summary(&merged);
         assert!(out.contains("rule_set=Lan-dns"), "rule_set 未读出:\n{out}");
         assert!(out.contains("domain_suffix=ooooo.space"), "实际:\n{out}");
-        assert!(out.contains("dns-local-system"), "实际:\n{out}");
+        assert!(out.contains("dns-lan"), "实际:\n{out}");
         assert!(!out.contains('?'), "有读不出的字段:\n{out}");
     }
 

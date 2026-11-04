@@ -729,7 +729,7 @@ mod tests {
         });
         let overlay = json!({
             "log": {"level": "debug"},
-            "route": {"default_domain_resolver": {"server": "dns-local-system"}}
+            "route": {"default_domain_resolver": {"server": "dns-lan"}}
         });
         let merged = merge_overlay(&base, Some(&overlay)).expect("合并应成功");
         assert_eq!(
@@ -742,12 +742,12 @@ mod tests {
         // 两种形态之一，覆盖失效时也能通过。
         assert_eq!(
             merged["route"]["default_domain_resolver"],
-            json!("dns-local-system"),
+            json!("dns-lan"),
             "overlay 的 resolver 应胜出并规范成裸字符串"
         );
 
         // 无 overlay 时底模标量保留，且同样被规范化——这是上面断言的对照面：
-        // 若合并方向反了，这里会拿到 dns-direct-cn 而不是 dns-local-system
+        // 若合并方向反了，这里会拿到 dns-direct-cn 而不是 dns-lan
         let merged_base = merge_overlay(&base, None).expect("无 overlay 合并应成功");
         assert_eq!(merged_base["log"]["level"], json!("warn"));
         assert_eq!(
