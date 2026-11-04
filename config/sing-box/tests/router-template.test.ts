@@ -96,20 +96,9 @@ const OVERLAY_FIXTURE = JSON.parse(
 );
 
 describe("template-router.json 结构契约（ADR-0012）", () => {
-  // auto_redirect 等项只有 Linux 内核认得，macOS 上本地 check 必然失败；
-  // 该断言由 CI（ubuntu）与 `just kernel-check-vm router` 覆盖
-  test.skipIf(process.platform !== "linux")("通过 sing-box check", () => {
-    const d = mkdtempSync(join(tmpdir(), "router-check-"));
-    try {
-      expect(
-        Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", templatePath])
-          .exitCode,
-      ).toBe(0);
-    } finally {
-      rmSync(d, { recursive: true, force: true });
-    }
-  });
-
+  // 单份底模不做内核 check：它引用不到只有 overlay 才有的 dns-lan（ADR-0014），内核在
+  // check 阶段直接报 default domain resolver not found。装配终态后的内核 check 在
+  // 「overlay 夹具」那组（Linux 上跑，CI 同口径），macOS 宿主交给 `just kernel-check-vm router`
   test("tun 开启 auto_route 与 auto_redirect", () => {
     assertGatewayTun(router.inbounds);
   });
