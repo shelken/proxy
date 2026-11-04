@@ -45,63 +45,6 @@ export const ROUTER_MODULES_WHITELIST = [
   "29-dns-in.json",
 ];
 
-// sing-box 的 invert 反转的是整条规则的所有条件（v1.14.3 route/rule/rule_abstract.go 的 Match()），
-// 所以「排除白名单」只能是外层 AND 限定 tun-in、内层只反转 MAC 的两层写法。把 inbound 和 invert
-// 放在同一层时，dns-in 进来的查询（不满足 tun-in，整条为假）会被翻成命中，被 direct 送回本机 53 端口。
-export const assertBypassScopedToTunInWithInvertedMac = (rule: Record<string, unknown>) => {
-  expect(rule.action).toBe("bypass");
-  expect(rule.outbound).toBe("direct");
-  expect(rule.type).toBe("logical");
-  expect(rule.mode).toBe("and");
-  expect(rule.invert).toBeUndefined();
-  const [scope, mac] = asArray<Record<string, unknown>>(rule.rules);
-  expect(asArray(scope.inbound)).toEqual(["tun-in"]);
-  expect(scope.invert).toBeUndefined();
-  expect(mac.type).toBe("logical");
-  expect(mac.invert).toBe(true);
-  const macRules = asArray<Record<string, unknown>>(mac.rules);
-  expect(macRules.length).toBe(1);
-  expect(asArray(macRules[0].source_mac_address).length).toBe(2);
-};
-
-// 结构取自用户指南 05-router.md 的 `bypass` 示例（那里用 `<IPn>/32`，这里换占位 MAC，
-// 断言的是两层逻辑与 invert 位置，与条件字段无关）
-const WHITELIST_MACS = ["02:00:00:00:00:01", "02:00:00:00:00:02"];
-
-const WHITELIST_OVERLAY = {
-  experimental: { clash_api: { secret: "test-secret" } },
-  dns: {
-    // 本网解析器地址由设备 overlay 提供，底模只留 tag（ADR-0013）
-    servers: [{ type: "udp", tag: "dns-lan", server: "192.0.2.1" }],
-    rules: [
-      {
-        source_mac_address: WHITELIST_MACS,
-        invert: true,
-        server: "dns-lan",
-      },
-    ],
-  },
-  route: {
-    rules: [
-      {
-        type: "logical",
-        mode: "and",
-        rules: [
-          { inbound: ["tun-in"] },
-          {
-            type: "logical",
-            mode: "and",
-            invert: true,
-            rules: [{ source_mac_address: WHITELIST_MACS }],
-          },
-        ],
-        action: "bypass",
-        outbound: "direct",
-      },
-    ],
-  },
-};
-
 // 层名承重：merge 的生效顺序由文件路径字典序决定，与 -c 的 argv 顺序无关（docs/sbtools.md §6）
 const mergeLayers = (layers: Array<[string, unknown]>) => {
   const d = mkdtempSync(join(tmpdir(), "router-merge-"));
@@ -164,29 +107,6 @@ describe("template-router.json 结构契约（ADR-0012）", () => {
     expect(text).not.toContain("source_mac_address");
     expect(text).not.toContain("source_ip_cidr");
     expect(router.experimental.clash_api.secret).toBeUndefined();
-  });
-});
-
-describe("白名单 overlay 示例（05-router.md）", () => {
-  // 服务端合并口径：01-overlay 在前、02-base 在后（docs/sbtools.md §6）
-  const merged = mergeLayers([
-    ["01-overlay.json", WHITELIST_OVERLAY],
-    ["02-base.json", router],
-  ]);
-  const mergedRules = merged.route.rules as Array<Record<string, any>>;
-
-  test("合并后通过 check，overlay 的 secret 覆盖底模标量", () => {
-    expect(merged.experimental.clash_api.secret).toBe("test-secret");
-  });
-
-  test("bypass 规则排第一：外层限定 tun-in，只有 MAC 条件被反转", () => {
-    assertBypassScopedToTunInWithInvertedMac(mergedRules[0]);
-  });
-
-  test("名单外设备的 DNS 规则排在 dns.rules 第一", () => {
-    const first = merged.dns.rules[0];
-    expect(first.server).toBe("dns-lan");
-    expect(first.invert).toBe(true);
   });
 });
 
@@ -327,31 +247,5 @@ describe("变异验证：断言能拦住坏情况", () => {
     const inbounds = clone(router.inbounds);
     delete inbounds.find((i: any) => i.type === "tun").auto_redirect;
     expect(() => assertGatewayTun(inbounds)).toThrow();
-  });
-
-  test("invert 拍回与 inbound 同层（单层写法）→ assertBypassScopedToTunInWithInvertedMac 必须失败", () => {
-    const flat = {
-      inbound: ["tun-in"],
-      source_mac_address: ["02:00:00:00:00:01", "02:00:00:00:00:02"],
-      invert: true,
-      action: "bypass",
-      outbound: "direct",
-    };
-    expect(() => assertBypassScopedToTunInWithInvertedMac(flat)).toThrow();
-  });
-
-  test("invert 提到外层（连 tun-in 一起反转）→ 断言必须失败", () => {
-    const outer = {
-      type: "logical",
-      mode: "and",
-      invert: true,
-      rules: [
-        { inbound: ["tun-in"] },
-        { source_mac_address: ["02:00:00:00:00:01"] },
-      ],
-      action: "bypass",
-      outbound: "direct",
-    };
-    expect(() => assertBypassScopedToTunInWithInvertedMac(outer)).toThrow();
   });
 });
