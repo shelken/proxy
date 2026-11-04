@@ -71,7 +71,7 @@ const WHITELIST_MACS = ["02:00:00:00:00:01", "02:00:00:00:00:02"];
 const WHITELIST_OVERLAY = {
   experimental: { clash_api: { secret: "test-secret" } },
   dns: {
-    // 本网解析器地址由设备 overlay 提供，底模只留 tag（ADR-0012）
+    // 本网解析器地址由设备 overlay 提供，底模只留 tag（ADR-0013）
     servers: [{ type: "udp", tag: "dns-lan", server: "192.0.2.1" }],
     rules: [
       {
@@ -127,7 +127,7 @@ const mergeLayers = (layers: Array<[string, unknown]>) => {
   }
 };
 
-// 路由变体的最小 overlay 夹具：本网解析器地址等由设备 overlay 提供（ADR-0012），
+// 路由变体的最小 overlay 夹具：本网解析器地址等由设备 overlay 提供（ADR-0013），
 // 单份 template-router.json 引用不到那些 tag，装配出终态才能验到这道接缝。
 // 与 justfile 的 `merge-variant-fixture.sh` 读同一份文件
 const OVERLAY_FIXTURE = JSON.parse(

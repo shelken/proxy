@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # 变体底模的终态装配：底模 + 该变体的 overlay 夹具（config/sing-box/tests/fixtures/<变体>-overlay.json）。
 #
-# 路由变体把本网解析器地址、部署域名与内网入口、放行（不被改写）的解析器清单
-# 交给设备 overlay（ADR-0012 的设计约束），所以 template-router.json 引用不到
-# dns-lan 这些 tag：route.default_domain_resolver 指向不存在的 tag 时，配了出站的
+# 路由变体把本网解析器地址、放行（不被改写）的解析器清单
+# 交给设备 overlay（ADR-0013 的设计约束），部署域的静态应答整个弃用（ADR-0014），
+# 所以 template-router.json 引用不到
+# dns-lan 这个 tag：route.default_domain_resolver 指向不存在的 tag 时，配了出站的
 # 配置在内核 check 阶段就 FATAL（initialize outbound[0]: default domain resolver
 # not found），单份底模不可 check，必须装配出终态。没有夹具的变体原样输出底模。
 #

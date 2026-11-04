@@ -17,7 +17,7 @@
 
 ## sing-box 与规则
 
-- `template.json`、`template-ios.json` 与 `template-router.json` 由 `just template-build` 一并重建：前者从 `modules/` 合并，后两者由 `modules/` 加 `modules-ios/` 或 `modules-router/` 合并（变体目录的同名文件替换、其余新增，脚本 `scripts/merge-variant-template.sh`），决策见 `docs/adr/0010`、`docs/adr/0012`、`docs/adr/0013`；路由器底模不写任何设备数据（MAC、IP、secret），这些只放设备 overlay
+- `template.json`、`template-ios.json` 与 `template-router.json` 由 `just template-build` 一并重建：前者从 `modules/` 合并，后两者由 `modules/` 加 `modules-ios/` 或 `modules-router/` 合并（变体目录的同名文件替换、其余新增，脚本 `scripts/merge-variant-template.sh`），决策见 `docs/adr/0010`、`docs/adr/0012`、`docs/adr/0013`、`docs/adr/0014`、`docs/adr/0016`；路由器底模不写任何设备数据（MAC、IP、secret），这些只放设备 overlay
 - `modules/` 文件名前缀决定合并顺序，即 `route.rules` 与 `outbounds` 的数组顺序：`00`-`29` 为入站、DNS 与路由全局属性，`30`-`39` 为前置动作、私网守卫、拦截、QUIC 守卫、模式开关、BT 与下载分流、解析与核心出站组，`41`-`63` 为自有清单服务，`65`-`69` 为外部清单服务，`71`-`79` 为默认直连分组，`80` 为兜底规则，`90` 为收尾；每个服务对应独立文件，号段留空便于插队；新增服务只需新建文件并在 `index.yaml` 登记 rule_set
 - 一个可独立变化的事实一个文件：部署域的静态应答在 `10-dns-deployment.json`、本网解析器的定义在 `10-dns-lan-resolver.json`。变体不要某个事实时，在变体目录放同名的空集文件（如 `modules-router/10-dns-lan-resolver.json` 的 `{"dns":{"servers":[]}}`），显式写出空集而不是 `{}`，让「这个角色不要这一份」在文件里读得出来；变体目录除真有对象差异的 `00-inbounds.json` 外不放共享文件的拷贝，整份拷贝会随底模改动静默漂移。解析器的 tag 在共享底模与各角色之间统一命名（本网解析器为 `dns-lan`），规则不因角色而改 tag
 - 同号段多个文件时先后由文件名的字典序决定：`10-dns-deployment.json` 与 `10-dns-lan-resolver.json` 都排在 `10-dns.json` 之前（`-` 小于 `.`），而部署域应答又必须排在 `09-tailscale-dns.json` 之后 —— iOS 的 `dns.rules` 首条是 ts-ep 入站拒绝（`docs/adr/0010`，`config/sing-box/tests/ios-template.test.ts` 有断言）。改名或换前缀就是改数组次序，动手前先跑 `just template-build` 看三份产物的 diff

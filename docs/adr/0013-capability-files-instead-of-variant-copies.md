@@ -21,4 +21,5 @@
 - 文件名次序就是数组次序，改名等于改合并结果；约定与两个能力文件的位置写进 `CODING_STANDARDS.md`，动手前用 `just template-build` 对照三份产物
 - 路由侧弃用部署域静态应答的前提与回退见 [0014](0014-deployment-domain-dns-on-main-router.md)
 - mac / iOS 的产物只随 tag 改名变化，数组次序不动
+- 路由变体的底模引用不到只有 overlay 才有的 `dns-lan`，单份不可 check（内核报 `initialize outbound[0]: default domain resolver not found`），本地与 CI 都先经 `scripts/merge-variant-fixture.sh` 装配出终态
 - 发到设备的配置由订阅 URL 里的 overlay 与从 `main` 拉的底模合并而成，两者不原子推进：底模先走、overlay 未重铸时 `sing-box check` 会失败并保留旧配置，表现为不收敛而不是掉线
