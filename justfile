@@ -114,10 +114,11 @@ template-check:
 
 # 内核 check 的 Linux 侧执行：底模里的 auto_redirect 等项只能在 Linux 内核下校验，
 # macOS 宿主交给沙箱 VM（内核对齐 .mise.toml），CI 在 ubuntu 上直接跑同一条 check。
+# check 的是底模加 overlay 夹具的终态（merge-variant-fixture.sh），与 template-variant-check 同口径
 kernel-check-vm variant: vm-start
-    {{lima_shell}} bash -lc 'W=$(mktemp -d); trap "rm -rf $W" EXIT; /opt/proxy-test/bin/sing-box check -D "$W" -c {{repo_in_guest}}/config/sing-box/template-{{variant}}.json'
+    {{lima_shell}} bash -lc 'set -eu; W=$(mktemp -d); trap "rm -rf $W" EXIT; SING_BOX=/opt/proxy-test/bin/sing-box {{repo_in_guest}}/scripts/merge-variant-fixture.sh {{variant}} "$W/final.json" >/dev/null; /opt/proxy-test/bin/sing-box check -D "$W" -c "$W/final.json"'
 
-# 校验变体底模与 modules + modules-<变体> 一致，并通过内核 check
+# 校验变体底模与 modules + modules-<变体> 一致，并让底模加 overlay 夹具的终态通过内核 check
 template-variant-check variant:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -128,9 +129,10 @@ template-variant-check variant:
         echo "❌ template-{{variant}}.json 与 modules + modules-{{variant}} 不一致，请运行 just template-build"
         exit 1
     fi
-    if ! out=$({{sing_box_cmd}} check -D "$work" -c "$PWD/config/sing-box/template-{{variant}}.json" 2>&1); then
+    scripts/merge-variant-fixture.sh {{variant}} "$work/final.json" >/dev/null
+    if ! out=$({{sing_box_cmd}} check -D "$work" -c "$work/final.json" 2>&1); then
         # 底模含 auto_redirect 等仅 Linux 支持的项，macOS 宿主内核 check 必然报错：
-        # 转沙箱 VM 用同版本内核对同一份底模校验（CI 在 ubuntu 上跑的就是这条 check）
+        # 转沙箱 VM 用同版本内核对同一份终态校验（CI 在 ubuntu 上跑的就是这条 check）
         if [ "$(uname -s)" = "Linux" ] || ! printf '%s\n' "$out" | grep -q "only supported on Linux"; then
             printf '%s\n' "$out"
             exit 1

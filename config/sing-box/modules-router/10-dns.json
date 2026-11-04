@@ -1,0 +1,132 @@
+{
+  "dns": {
+    "strategy": "prefer_ipv4",
+    "optimistic": true,
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "dns-direct-cn",
+        "server": "223.5.5.5"
+      },
+      {
+        "type": "https",
+        "tag": "dns-proxy",
+        "server": "1.1.1.1",
+        "detour": "dns-auto",
+        "tls": {
+          "enabled": true,
+          "server_name": "cloudflare-dns.com"
+        }
+      },
+      {
+        "type": "fakeip",
+        "tag": "dns-fakeip",
+        "inet4_range": "198.18.0.0/15"
+      }
+    ],
+    "rules": [
+      {
+        "rule_set": [
+          "MyReject-dns"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
+          "Lan-dns"
+        ],
+        "server": "dns-lan",
+        "disable_optimistic_cache": true
+      },
+      {
+        "domain_suffix": [
+          "local",
+          "lan",
+          "home.arpa"
+        ],
+        "server": "dns-lan",
+        "disable_optimistic_cache": true
+      },
+      {
+        "rule_set": [
+          "MyDirect-dns"
+        ],
+        "server": "dns-lan",
+        "disable_optimistic_cache": true
+      },
+      {
+        "clash_mode": "direct",
+        "server": "dns-lan"
+      },
+      {
+        "query_type": [
+          "PTR"
+        ],
+        "server": "dns-lan"
+      },
+      {
+        "rule_set": [
+          "MyProxy-dns"
+        ],
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "dns-fakeip"
+      },
+      {
+        "rule_set": [
+          "ChinaMax-dns"
+        ],
+        "server": "dns-direct-cn"
+      },
+      {
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "dns-fakeip"
+      }
+    ],
+    "final": "dns-proxy"
+  },
+  "route": {
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "Lan-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyDirect-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyReject-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "MyProxy-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy-dns.srs",
+        "update_interval": "1d"
+      },
+      {
+        "type": "remote",
+        "tag": "ChinaMax-dns",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
+        "update_interval": "1d"
+      }
+    ]
+  }
+}

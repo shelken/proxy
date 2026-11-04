@@ -1,0 +1,45 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "dns-lan",
+        "server": "192.0.2.1"
+      }
+    ]
+  },
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "tun-in"
+        ],
+        "ip_cidr": [
+          "192.0.2.53/32"
+        ],
+        "port": [
+          53
+        ],
+        "network": [
+          "udp",
+          "tcp"
+        ],
+        "action": "bypass",
+        "outbound": "direct"
+      },
+      {
+        "inbound": [
+          "tun-in"
+        ],
+        "port": [
+          53
+        ],
+        "network": [
+          "udp",
+          "tcp"
+        ],
+        "action": "hijack-dns"
+      }
+    ]
+  }
+}

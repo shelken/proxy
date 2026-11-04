@@ -9,7 +9,7 @@
       ],
       "auto_route": true,
       "auto_redirect": true,
-      "dns_mode": "hijack",
+      "dns_mode": "native",
       "route_exclude_address": [
         "10.0.0.0/8",
         "172.16.0.0/12",
