@@ -16,6 +16,7 @@ on:
       - "config/sing-box/template-router.json"
       - "config/sing-box/tests/**"
       - "scripts/modules-build.ts"
+      - "scripts/merge-variant-fixture.sh"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"

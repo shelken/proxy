@@ -37,6 +37,8 @@ export const roleKeys = (role: string): string[] => {
 // 顺序不是排版：文件名序同时决定 route.rules（首匹配优先）与 outbounds（客户端展示顺序）。
 export const MAC_ORDER = [
   "fragment:base/inbounds.json",
+  "fragment:base/dns-lan-resolver.json",
+  "fragment:base/dns-deployment.json",
   "fragment:base/dns-policy.json",
   "catalog:dns",
   "fragment:base/route-globals.json",
@@ -80,12 +82,19 @@ export type VariantPatch = {
   fragments: string[];
   /** 变体片段顶替 base 里的同名能力 */
   replace: Array<{ from: string; to: string }>;
+  /** 变体不比照基准顺序的能力：该条目在变体里不出现（能力开关 = 不列入） */
+  remove?: string[];
   /** 在锚点条目之后插入的片段 */
   insertAfter: Array<{ anchor: string; items: string[] }>;
 };
 
 export const applyPatch = (base: string[], patch: VariantPatch): string[] => {
   const out = base.map((key) => patch.replace.find((r) => r.from === key)?.to ?? key);
+  for (const key of patch.remove ?? []) {
+    const at = out.indexOf(key);
+    if (at < 0) throw new Error(`基准顺序里没有可移除的条目: ${key}`);
+    out.splice(at, 1);
+  }
   for (const { anchor, items } of patch.insertAfter) {
     const at = out.indexOf(anchor);
     if (at < 0) throw new Error(`基准顺序里没有锚点: ${anchor}`);

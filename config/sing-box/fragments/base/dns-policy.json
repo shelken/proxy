@@ -4,10 +4,6 @@
     "optimistic": true,
     "servers": [
       {
-        "type": "local",
-        "tag": "dns-local-system"
-      },
-      {
         "type": "udp",
         "tag": "dns-direct-cn",
         "server": "223.5.5.5"
@@ -30,24 +26,6 @@
     ],
     "rules": [
       {
-        "domain_suffix": [
-          ".int.ooooo.space"
-        ],
-        "query_type": [
-          "A"
-        ],
-        "action": "predefined",
-        "answer": [
-          "*. IN A 192.168.69.46"
-        ]
-      },
-      {
-        "domain_suffix": [
-          "int.ooooo.space"
-        ],
-        "action": "predefined"
-      },
-      {
         "rule_set": [
           "MyReject-dns"
         ],
@@ -57,7 +35,7 @@
         "rule_set": [
           "Lan-dns"
         ],
-        "server": "dns-local-system",
+        "server": "dns-lan",
         "disable_optimistic_cache": true
       },
       {
@@ -66,25 +44,25 @@
           "lan",
           "home.arpa"
         ],
-        "server": "dns-local-system",
+        "server": "dns-lan",
         "disable_optimistic_cache": true
       },
       {
         "rule_set": [
           "MyDirect-dns"
         ],
-        "server": "dns-local-system",
+        "server": "dns-lan",
         "disable_optimistic_cache": true
       },
       {
         "clash_mode": "direct",
-        "server": "dns-local-system"
+        "server": "dns-lan"
       },
       {
         "query_type": [
           "PTR"
         ],
-        "server": "dns-local-system"
+        "server": "dns-lan"
       },
       {
         "rule_set": [

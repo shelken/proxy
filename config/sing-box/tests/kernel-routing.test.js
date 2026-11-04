@@ -91,7 +91,7 @@ function tunsConfig(extraRules = []) {
     ],
     dns: { ...structuredClone(template.dns), servers },
     route: {
-      default_domain_resolver: "dns-local-system",
+      default_domain_resolver: "dns-lan",
       rules: [...structuredClone(template.route.rules), ...extraRules],
       final: "direct",
       rule_set: (template.route.rule_set ?? []).map(rs => ({ type: "inline", tag: rs.tag, rules: [{ domain: ["nonmatching.invalid"] }] })),

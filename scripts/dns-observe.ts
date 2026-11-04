@@ -3,7 +3,7 @@
  *
  * 被测对象：真实数据闭环装配出的完整 DNS 拓扑——
  *   国内域(ChinaMax-dns) → dns-direct-cn(223.5.5.5 直连)
- *   LAN/直连域 → dns-local-system（禁乐观缓存）
+ *   LAN/直连域 → dns-lan（禁乐观缓存）
  *   国际域 → dns-fakeip，真实解析 DoH 1.1.1.1 detour dns-auto（四正则跨故障域 urltest）
  *
  * 方法：对 TUN 派生 DNS 地址批量采样，用应答 IP 网段判别实际路径

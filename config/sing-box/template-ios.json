@@ -9,7 +9,7 @@
       },
       {
         "type": "local",
-        "tag": "dns-local-system"
+        "tag": "dns-lan"
       },
       {
         "type": "udp",
@@ -58,7 +58,7 @@
       },
       {
         "rule_set": "Lan-dns",
-        "server": "dns-local-system",
+        "server": "dns-lan",
         "disable_optimistic_cache": true
       },
       {
@@ -67,21 +67,21 @@
           "lan",
           "home.arpa"
         ],
-        "server": "dns-local-system",
+        "server": "dns-lan",
         "disable_optimistic_cache": true
       },
       {
         "rule_set": "MyDirect-dns",
-        "server": "dns-local-system",
+        "server": "dns-lan",
         "disable_optimistic_cache": true
       },
       {
         "clash_mode": "direct",
-        "server": "dns-local-system"
+        "server": "dns-lan"
       },
       {
         "query_type": "PTR",
-        "server": "dns-local-system"
+        "server": "dns-lan"
       },
       {
         "query_type": [
@@ -882,7 +882,7 @@
     ],
     "final": "proxy",
     "auto_detect_interface": true,
-    "default_domain_resolver": "dns-local-system",
+    "default_domain_resolver": "dns-lan",
     "default_http_client": "rule-set-dl"
   },
   "experimental": {

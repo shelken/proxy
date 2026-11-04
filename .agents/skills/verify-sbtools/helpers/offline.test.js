@@ -435,7 +435,7 @@ describe("check", () => {
     expect(rec.stdout).toContain("内核 check 通过");
     expect(rec.stdout).toContain("底模: embedded");
     expect(rec.stdout).toContain("dns.rules 条数");
-    expect(rec.stdout).toContain("route.default_domain_resolver: dns-local-system");
+    expect(rec.stdout).toContain("route.default_domain_resolver: dns-lan");
     expect(rec.stdout).toContain("route.final: proxy");
   });
 
@@ -444,12 +444,12 @@ describe("check", () => {
     const home = makeHome("check-overlay-ok");
     const p = writeFx(
       join(home, ".config", "sing-box", "config.yaml"),
-      clientYaml('{"log":{"level":"debug"},"dns":{"rules":[{"domain_suffix":["example.test"],"server":"dns-local-system"}]}}'),
+      clientYaml('{"log":{"level":"debug"},"dns":{"rules":[{"domain_suffix":["example.test"],"server":"dns-lan"}]}}'),
     );
     const rec = await runCli("check 合法 overlay", ["check", "-c", p], { home });
     expect(rec.exit).toBe(0);
     expect(rec.stdout).toContain("内核 check 通过");
-    expect(rec.stdout).toContain("domain_suffix=example.test -> dns-local-system");
+    expect(rec.stdout).toContain("domain_suffix=example.test -> dns-lan");
     expect(rec.stdout).toContain("log.level: debug");
     const m = rec.stdout.match(/dns\.rules 条数: (\d+)/);
     expect(m).not.toBeNull();
@@ -494,7 +494,7 @@ describe("check", () => {
     const home = makeHome("check-bad-ruleset");
     const p = writeFx(
       join(home, ".config", "sing-box", "config.yaml"),
-      clientYaml('{"dns":{"rules":[{"rule_set":["Definitely-Missing-Ruleset"],"server":"dns-local-system"}]}}'),
+      clientYaml('{"dns":{"rules":[{"rule_set":["Definitely-Missing-Ruleset"],"server":"dns-lan"}]}}'),
     );
     const rec = await runCli("check 不存在 ruleset 引用", ["check", "-c", p], { home });
     expect(rec.exit).toBe(1);
