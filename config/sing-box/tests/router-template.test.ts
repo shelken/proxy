@@ -263,8 +263,10 @@ describe("overlay 夹具：底模 + 最小 overlay 装成可运行终态", () =>
     expect(merged.dns.servers.map((s: any) => s.tag)).toContain("dns-lan");
   });
 
-  // 内核 check 不查这一步（实测 1.14.3：指向不存在的 tag 也 exit 0），
-  // 引用错 tag 要到运行期建 DNS 传输时才炸，所以在这里断言
+  // 终态引用的 DNS 服务器都有定义。内核只查 route.default_domain_resolver：
+  // 缺了它 check 直接 FATAL（initialize outbound[0]: default domain resolver not found），
+  // 但 dns.rules 的 server 与 dns.final 指向不存在的 tag 时 check 仍 exit 0（1.14.3 实测），
+  // 要到运行期才炸，所以这两处在测试里断言
   test("终态引用的 DNS 服务器都有定义", () => {
     const tags = new Set(merged.dns.servers.map((s: any) => s.tag));
     const ddr = merged.route.default_domain_resolver;

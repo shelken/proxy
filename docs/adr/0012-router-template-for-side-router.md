@@ -43,7 +43,7 @@
 - 名单外设备的连接在预匹配阶段被 `bypass`，由内核直接转发给主路由，不进 sing-box；不适用内核旁路的连接按 `outbound: direct` 经 sing-box 直连。哪些协议能走到内核旁路未在真机验证，由设备验收
 - 白名单规则必须限定 `inbound: tun-in`，否则 `dns-in` 的查询也会命中 `invert`，被 direct 送回本机
 - 旁路由自身发起的连接既不是白名单源 IP、也没有源 MAC，同样命中 `invert` 被放行；系统更新、拉订阅不经代理
-- 改名单、改 `dns-lan` 地址、改放行解析器清单都要改 overlay、重新 `encode` 并替换设备上的订阅 URL；这是 sing-box 客户端现有交付方式的代价，与 Mac / iOS 一致。设备不给 `dns.servers` 的 `dns-lan` 时，底模的五处 DNS 规则与 `default_domain_resolver` 引用不到服务器，运行期建 DNS 传输时才失败（内核 `check` 不查这一步）
+- 改名单、改 `dns-lan` 地址、改放行解析器清单都要改 overlay、重新 `encode` 并替换设备上的订阅 URL；这是 sing-box 客户端现有交付方式的代价，与 Mac / iOS 一致。设备不给 `dns.servers` 的 `dns-lan` 时，底模的 `route.default_domain_resolver` 会让内核 `check` 直接 FATAL（`initialize outbound[0]: default domain resolver not found: dns-lan`），配了出站才触发，所以单份 `template-router.json` 不可 check：本地与 CI 都先经 `scripts/merge-variant-fixture.sh` 装配出终态，设备上是它自己的 overlay
 - `dns_mode: native` 之后，内核层不再有 53 端口的 DNAT：设备显式指定的公网解析器按 overlay 的放行规则直出，其余 DNS 仍由 `29-dns-in.json` 与 `30-route-base-rules.json` 的规则劫持。改回 `hijack` 会让放行清单失效
 - `template-router.json` 的一致性与结构契约由 `just template-router-check` 与 `config/sing-box/tests/router-template.test.ts` 保证，CI 同口径
 - 回滚：删除 `modules-router/` 与 `template-router.json`，设备改回自带的静态配置

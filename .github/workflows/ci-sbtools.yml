@@ -15,7 +15,9 @@ on:
       - "config/sing-box/template-ios.json"
       - "config/sing-box/modules-router/**"
       - "config/sing-box/template-router.json"
+      - "config/sing-box/tests/**"
       - "scripts/merge-variant-template.sh"
+      - "scripts/merge-variant-fixture.sh"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -87,7 +89,9 @@ jobs:
           for variant in ios router; do
             SING_BOX=sing-box scripts/merge-variant-template.sh "$variant" "$tmp"
             diff -u "config/sing-box/template-$variant.json" "$tmp"
-            sing-box check -D "$work" -c "$PWD/config/sing-box/template-$variant.json"
+            # 路由变体引用不到只有设备 overlay 才有的 tag，装配出终态再 check
+            SING_BOX=sing-box scripts/merge-variant-fixture.sh "$variant" "$work/final-$variant.json"
+            sing-box check -D "$work" -c "$work/final-$variant.json"
           done
         working-directory: .
 

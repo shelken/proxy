@@ -82,8 +82,8 @@ overlay: |
 
 | overlay 内容                              | 作用                                                                                                                                                  |
 | :---------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dns.servers` 的 `dns-lan`                 | 必填。底模的 `Lan-dns`、`local` / `lan` / `home.arpa`、`MyDirect-dns`、`clash_mode: direct`、`PTR` 五处规则与 `route.default_domain_resolver` 都指向这个 tag；不给就是运行期建 DNS 传输时找不到服务器 |
-| `dns.rules` 的两条部署域名 predefined 规则 | 部署域名与内网入口的固定应答：一条给 A 记录一个内网地址，一条让该域下其余查询由本机直接否定，不发到公网                                            |
+| `dns.servers` 的 `dns-lan`                 | 必填。底模的 `Lan-dns`、`local` / `lan` / `home.arpa`、`MyDirect-dns`、`clash_mode: direct`、`PTR` 五处 DNS 规则与 `route.default_domain_resolver` 都指向这个 tag。底模因此单份不可 check：缺了它，终态装配后内核直接 FATAL（`initialize outbound[0]: default domain resolver not found`），设备上表现为 sing-box 起不来 |
+| `dns.rules` 的两条部署域名 predefined 规则 | 部署域名与内网入口的固定应答：一条给 A 记录一个内网地址；一条让该域下的其余查询由本机给出空应答，不发到公网。实测不带 `answer` 时 `rcode` 默认 `NOERROR`（`ANSWER: 0`，即 NODATA），不是 NXDOMAIN |
 | `dns.rules` 的 `invert` 规则               | 名单外设备若也把 DNS 指向旁路由，返回真实 IP 而不是 fakeip                                                                                            |
 | `route.rules` 的放行解析器规则             | 发往清单内解析器的查询不进本机 DNS 模块，直接由内核放行                                                                                                |
 | `route.rules` 的 53 劫持规则               | `inbound: tun-in` + `port: 53` 的其余查询按底模的方式劫持到本机 DNS，与 `dns_mode: hijack` 时期的行为一致                                             |

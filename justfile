@@ -152,13 +152,17 @@ check-singbox:
 
 # 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
 # 变体查合并产物：modules-<变体>/ 单独 check 缺共享模块会报错，产物与源码的一致性由 template-variant-check 保证。
+# 变体底模还引用不到只有设备 overlay 才有的 tag（`default_domain_resolver` 会被内核判为 not found），
+# 先装配出终态（merge-variant-fixture.sh）再 check。
 check-deprecated:
     #!/usr/bin/env bash
     set -uo pipefail
     # -D 把内核工作目录放到临时目录，Tailscale 状态目录等相对路径不落进仓库
     work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-deprecated.XXXXXX")"
     trap 'rm -rf "$work"' EXIT
-    for target in "-C $PWD/config/sing-box/modules" "-c $PWD/config/sing-box/template-ios.json" "-c $PWD/config/sing-box/template-router.json"; do
+    SING_BOX="{{sing_box_cmd}}" scripts/merge-variant-fixture.sh ios "$work/template-ios.json" >/dev/null
+    SING_BOX="{{sing_box_cmd}}" scripts/merge-variant-fixture.sh router "$work/template-router.json" >/dev/null
+    for target in "-C $PWD/config/sing-box/modules" "-c $work/template-ios.json" "-c $work/template-router.json"; do
         out=$({{sing_box_cmd}} check -D "$work" $target 2>&1)
         rc=$?
         # 同 template-variant-check：macOS 宿主校验不了 Linux 专属项，转沙箱 VM 跑同一目标
