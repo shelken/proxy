@@ -1,0 +1,20 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "MyDirect"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "MyProxy"
+        ],
+        "action": "route",
+        "outbound": "proxy"
+      }
+    ]
+  }
+}

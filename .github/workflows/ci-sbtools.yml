@@ -10,12 +10,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "config/sing-box/template.json"
-      - "config/sing-box/modules/**"
-      - "config/sing-box/modules-ios/**"
+      - "config/sing-box/modules.yaml"
+      - "config/sing-box/fragments/**"
       - "config/sing-box/template-ios.json"
-      - "config/sing-box/modules-router/**"
       - "config/sing-box/template-router.json"
-      - "scripts/merge-variant-template.sh"
+      - "config/sing-box/tests/**"
+      - "scripts/modules-build.ts"
       - ".mise.toml"
       - "Dockerfile"
       - ".dockerignore"
@@ -75,27 +75,20 @@ jobs:
           cache: true
           install_args: sing-box
 
-      # 校验底模与各模块合并结果一致，口径与 just template-check 保持一致
+      # 结构测试与底模一致性校验都要 bun：先装好再跑
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      # 校验三份底模与 modules.yaml + fragments/ 合并结果一致，口径与 just template-check 保持一致
       - name: verify template modules consistency
-        run: |
-          set -euo pipefail
-          tmp=$(mktemp)
-          work=$(mktemp -d)
-          trap 'rm -rf "$tmp" "$work"' EXIT
-          sing-box merge "$tmp" -C config/sing-box/modules
-          diff -u config/sing-box/template.json "$tmp"
-          for variant in ios router; do
-            SING_BOX=sing-box scripts/merge-variant-template.sh "$variant" "$tmp"
-            diff -u "config/sing-box/template-$variant.json" "$tmp"
-            sing-box check -D "$work" -c "$PWD/config/sing-box/template-$variant.json"
-          done
+        env:
+          SING_BOX: sing-box
+        run: bun scripts/modules-build.ts --check
         working-directory: .
 
       # 结构测试：本地 just check-template 只跑这几个 .test.ts，CI 同语义。
       # kernel-routing.test.js 需要真实 tun0 设备，只能在 Lima 跑。
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
       - name: run template structural tests
         run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
         working-directory: .

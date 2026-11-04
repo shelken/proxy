@@ -2,7 +2,7 @@
 
 **日期**：2026-10-17
 
-iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并存。iOS 底模在同一批 `modules/` 之上，通过 `modules-ios/` 同名替换与新增模块，生成 `template-ios.json`，由 sing-box 内嵌的 `tailscale` endpoint 同时承载代理与内网访问。Mac 的 `template.json` 不变
+iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并存。iOS 底模与 Mac 共用 `fragments/base/` 的片段，另在 `config/sing-box/modules.yaml` 里有一份 `roles.ios`：`fragments/ios/inbounds.json` 顶替共享的入站片段，并追加 Tailscale 的 DNS、endpoint、入站拒绝与路由四个片段，合并出 `template-ios.json`，由 sing-box 内嵌的 `tailscale` endpoint 同时承载代理与内网访问。Mac 的 `template.json` 不变（布局在 2026-11-05 收敛为一张表加一层片段，见 `docs/adr/0017`）
 
 ## Context
 
@@ -14,8 +14,8 @@ iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并
 
 ## Decision
 
-1. 新增 `config/sing-box/modules-ios/`，同名文件替换 `modules/` 中的对应文件，其余文件新增，合并后产出 `template-ios.json`，经现有 `template_url` 机制使用
-2. iOS 的 `00-inbounds.json` 去掉三个私网排除，保留 `fe80::/10`，并与 Mac 一致排除 `224.0.0.0/4` 与 `255.255.255.255/32`。未被 Tailscale 认领的私网流量进入 sing-box 后仍由 `ip_is_private` 直连；组播与广播 Tailscale 不转发（[tailscale#11134](https://github.com/tailscale/tailscale/issues/11134)），收进 TUN 只会妨碍本地局域网发现（2026-10-23 补充）
+1. 新增 iOS 变体片段（现为 `config/sing-box/fragments/ios/` 下 5 个）：`roles.ios` 用 `ios/inbounds.json` 顶替共享的入站片段，另四个片段追加在各自的位置上，合并后产出 `template-ios.json`，经现有 `template_url` 机制使用
+2. iOS 的入站片段（`fragments/ios/inbounds.json`）去掉三个私网排除，保留 `fe80::/10`，并与 Mac 一致排除 `224.0.0.0/4` 与 `255.255.255.255/32`。未被 Tailscale 认领的私网流量进入 sing-box 后仍由 `ip_is_private` 直连；组播与广播 Tailscale 不转发（[tailscale#11134](https://github.com/tailscale/tailscale/issues/11134)），收进 TUN 只会妨碍本地局域网发现（2026-10-23 补充）
 3. 新增 `tailscale` endpoint `ts-ep`（`accept_routes`，不开 `system_interface`，不设 exit node）与 `dns-ts`。`accept_default_resolvers` 为 false，普通互联网 DNS 分流不变
 4. MagicDNS 规则（`preferred_by: dns-ts`）排在 FakeIP 之前；路由规则 `preferred_by: ts-ep` 排在 `ip_is_private → direct` 之前
 5. `inbound: ts-ep` 的 `reject` 在路由层排在全部规则之首，包括 `sniff` 与 DNS 劫持；在 DNS 层排在 `dns.rules` 之首，早于 MagicDNS 与静态应答。手机只作为 Tailnet 客户端，正常查询来自 `tun-in`，不受影响
@@ -24,8 +24,8 @@ iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并
 
 ## Consequences
 
-- iOS 与 Mac 底模同源，`modules-ios/` 只列差异。两份产物都由 CI 对 `modules` 重新合并并比对
+- iOS 与 Mac 底模同源，`fragments/ios/` 只列差异（5 个片段，`roles.ios` 与 `roles.mac` 的差异就是它们）。两份产物都由 CI 用 `modules.yaml` 重新合并并逐字节比对
 - iOS 用户的家庭网段若与 Tailscale 发布的子网相同，该目标会被送入 Tailnet。当前目标网段为 `192.168.69.x`，未见冲突
 - 入站拒绝只约束进入 sing-box 路由与 DNS 的流量。Tailscale 自身的 PeerAPI（Taildrop 等）由 Tailscale 授权控制，不经过 `route.rules`，要禁止收文件需检查 Tailnet 的文件共享策略。Tailscale SSH 默认未启用
 - 真实 Tailnet 登录、ACL、子网路由批准与锁屏、切网表现无法在沙箱验证，由设备验收
-- 回滚：删除 `modules-ios/` 与 `template-ios.json`，客户端移除 iOS 的 `template_url`
+- 回滚：从 `roles` 里去掉 `ios`、删除 `fragments/ios/` 与 `template-ios.json`，客户端移除 iOS 的 `template_url`；旧布局的恢复方式见 `docs/adr/0017`

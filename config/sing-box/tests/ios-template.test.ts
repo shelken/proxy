@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
 import {
@@ -9,6 +8,15 @@ import {
   assertMyProxyQuicBeforeExempt,
   assertRejectBeforeClashMode,
 } from "./lib/contracts.ts";
+import {
+  MAC_ORDER,
+  applyPatch,
+  assertFragmentDir,
+  assertOrder,
+  assertRoleOrder,
+  roleKeys,
+  type VariantPatch,
+} from "./lib/manifest.ts";
 
 const load = async (name: string) =>
   JSON.parse(await Bun.file(resolve(import.meta.dir, "..", name)).text());
@@ -46,16 +54,30 @@ export const assertMagicDns = (dns: Record<string, any>) => {
   expect(server?.endpoint).toBe("ts-ep");
 };
 
-export const IOS_MODULES_WHITELIST = [
-  "00-inbounds.json",
-  "09-tailscale-dns.json",
-  "15-tailscale-endpoint.json",
-  "29-tailscale-inbound-reject.json",
-  "30-tailscale-route.json",
-];
-
-export const assertIosModulesWhitelist = (files: string[]) => {
-  expect([...files].sort()).toEqual([...IOS_MODULES_WHITELIST].sort());
+// iOS 的差异面：inbounds 换成 iOS 版，另加 4 个 Tailscale 片段（全在 fragments/ios 下）。
+// 插入锚点就是顺序约束：入站拒绝早于 sniff 与 DNS 劫持，Tailscale 路由晚于 sniff，
+// endpoint 落在 dns 段之后、路由全局属性之前——与主线产物的数组顺序逐条对应。
+export const IOS_DIFF: VariantPatch = {
+  fragments: [
+    "ios/inbounds.json",
+    "ios/tailscale-dns.json",
+    "ios/tailscale-endpoint.json",
+    "ios/tailscale-inbound-reject.json",
+    "ios/tailscale-route.json",
+  ],
+  replace: [{ from: "fragment:base/inbounds.json", to: "fragment:ios/inbounds.json" }],
+  insertAfter: [
+    { anchor: "fragment:ios/inbounds.json", items: ["fragment:ios/tailscale-dns.json"] },
+    { anchor: "catalog:dns", items: ["fragment:ios/tailscale-endpoint.json"] },
+    {
+      anchor: "fragment:base/route-globals.json",
+      items: ["fragment:ios/tailscale-inbound-reject.json"],
+    },
+    {
+      anchor: "fragment:base/sniff-and-dns-hijack.json",
+      items: ["fragment:ios/tailscale-route.json"],
+    },
+  ],
 };
 
 // 内核 merge 会省略取默认值的布尔字段（false），断言按默认值对待。
@@ -114,8 +136,8 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
   });
 });
 
-// 共享模块的顺序约束在 iOS 侧同样成立（CODING_STANDARDS：拦截 > 模式开关 > 服务分流，
-// MyDirect/MyProxy 排在所有服务规则之前）。modules/ 更新只跑 Mac 测试时，
+// 共享片段的顺序约束在 iOS 侧同样成立（CODING_STANDARDS：拦截 > 模式开关 > 服务分流，
+// MyDirect/MyProxy 排在所有服务规则之前）。模块表与片段更新只跑 Mac 测试时，
 // 违反顺序的改动对 iOS 不可见，这里补上同口径断言。
 describe("共享顺序契约（iOS 侧）", () => {
   test("全部 reject 规则排在首个 clash_mode 之前（ADR-0008）", () => {
@@ -135,11 +157,15 @@ describe("共享顺序契约（iOS 侧）", () => {
   });
 });
 
-// iOS 差异面必须显式登记：modules-ios/ 出现白名单外的文件即失败，
-// 防止无意扩大共享底模的平台差异。
-describe("modules-ios 差异面白名单", () => {
-  test("modules-ios/ 文件集合与登记一致", () => {
-    assertIosModulesWhitelist(readdirSync(resolve(import.meta.dir, "../modules-ios")));
+// iOS 差异面必须显式登记：roles.ios 与基准顺序的差异只能是注册的这一组，
+// fragments/ios 出现注册外的片段即失败，防止无意扩大共享底模的平台差异。
+describe("modules.yaml 角色注册（ADR-0017）", () => {
+  test("roles.ios = 基准顺序 + 注册的 Tailscale 差异，且顺序逐步一致", () => {
+    assertRoleOrder("ios", applyPatch(MAC_ORDER, IOS_DIFF));
+  });
+
+  test("fragments/ios 的文件集合与登记的差异面一致", () => {
+    assertFragmentDir("ios", IOS_DIFF.fragments);
   });
 });
 
@@ -225,8 +251,19 @@ describe("变异验证：断言能拦住坏情况", () => {
     expect(() => assertMagicDns(bad.dns)).toThrow();
   });
 
-  test("modules-ios/ 出现未登记文件 → assertIosModulesWhitelist 必须失败", () => {
-    const actual = readdirSync(resolve(import.meta.dir, "../modules-ios"));
-    expect(() => assertIosModulesWhitelist([...actual, "99-unknown.json"])).toThrow();
+  test("fragments/ios 出现未登记片段 → assertFragmentDir 必须失败", () => {
+    expect(() => assertFragmentDir("ios", [...IOS_DIFF.fragments, "ios/99-unknown.json"])).toThrow();
+  });
+
+  test("roles.ios 把入站拒绝挪到 sniff 之后 → assertRoleOrder 必须失败", () => {
+    const moved = roleKeys("ios").filter(
+      (key) => key !== "fragment:ios/tailscale-inbound-reject.json",
+    );
+    moved.splice(
+      moved.indexOf("fragment:base/sniff-and-dns-hijack.json") + 1,
+      0,
+      "fragment:ios/tailscale-inbound-reject.json",
+    );
+    expect(() => assertOrder(moved, applyPatch(MAC_ORDER, IOS_DIFF))).toThrow();
   });
 });

@@ -1,0 +1,15 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "MyReject",
+          "Privacy"
+        ],
+        "action": "reject"
+      }
+    ]
+  }
+}

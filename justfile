@@ -78,16 +78,14 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 # --- 生产底模装配与校验 ---
 # 单入口：一次重建 mac、iOS 与路由器三份底模。
+# 顺序与能力开关都写在 config/sing-box/modules.yaml：roles 列表的顺序就是合并顺序，
+# 条目不在列表里就等于没有这个能力；片段内容在 config/sing-box/fragments/（ADR-0017）。
 # 开发时只跑这一条命令，无需记住各个产物各自怎么生成；
 # 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
     #!/usr/bin/env bash
     set -euo pipefail
-    # mac：直接从 modules 合并（文件名前缀决定数组顺序）
-    {{sing_box_cmd}} merge config/sing-box/template.json -C config/sing-box/modules
-    # iOS / 路由器：modules 为底，modules-<变体> 同名替换并新增（ADR-0010、ADR-0012）
-    scripts/merge-variant-template.sh ios config/sing-box/template-ios.json
-    scripts/merge-variant-template.sh router config/sing-box/template-router.json
+    bun scripts/modules-build.ts
     # 报告哪份产物变了，方便确认改动范围没超出预期；对比 HEAD，已暂存的改动也算变化
     for t in template.json template-ios.json template-router.json; do
         if git diff --quiet HEAD -- "config/sing-box/$t" 2>/dev/null && git ls-files --error-unmatch "config/sing-box/$t" >/dev/null 2>&1; then
@@ -97,18 +95,9 @@ template-build:
         fi
     done
 
-# 校验 template.json 与 modules 一致：用内核重跑一次逐字节比对
+# 校验三份底模与 modules.yaml + fragments/ 一致：重算一遍逐字节比对（CI 同口径）
 template-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tmp="$(mktemp "${TMPDIR:-/tmp}/sing-box-template.XXXXXX")"
-    trap 'rm -f "$tmp"' EXIT
-    {{sing_box_cmd}} merge "$tmp" -C config/sing-box/modules >/dev/null
-    if ! diff -u config/sing-box/template.json "$tmp"; then
-        echo "❌ config/sing-box/template.json 与 modules/ 不一致，请运行 just template-build 更新底模"
-        exit 1
-    fi
-    echo "✅ config/sing-box/template.json 与 modules/ 检查一致"
+    bun scripts/modules-build.ts --check
 
 # 变体底模由 just template-build 一并生成，不单独提供 build 入口
 
@@ -117,49 +106,22 @@ template-check:
 kernel-check-vm variant: vm-start
     {{lima_shell}} bash -lc 'W=$(mktemp -d); trap "rm -rf $W" EXIT; /opt/proxy-test/bin/sing-box check -D "$W" -c {{repo_in_guest}}/config/sing-box/template-{{variant}}.json'
 
-# 校验变体底模与 modules + modules-<变体> 一致，并通过内核 check
-template-variant-check variant:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-{{variant}}-check.XXXXXX")"
-    trap 'rm -rf "$work"' EXIT
-    scripts/merge-variant-template.sh {{variant}} "$work/merged.json" >/dev/null
-    if ! diff -u config/sing-box/template-{{variant}}.json "$work/merged.json"; then
-        echo "❌ template-{{variant}}.json 与 modules + modules-{{variant}} 不一致，请运行 just template-build"
-        exit 1
-    fi
-    if ! out=$({{sing_box_cmd}} check -D "$work" -c "$PWD/config/sing-box/template-{{variant}}.json" 2>&1); then
-        # 底模含 auto_redirect 等仅 Linux 支持的项，macOS 宿主内核 check 必然报错：
-        # 转沙箱 VM 用同版本内核对同一份底模校验（CI 在 ubuntu 上跑的就是这条 check）
-        if [ "$(uname -s)" = "Linux" ] || ! printf '%s\n' "$out" | grep -q "only supported on Linux"; then
-            printf '%s\n' "$out"
-            exit 1
-        fi
-        echo "⚠️  宿主内核不支持该底模的 Linux 专属项，转沙箱 VM 校验"
-        just kernel-check-vm {{variant}}
-    fi
-    echo "✅ template-{{variant}}.json 检查一致"
-
-template-ios-check: (template-variant-check "ios")
-
-template-router-check: (template-variant-check "router")
-
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
 # 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
-# 变体查合并产物：modules-<变体>/ 单独 check 缺共享模块会报错，产物与源码的一致性由 template-variant-check 保证。
+# 三份产物都是完整配置，直接 check 产物；产物与源码（modules.yaml + fragments/）的一致性由 just template-check 保证。
 check-deprecated:
     #!/usr/bin/env bash
     set -uo pipefail
     # -D 把内核工作目录放到临时目录，Tailscale 状态目录等相对路径不落进仓库
     work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-deprecated.XXXXXX")"
     trap 'rm -rf "$work"' EXIT
-    for target in "-C $PWD/config/sing-box/modules" "-c $PWD/config/sing-box/template-ios.json" "-c $PWD/config/sing-box/template-router.json"; do
+    for target in "-c $PWD/config/sing-box/template.json" "-c $PWD/config/sing-box/template-ios.json" "-c $PWD/config/sing-box/template-router.json"; do
         out=$({{sing_box_cmd}} check -D "$work" $target 2>&1)
         rc=$?
-        # 同 template-variant-check：macOS 宿主校验不了 Linux 专属项，转沙箱 VM 跑同一目标
+        # macOS 宿主校验不了底模里的 Linux 专属项，转沙箱 VM 用同版本内核对同一份底模校验
         if [ "$rc" -ne 0 ] && [ "$(uname -s)" != "Linux" ] && printf '%s\n' "$out" | grep -q "only supported on Linux"; then
             variant=$(printf '%s\n' "${target#* }" | sed -n 's|.*/template-\([a-z]*\)\.json$|\1|p')
             if [ -n "$variant" ]; then
@@ -201,11 +163,9 @@ check-rust-fast:
 check-rust-test:
     cargo test --workspace --locked
 
-# sing-box 底模：modules 与 template 一致 + 结构 check + 废弃写法 + 模板测试
+# sing-box 底模：modules.yaml 与三份 template 一致 + 结构 check + 废弃写法 + 模板测试
 check-template:
     @just template-check
-    @just template-ios-check
-    @just template-router-check
     @just check-singbox
     @just check-deprecated
     SING_BOX=$(mise which sing-box 2>/dev/null || which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
