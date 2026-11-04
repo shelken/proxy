@@ -9,20 +9,20 @@
 | tun               | `auto_route`       | `auto_route` + `auto_redirect`（nftables 接管转发流量，白名单的 `bypass` 依赖它） |
 | tun 的 `dns_mode` | 默认 `hijack`      | `native`，53 端口改由路由规则接管，见「DNS 归属」                                 |
 | DNS 入口          | 只靠 tun 劫持      | 另有 `dns-in`，监听 53 端口，供把 DNS 指向旁路由的设备使用                        |
-| 本网解析器        | `dns-local-system` | `dns-lan`，地址由 overlay 提供                                                    |
-| clash API         | `127.0.0.1:9090`   | `0.0.0.0:9090`，面板可从局域网连接；`secret` 由 overlay 设置                      |
+| 本网解析器        | `dns-lan`（`type: local`，共享底模 `modules/10-dns-lan-resolver.json`） | tag 同为 `dns-lan`，但路由变体用同名空集弃用底模的定义，地址由 overlay 提供         |
+| clash API         | `127.0.0.1:9090`   | 监听地址由 overlay 的 `external_controller` 覆盖成 `0.0.0.0:9090`，面板可从局域网连接；`secret` 由 overlay 设置 |
 | `mixed-in`        | `127.0.0.1:2080`   | 不变                                                                              |
 
 ## 前置
 
 - Linux，nftables 可用，sing-box 1.14 及以上（`source_ip_cidr` 与 `action: bypass` 均自 1.14 起可用）
-- 旁路由自身的系统 DNS 指向主路由。底模不再有 `dns-local-system`（系统解析器），本网名字直接交给 overlay 的 `dns-lan`；`dns-lan` 填主路由地址，指回本机会绕成环
+- 旁路由自身的系统 DNS 指向主路由。本网解析器 tag 三份底模统一是 `dns-lan`：mac / iOS 由共享底模的 `type: local` 定义，路由变体把它弃用（`type: local` 对 `*.local.` 固定走内置 mDNS，旁路由上没有应答者），地址改由 overlay 的 `dns-lan` 提供；`dns-lan` 填主路由地址，指回本机会绕成环
 - 内核开启转发，单网口时关闭 ICMP 重定向（否则内核会让客户端改走主路由，绕过旁路由）
 - 要走代理的设备：网关与 DNS 都指向旁路由。DNS 指向主路由时查询在同网段直达，fakeip 用不上
 
 ## 配置
 
-路由器单独一份 yaml，`template_url` 指向路由器底模。白名单、`dns-lan` 地址、部署域名与内网入口、放行解析器清单、clash API 的 secret 都写在 overlay 里，随载荷加密，不进任何仓库
+路由器单独一份 yaml，`template_url` 指向路由器底模。白名单、`dns-lan` 地址、放行解析器清单、clash API 的监听地址与 secret 都写在 overlay 里，随载荷加密，不进任何仓库
 
 ```yaml
 subs:
@@ -30,18 +30,16 @@ subs:
 template_url: https://raw.githubusercontent.com/shelken/proxy/main/config/sing-box/template-router.json
 overlay: |
   {
-    "experimental": { "clash_api": { "secret": "<随机串>" } },
+    "experimental": {
+      "clash_api": {
+        "external_controller": "0.0.0.0:9090",
+        "secret": "<随机串>"
+      }
+    },
     "dns": {
       "servers": [{ "type": "udp", "tag": "dns-lan", "server": "<主路由地址>" }],
       "rules": [
-        { "source_ip_cidr": ["<IP1>/32", "<IP2>/32"], "invert": true, "server": "dns-lan" },
-        {
-          "domain_suffix": [".<内网域>"],
-          "query_type": ["A"],
-          "action": "predefined",
-          "answer": ["*. IN A <内网入口>"]
-        },
-        { "domain_suffix": ["<内网域>"], "action": "predefined" }
+        { "source_ip_cidr": ["<IP1>/32", "<IP2>/32"], "invert": true, "server": "dns-lan" }
       ]
     },
     "route": {
@@ -82,13 +80,13 @@ overlay: |
 
 | overlay 内容                              | 作用                                                                                                                                                  |
 | :---------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dns.servers` 的 `dns-lan`                 | 必填。底模的 `Lan-dns`、`local` / `lan` / `home.arpa`、`MyDirect-dns`、`clash_mode: direct`、`PTR` 五处 DNS 规则与 `route.default_domain_resolver` 都指向这个 tag。底模因此单份不可 check：缺了它，终态装配后内核直接 FATAL（`initialize outbound[0]: default domain resolver not found`），设备上表现为 sing-box 起不来 |
-| `dns.rules` 的两条部署域名 predefined 规则 | 部署域名与内网入口的固定应答：一条给 A 记录一个内网地址；一条让该域下的其余查询由本机给出空应答，不发到公网。实测不带 `answer` 时 `rcode` 默认 `NOERROR`（`ANSWER: 0`，即 NODATA），不是 NXDOMAIN |
+| `dns.servers` 的 `dns-lan`                 | 必填。路由变体用 `modules-router/10-dns-lan-resolver.json` 的空集弃用了共享底模的 `type: local` 定义，地址只能由这里给。底模的 `Lan-dns`、`local` / `lan` / `home.arpa`、`MyDirect-dns`、`clash_mode: direct`、`PTR` 五处 DNS 规则与 `route.default_domain_resolver` 都指向这个 tag。底模因此单份不可 check：缺了它，终态装配后内核直接 FATAL（`initialize outbound[0]: default domain resolver not found`），设备上表现为 sing-box 起不来 |
 | `dns.rules` 的 `invert` 规则               | 名单外设备若也把 DNS 指向旁路由，返回真实 IP 而不是 fakeip                                                                                            |
 | `route.rules` 的放行解析器规则             | 发往清单内解析器的查询不进本机 DNS 模块，直接由内核放行                                                                                                |
 | `route.rules` 的 53 劫持规则               | `inbound: tun-in` + `port: 53` 的其余查询按底模的方式劫持到本机 DNS，与 `dns_mode: hijack` 时期的行为一致                                             |
 | 路由规则 `bypass`                          | 名单外设备的连接在 `auto_redirect` 的预匹配阶段被旁路，由内核直接转发，不进 sing-box；不适用内核旁路的连接按 `outbound: direct` 直连                 |
 | `inbound: tun-in`                          | 必填，且只能放在外层 AND 里：`invert` 反转整条规则的所有条件，写在同层会连 `inbound: tun-in` 一起反转，`dns-in` 的查询会被 direct 送回本机 53 端口    |
+| `clash_api.external_controller`            | 必填。底模与 Mac 一致只监听 `127.0.0.1:9090`，给局域网监听的地址由这里覆盖；漏了面板连不上                                                             |
 | `clash_api.secret`                         | 必填。clash API 对局域网监听，没有 secret 时任何设备都能切换你的节点                                                                                   |
 
 overlay 的规则排在底模所有规则之前（只落后于服务端生成的反回环规则），所以上面几条最先生效
@@ -135,12 +133,14 @@ sbtools encode -s https://<订阅服务> -c ~/.config/sing-box/router.yaml
 
 ## DNS 归属
 
-底模只留与部署无关的部分，本网解析器地址、部署域名与内网入口、放行清单三项归设备 overlay。两个根因：
+底模只留与部署无关的部分，按「可独立变化的事实」拆文件：部署域的静态应答在 `modules/10-dns-deployment.json`、本网解析器定义在 `modules/10-dns-lan-resolver.json`，路由变体用同名的空集文件弃用它们，地址与放行清单则由设备 overlay 提供。两个根因：
 
 - 底模里的 `local` / `lan` / `home.arpa` 指向 `dns-lan` 而不是系统解析器。sing-box 的 Local 服务器对 `*.local.` 与链路本地反查域固定走内置 mDNS（<https://sing-box.sagernet.org/configuration/dns/server/mdns/>），mDNS 没有否定应答，没有应答者时只有超时 —— 客户端连 SERVFAIL 都收不到。旁路由上没有 avahi、nsswitch 也没有 mdns 模块，这个语义没有意义
 - tun 的 `dns_mode` 是 `native`。`hijack` 配 `auto_redirect` 时，内核在**规则预匹配之前**无差别把 53 端口 DNAT 到 tun 的 DNS 地址（`address` 之后的那个地址），规则层的 `bypass` 看不到这些包，设备指定的公网解析器因此被本机改写
 
 `local` / `lan` / `home.arpa` 是 RFC 保留后缀，与部署无关，留在底模
+
+部署域 `ooooo.space` 在路由侧不需要底模那份静态通配应答：它已登记在 `config/rules/custom/MyDirect.yaml`（编译成 `DOMAIN-SUFFIX,ooooo.space`，覆盖全部子域），随底模的 `MyDirect-dns → dns-lan` 交给主路由的 dnsmasq 应答，答案与固定租约天然一致。要改回固定应答，把 `modules-router/10-dns-deployment.json` 的内容换成 `modules/10-dns-deployment.json` 里的两条规则即可（`route.rules` 不动）
 
 ## 验证
 

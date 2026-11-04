@@ -103,7 +103,7 @@ async function withDNS(run) {
       log: { level: "debug" }, dns,
       inbounds: [{ type: "direct", tag: "dns-test", listen: "127.0.0.1", listen_port: 15353 }],
       outbounds: [{ type: "direct", tag: "direct" }, ...nodes, group],
-      route: { default_domain_resolver: "dns-local-system", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })) },
+      route: { default_domain_resolver: "dns-lan", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })) },
       experimental: { cache_file: { ...template.experimental.cache_file, path: "cache.db" }, clash_api: { external_controller: "127.0.0.1:19090" } },
     };
     const startCore = async () => {
@@ -211,11 +211,11 @@ test("LAN 域名 TTL 过期后返回上游新地址而非过期缓存", () => wi
     };
     lan.on("message", (packet, peer) => lan.send(aRecord(packet, address), peer.port, peer.address));
     await new Promise(resolve => lan.bind(15357, "127.0.0.1", resolve));
-    // dns-local-system(type local) 跟随 VM 系统解析器，答案不可控；
+    // dns-lan(type local) 跟随 VM 系统解析器，答案不可控；
     // 换成可控 UDP 上游后，LAN 规则本身的路由行为不变
     f.config.dns.servers = f.config.dns.servers.map(server =>
-      server.tag === "dns-local-system"
-        ? { type: "udp", tag: "dns-local-system", server: "127.0.0.1", server_port: 15357 }
+      server.tag === "dns-lan"
+        ? { type: "udp", tag: "dns-lan", server: "127.0.0.1", server_port: 15357 }
         : server);
     const core = await f.startCore();
     const initial = await query("nas.lan", 1);

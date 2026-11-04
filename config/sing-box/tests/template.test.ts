@@ -119,17 +119,17 @@ describe("template.json structural verification", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
     expect(lanRule).toBeDefined();
-    expect(lanRule.server).toBe("dns-local-system");
+    expect(lanRule.server).toBe("dns-lan");
 
     const suffixRule = rules.find((r) => r.domain_suffix?.includes("local"));
     expect(suffixRule).toBeDefined();
     expect(suffixRule.domain_suffix).toContain("lan");
     expect(suffixRule.domain_suffix).toContain("home.arpa");
-    expect(suffixRule.server).toBe("dns-local-system");
+    expect(suffixRule.server).toBe("dns-lan");
 
     const ptrRule = rules.find((r) => r.query_type?.includes("PTR"));
     expect(ptrRule).toBeDefined();
-    expect(ptrRule.server).toBe("dns-local-system");
+    expect(ptrRule.server).toBe("dns-lan");
   });
 
   test("个人域规则集走系统 DNS 且排在 FakeIP 之前", () => {
@@ -137,9 +137,9 @@ describe("template.json structural verification", () => {
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
     expect(zoneRule).toBeDefined();
     const zoneIndex = rules.indexOf(zoneRule);
-    // 必须是 dns-local-system：局域网内由路由器应答真实内网 IP，
+    // 必须是 dns-lan：局域网内由路由器应答真实内网 IP，
     // 拿到真实 IP 后出站直连无需再解析，绕开 fakeip → 拨号解析 NXDOMAIN
-    expect(zoneRule.server).toBe("dns-local-system");
+    expect(zoneRule.server).toBe("dns-lan");
     expect(zoneRule.disable_optimistic_cache).toBe(true);
 
     // 个人域规则必须排在 clash_mode: direct 之前，确保在 direct 模式下也能禁用乐观缓存
@@ -183,10 +183,10 @@ describe("template.json structural verification", () => {
 
   test("出站拨号解析跟随系统 DNS，而非固定公网解析器", () => {
     // 拨号解析（direct 出站的 lookup）不走 dns.rules，只认 default_domain_resolver。
-    // 实测：dns.rules 里给 test.internal 配了 dns-local-system 也拦不住拨号，
-    // 内核直接 lookup → NXDOMAIN。必须在这里指到 dns-local-system（type:local，
+    // 实测：dns.rules 里给 test.internal 配了 dns-lan 也拦不住拨号，
+    // 内核直接 lookup → NXDOMAIN。必须在这里指到 dns-lan（type:local，
     // 跟随 DHCP）：局域网内打路由器拿内网 IP，在外面打运营商 DNS。
-    expect(resolverServer(template.route?.default_domain_resolver)).toBe("dns-local-system");
+    expect(resolverServer(template.route?.default_domain_resolver)).toBe("dns-lan");
     // 指向的 server 必须在 dns.servers 里真实存在，否则内核启动 FATAL
     const tags = (template.dns?.servers ?? []).map((s) => s.tag);
     expect(tags).toContain(resolverServer(template.route.default_domain_resolver));

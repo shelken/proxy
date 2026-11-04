@@ -40,10 +40,9 @@ export const assertGatewayTun = (inbounds: Array<Record<string, any>>) => {
 
 export const ROUTER_MODULES_WHITELIST = [
   "00-inbounds.json",
-  "10-dns.json",
-  "20-route-base.json",
+  "10-dns-deployment.json",
+  "10-dns-lan-resolver.json",
   "29-dns-in.json",
-  "90-experimental.json",
 ];
 
 // sing-box 的 invert 反转的是整条规则的所有条件（v1.14.3 route/rule/rule_abstract.go 的 Match()），
@@ -155,14 +154,6 @@ describe("template-router.json 结构契约（ADR-0012）", () => {
     assertDnsInHijackFirst(rules);
   });
 
-  test("clash API 不只监听回环：homelab 的面板要能拉到连接", () => {
-    const controller: string =
-      router.experimental.clash_api.external_controller;
-    expect(
-      controller.startsWith("127.") || controller.startsWith("[::1]"),
-    ).toBe(false);
-  });
-
   test("mixed-in 保持回环，不对局域网开无认证代理", () => {
     const mixed = router.inbounds.find((i: any) => i.tag === "mixed-in");
     expect(mixed.listen).toBe("127.0.0.1");
@@ -199,10 +190,10 @@ describe("白名单 overlay 示例（05-router.md）", () => {
   });
 });
 
-// ADR-0012 的补充：本网解析器地址、部署域名与内网入口、放行（不被改写）的解析器清单
-// 三项归设备 overlay，底模只留与部署无关的部分。#147 是「以 local 结尾的域名落进
-// type: local 的 mDNS 分支、10 秒无应答」，#148 是「auto_redirect 的 53 端口内核劫持
-// 在预匹配之前无差别改写设备指定的公网解析器」
+// ADR-0012 的 DNS 归属：本网解析器定义、部署域名与内网入口的静态应答归共享底模的能力
+// 文件，路由变体用同名空集弃用，地址与放行清单归设备 overlay。#147 是「以 local 结尾的
+// 域名落进 type: local 的 mDNS 分支、10 秒无应答」，#148 是「auto_redirect 的 53 端口
+// 内核劫持在预匹配之前无差别改写设备指定的公网解析器」
 describe("DNS 归属契约：底模与 overlay 的分界", () => {
   test("底模不依赖宿主默认语义：没有 type: local", () => {
     expect(router.dns.servers.some((s: any) => s.type === "local")).toBe(false);
@@ -261,6 +252,15 @@ describe("overlay 夹具：底模 + 最小 overlay 装成可运行终态", () =>
 
   test("夹具补上底模引用不到的 dns-lan", () => {
     expect(merged.dns.servers.map((s: any) => s.tag)).toContain("dns-lan");
+  });
+
+  // 底模的 clash API 与 Mac 一致只监听回环，对局域网监听由设备 overlay 覆盖。
+  // homelab 的面板要能拉到旁路由的连接，地址必须真的落在终态里
+  test("终态 clash API 不只监听回环：地址由 overlay 覆盖", () => {
+    const controller: string = merged.experimental.clash_api.external_controller;
+    expect(
+      controller.startsWith("127.") || controller.startsWith("[::1]"),
+    ).toBe(false);
   });
 
   // 终态引用的 DNS 服务器都有定义。内核只查 route.default_domain_resolver：
