@@ -23,7 +23,7 @@ sing-box 配置的公共骨架，包含双入站、内网穿透、分流策略�
 同一份模块表的 `roles.ios` 用 `fragments/ios/` 顶替共享入站片段、并追加 Tailscale 片段后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
 
 **路由器底模**
-同一份模块表的 `roles.router` 用 `fragments/router/` 顶替共享的入站与 experimental 片段、并追加 DNS 入口片段后合并出的底模，tun 开启 `auto_redirect` 作网关、另有 53 端口的 DNS 入口、clash API 对局域网监听；设备白名单不在底模里，由设备 overlay 的 `bypass` 规则决定
+同一份模块表的 `roles.router` 用 `fragments/router/` 顶替共享的入站与 experimental 片段、并追加 DNS 入口片段后合并出的底模：tun 开启 `auto_redirect` 作网关、`dns_mode` 为 `native`（53 端口由路由规则接管而非内核）、另有 53 端口的 DNS 入口、clash API 对局域网监听。本网解析器的 tag 与 mac / iOS 统一为 `dns-lan`，但路由角色既不定义本网解析器也不做部署域的静态应答；`dns-lan` 的地址、放行解析器清单、设备白名单与 clash API 的 secret 都由设备 overlay 提供，见 `docs/adr/0014`
 
 **DNS 出口**
 访问真实 DNS 上游所使用的网络路径，可独立于应用的业务出口选择

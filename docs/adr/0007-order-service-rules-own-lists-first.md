@@ -26,5 +26,5 @@
 - 拆分是纯文件重排：`template.json` 的规则集、出站组、规则集合与拆分前完全一致，只有数组顺序变化
 - 排序变得可推理：看前缀就知道「自有 → 外部 → 默认直连 → 兜底」的顺序，新增服务只需挑号段
 - 出站组在客户端的展示顺序随之变化：自有服务组在前，`microsoft` / `paypal` / `apple` 三个默认直连组移到最后
-- 默认直连的 `microsoft` / `paypal` / `apple` 纳入解析排除清单后，它们的直连流量按本地解析（`default_domain_resolver: dns-local-system`）而不是代理侧的 Cloudflare；被切到代理时改由节点远端解析，可能走 v6（`#99` 的场景在这三个组上按需回归，这是「直连就近」与「代理必 v4」不可兼得的那条线）
+- 默认直连的 `microsoft` / `paypal` / `apple` 纳入解析排除清单后，它们的直连流量按本地解析（`default_domain_resolver: dns-local-system`，该 tag 现名 `dns-lan`）而不是代理侧的 Cloudflare；被切到代理时改由节点远端解析，可能走 v6（`#99` 的场景在这三个组上按需回归，这是「直连就近」与「代理必 v4」不可兼得的那条线）
 - 回滚：恢复旧文件名前缀与旧的 `30-route-base-rules.json`，再 `just template-build`

@@ -20,6 +20,8 @@
 4. `fragments/router/experimental.json`：clash API 监听 `0.0.0.0:9090`；`secret` 不进底模，由设备 overlay 覆盖（标量，overlay 先者胜）
 5. 白名单写在设备 overlay：路由规则 `inbound: tun-in` + `source_mac_address` + `invert` + `action: bypass` + `outbound: direct`；DNS 规则 `source_mac_address` + `invert` → `dns-local-system`。写法见 `docs/user-guide/05-router.md`
 
+（第 5 条的白名单口径，以及本决策未单列、当时沿用共享底模 `hijack` 的 tun `dns_mode`，按日期被 [0014](0014-router-dns-ownership-on-device.md) 取代：tun 改 `dns_mode: native`，白名单改按源 IP 匹配，本网解析器的 tag 改名 `dns-lan`。原文保留）
+
 ## Consequences
 
 - 名单外设备的连接在预匹配阶段被 `bypass`，由内核直接转发给主路由，不进 sing-box；不适用内核旁路的连接按 `outbound: direct` 经 sing-box 直连。哪些协议能走到内核旁路未在真机验证，由设备验收
