@@ -31,7 +31,7 @@
 ## 补充：本网解析器、部署域名与放行清单也归 overlay
 
 **日期**：2026-11-04（#147、#148）
-（本节描述的机制已被 [0013](0013-capability-files-instead-of-variant-copies.md) 取代，原文保留作为当时的记录）
+（本节描述的机制已被 [0013](0013-capability-files-instead-of-variant-copies.md) 取代，部署域静态应答那一项另见 [0014](0014-deployment-domain-dns-on-main-router.md)，原文保留作为当时的记录）
 
 `00-inbounds.json` 的 tun 起初用默认的 `dns_mode: hijack`，`10-dns.json` 起初把本网名字交给 `dns-local-system`（`type: local`）并把部署域名与内网入口写死在底模。前者让设备显式指定的公网解析器在内核预匹配阶段被改写，后者让 RFC 保留后缀落进 mDNS 分支，两个问题都出在「哪个解析器回答哪些名字」被写死在共享底模。这次把这三项交给设备 overlay：
 
