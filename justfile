@@ -103,8 +103,9 @@ template-check:
 
 # 内核 check 的 Linux 侧执行：底模里的 auto_redirect 等项只能在 Linux 内核下校验，
 # macOS 宿主交给沙箱 VM（内核对齐 .mise.toml），CI 在 ubuntu 上直接跑同一条 check。
+# 路由角色引用不到只有 overlay 才有的 tag，先装配出终态（merge-variant-fixture.sh）再 check。
 kernel-check-vm variant: vm-start
-    {{lima_shell}} bash -lc 'W=$(mktemp -d); trap "rm -rf $W" EXIT; /opt/proxy-test/bin/sing-box check -D "$W" -c {{repo_in_guest}}/config/sing-box/template-{{variant}}.json'
+    {{lima_shell}} bash -lc 'set -eu; W=$(mktemp -d); trap "rm -rf $W" EXIT; SING_BOX=/opt/proxy-test/bin/sing-box {{repo_in_guest}}/scripts/merge-variant-fixture.sh {{variant}} "$W/final.json" >/dev/null; /opt/proxy-test/bin/sing-box check -D "$W" -c "$W/final.json"'
 
 # 校验标准生产底模：校验 template.json 包含的完整规则集引用与入站/DNS结构
 check-singbox:
@@ -112,13 +113,17 @@ check-singbox:
 
 # 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
 # 三份产物都是完整配置，直接 check 产物；产物与源码（modules.yaml + fragments/）的一致性由 just template-check 保证。
+# 路由角色引用不到只有 overlay 才有的 tag（`default_domain_resolver` 会被内核判为 not found），
+# 先装配出终态（merge-variant-fixture.sh）再 check。
 check-deprecated:
     #!/usr/bin/env bash
     set -uo pipefail
     # -D 把内核工作目录放到临时目录，Tailscale 状态目录等相对路径不落进仓库
     work="$(mktemp -d "${TMPDIR:-/tmp}/sing-box-deprecated.XXXXXX")"
     trap 'rm -rf "$work"' EXIT
-    for target in "-c $PWD/config/sing-box/template.json" "-c $PWD/config/sing-box/template-ios.json" "-c $PWD/config/sing-box/template-router.json"; do
+    SING_BOX="{{sing_box_cmd}}" scripts/merge-variant-fixture.sh ios "$work/template-ios.json" >/dev/null
+    SING_BOX="{{sing_box_cmd}}" scripts/merge-variant-fixture.sh router "$work/template-router.json" >/dev/null
+    for target in "-c $PWD/config/sing-box/template.json" "-c $work/template-ios.json" "-c $work/template-router.json"; do
         out=$({{sing_box_cmd}} check -D "$work" $target 2>&1)
         rc=$?
         # macOS 宿主校验不了底模里的 Linux 专属项，转沙箱 VM 用同版本内核对同一份底模校验

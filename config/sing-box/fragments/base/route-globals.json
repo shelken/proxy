@@ -3,7 +3,7 @@
     "auto_detect_interface": true,
     "final": "proxy",
     "default_domain_resolver": {
-      "server": "dns-local-system"
+      "server": "dns-lan"
     },
     "default_http_client": "rule-set-dl"
   }
