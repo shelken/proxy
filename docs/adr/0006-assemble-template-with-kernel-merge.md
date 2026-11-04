@@ -23,3 +23,4 @@
 - 出站组在客户端的展示顺序随文件名变化，改为与路由规则顺序一致；`direct` / `dns-auto` / `selfhost` / `proxy` 与地区探测组仍排在最前
 - 新增运行前置：`just template-build` 与 `template-check` 需要内核在 PATH 上（CI 由 mise 提供，与 `check-deprecated` 同一来源）
 - 回滚方式：恢复 `scripts/template-build.ts` 与旧的按内容切分模块，重跑一次 `just template-build`
+- 后续（2026-11-05）：模块布局收敛为 `config/sing-box/modules.yaml` 一张表加 `fragments/` 一层语义片段；「文件顺序 = 数组顺序」的语义不变，但顺序改由表的角色列表声明，装配代码回到 160 行（性质与这次删掉的装配器不同），见 `docs/adr/0013`

@@ -1,5 +1,5 @@
-// Mac 与 iOS 底模共享 modules/，两端都必须满足的顺序契约集中在这里，
-// 由两份结构测试复用，变异验证也直接打这些函数，避免两处各写一份后口径漂移。
+// Mac、iOS 与路由器底模共用同一份模块表与片段，各端都必须满足的顺序契约集中在这里，
+// 由三份结构测试复用，变异验证也直接打这些函数，避免三处各写一份后口径漂移。
 import { expect } from "bun:test";
 
 type Rule = Record<string, any>;
@@ -67,4 +67,17 @@ export const assertMyProxyDnsBeforeChinaMax = (dnsRules: Rule[]) => {
   expect(mine).toBeLessThan(china);
   expect(dnsRules[mine].server).toBe("dns-fakeip");
   expect(asArray(dnsRules[mine].query_type)).toEqual(["A", "AAAA"]);
+};
+
+// 规则引用的 rule_set tag 必须已声明。catalog 把「声明」与「引用」拆成两个条目之后，
+// 从角色列表里删掉 `{ catalog: X }` 而留下用它的规则片段，产物就长成「规则引用未声明的 tag」。
+// 内核对此只在运行期静默不命中，check 与 merge 都退出码 0（实测）。底模那份由 just rules-check 报出，
+// 两个变体产物没有别的门禁，只能在这里拦。
+export const assertAllRuleSetsDeclared = (route: {
+  rules?: Rule[];
+  rule_set?: Array<{ tag: string }>;
+}) => {
+  const declared = new Set((route.rule_set ?? []).map((rs) => rs.tag));
+  const used = new Set((route.rules ?? []).flatMap((r) => asArray(r.rule_set)));
+  expect([...used].filter((tag) => !declared.has(tag))).toEqual([]);
 };

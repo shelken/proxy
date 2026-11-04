@@ -16,11 +16,14 @@
 **底模**
 sing-box 配置的公共骨架，包含双入站、内网穿透、分流策略组与 route_exclude_address；服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模
 
+**模块表与片段**
+底模的装配源：`config/sing-box/modules.yaml` 一张表声明服务、清单组与每个平台的条目列表（`roles`），`config/sing-box/fragments/` 下的文件是纯配置片段。合并顺序就是角色列表的条目顺序，能力开关由「条目不在列表里」表达，见 `docs/adr/0013`
+
 **iOS 底模**
-同一批 `modules/` 经 `modules-ios/` 替换与新增后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
+同一份模块表的 `roles.ios` 用 `fragments/ios/` 顶替共享入站片段、并追加 Tailscale 片段后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
 
 **路由器底模**
-同一批 `modules/` 经 `modules-router/` 替换与新增后合并出的底模，tun 开启 `auto_redirect` 作网关、另有 53 端口的 DNS 入口、clash API 对局域网监听；设备白名单不在底模里，由设备 overlay 的 `bypass` 规则决定
+同一份模块表的 `roles.router` 用 `fragments/router/` 顶替共享的入站与 experimental 片段、并追加 DNS 入口片段后合并出的底模，tun 开启 `auto_redirect` 作网关、另有 53 端口的 DNS 入口、clash API 对局域网监听；设备白名单不在底模里，由设备 overlay 的 `bypass` 规则决定
 
 **DNS 出口**
 访问真实 DNS 上游所使用的网络路径，可独立于应用的业务出口选择

@@ -8,15 +8,6 @@
         "action": "route",
         "outbound": "download"
       }
-    ],
-    "rule_set": [
-      {
-        "type": "remote",
-        "tag": "Download",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Download.srs",
-        "update_interval": "1d"
-      }
     ]
   },
   "outbounds": [

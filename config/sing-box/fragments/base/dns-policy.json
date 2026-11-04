@@ -111,44 +111,5 @@
       }
     ],
     "final": "dns-proxy"
-  },
-  "route": {
-    "rule_set": [
-      {
-        "type": "remote",
-        "tag": "Lan-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyDirect-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyReject-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "MyProxy-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyProxy-dns.srs",
-        "update_interval": "1d"
-      },
-      {
-        "type": "remote",
-        "tag": "ChinaMax-dns",
-        "format": "binary",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/ChinaMax-dns.srs",
-        "update_interval": "1d"
-      }
-    ]
   }
 }

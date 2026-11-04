@@ -1,15 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
 import {
   asArray,
+  assertAllRuleSetsDeclared,
   assertMyDirectAndProxyBeforeServices,
   assertMyProxyDnsBeforeChinaMax,
   assertMyProxyQuicBeforeExempt,
   assertRejectBeforeClashMode,
 } from "./lib/contracts.ts";
+import {
+  MAC_ORDER,
+  applyPatch,
+  assertFragmentDir,
+  assertOrder,
+  assertRoleOrder,
+  roleKeys,
+  type VariantPatch,
+} from "./lib/manifest.ts";
 
 const templatePath = resolve(import.meta.dir, "../template-router.json");
 const router = JSON.parse(await Bun.file(templatePath).text());
@@ -38,7 +48,18 @@ export const assertGatewayTun = (inbounds: Array<Record<string, any>>) => {
   expect(tun?.auto_redirect).toBe(true);
 };
 
-export const ROUTER_MODULES_WHITELIST = ["00-inbounds.json", "29-dns-in.json", "90-experimental.json"];
+// 路由器的差异面：inbounds 换成路由器版（tun 开门 + dns-in），experimental 换成对局域网监听版，
+// 另加 dns-in 的劫持规则——它必须排在 sniff 之前，否则查询落到 ip_is_private → direct 绕成环。
+export const ROUTER_DIFF: VariantPatch = {
+  fragments: ["router/dns-in.json", "router/experimental.json", "router/inbounds.json"],
+  replace: [
+    { from: "fragment:base/inbounds.json", to: "fragment:router/inbounds.json" },
+    { from: "fragment:base/experimental.json", to: "fragment:router/experimental.json" },
+  ],
+  insertAfter: [
+    { anchor: "fragment:base/route-globals.json", items: ["fragment:router/dns-in.json"] },
+  ],
+};
 
 // sing-box 的 invert 反转的是整条规则的所有条件（v1.14.3 route/rule/rule_abstract.go 的 Match()），
 // 所以「排除白名单」只能是外层 AND 限定 tun-in、内层只反转 MAC 的两层写法。把 inbound 和 invert
@@ -216,11 +237,18 @@ describe("共享顺序契约（路由器侧）", () => {
   });
 });
 
-describe("modules-router 差异面白名单", () => {
-  test("modules-router/ 文件集合与登记一致", () => {
-    expect(
-      readdirSync(resolve(import.meta.dir, "../modules-router")).sort(),
-    ).toEqual([...ROUTER_MODULES_WHITELIST].sort());
+describe("modules.yaml 角色注册（ADR-0013）", () => {
+  test("roles.router = 基准顺序 + 注册的网关差异，且顺序逐步一致", () => {
+    assertRoleOrder("router", applyPatch(MAC_ORDER, ROUTER_DIFF));
+  });
+
+  test("fragments/router 的文件集合与登记的差异面一致", () => {
+    assertFragmentDir("router", ROUTER_DIFF.fragments);
+  });
+
+  // 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+  test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
+    assertAllRuleSetsDeclared(router.route);
   });
 });
 
@@ -267,5 +295,21 @@ describe("变异验证：断言能拦住坏情况", () => {
       outbound: "direct",
     };
     expect(() => assertBypassScopedToTunInWithInvertedMac(outer)).toThrow();
+  });
+
+  test("fragments/router 出现未登记片段 → assertFragmentDir 必须失败", () => {
+    expect(() =>
+      assertFragmentDir("router", [...ROUTER_DIFF.fragments, "router/99-unknown.json"]),
+    ).toThrow();
+  });
+
+  test("roles.router 把 dns-in 挪到 sniff 之后 → assertRoleOrder 必须失败", () => {
+    const moved = roleKeys("router").filter((key) => key !== "fragment:router/dns-in.json");
+    moved.splice(
+      moved.indexOf("fragment:base/sniff-and-dns-hijack.json") + 1,
+      0,
+      "fragment:router/dns-in.json",
+    );
+    expect(() => assertOrder(moved, applyPatch(MAC_ORDER, ROUTER_DIFF))).toThrow();
   });
 });

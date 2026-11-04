@@ -19,12 +19,12 @@ repos:
         language: system
         files: ^(scripts/sbtools-rs/(src/|tests/|build\.rs$|Cargo\.toml$)|Cargo\.(toml|lock)$)
         pass_filenames: false
-      # 底模与装配器：modules/template 一致 + 结构 check + 废弃写法 + 模板测试
+      # 底模与装配器：modules.yaml + fragments 与三份 template 一致 + 结构 check + 废弃写法 + 模板测试
       - id: check-template
         name: sing-box 底模检查
         entry: just check-template
         language: system
-        files: ^(config/sing-box/|scripts/merge-variant-template\.sh$)
+        files: ^(config/sing-box/|scripts/modules-build\.ts$)
         pass_filenames: false
       - id: check-justfile
         name: justfile 废弃写法检查
@@ -37,5 +37,5 @@ repos:
         name: 规则清单契约
         entry: just rules-check
         language: system
-        files: ^(config/rules/|scripts/rules-compile(\.test)?\.ts$)
+        files: ^(config/rules/|config/sing-box/|scripts/rules-compile(\.test)?\.ts$)
         pass_filenames: false

@@ -1,0 +1,29 @@
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": [
+          "ChinaMax",
+          "Lan",
+          "cftunnel",
+          "geoip-cn"
+        ],
+        "action": "route",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "Facebook",
+          "Instagram",
+          "Spotify",
+          "Telegram",
+          "TikTok",
+          "Twitter",
+          "YouTube"
+        ],
+        "action": "route",
+        "outbound": "proxy"
+      }
+    ]
+  }
+}
