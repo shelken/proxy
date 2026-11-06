@@ -16,3 +16,6 @@ rules:
       - gcr.io
       - quay.io
       - registry.k8s.io
+      - hf.co
+  - domain_keyword:
+      - huggingface

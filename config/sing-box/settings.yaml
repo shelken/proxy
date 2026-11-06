@@ -44,8 +44,8 @@ groups:
     options: [selfhost, proxy, direct, "(?i)(日本|JP)"]
     default: selfhost
   japansite:
-    options: [proxy, selfhost, "(?i)(日本|川日|东京|大阪|JP|Japan)"]
-    default: proxy
+    options: [jp, proxy, selfhost, "(?i)(日本|川日|东京|大阪|JP|Japan)"]
+    default: jp
   adultnsfw:
     options: [selfhost, proxy, direct, "(?i)(vps|hy2|港)"]
     default: selfhost
@@ -80,6 +80,9 @@ rules:
   - name: MyDirect
     source: ../rules/custom/MyDirect.yaml
     to: direct
+  - name: MySelfhost
+    source: ../rules/custom/MySelfhost.yaml
+    to: selfhost
   - name: MyProxy
     source: ../rules/custom/MyProxy.yaml
     to: proxy

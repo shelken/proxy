@@ -19,6 +19,7 @@ rules:
       - zed.dev
       - diabrowser.engineering
       - exa.ai
+      - 8-lives-cat.io
   - domain_keyword:
       - hailuoai
       - stripe
