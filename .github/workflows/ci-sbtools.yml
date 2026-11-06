@@ -99,7 +99,7 @@ jobs:
         working-directory: .
 
       - name: run config and rule compiler tests
-        run: SING_BOX=$(which sing-box) bun test scripts/build-config.test.ts scripts/rules-compile.test.ts scripts/sandbox-loop.test.ts
+        run: SING_BOX=$(which sing-box) bun test scripts/build-config.test.ts scripts/rules-compile.test.ts scripts/sandbox-loop.test.ts scripts/rule-set-local.test.ts
         working-directory: .
 
       - name: cargo test

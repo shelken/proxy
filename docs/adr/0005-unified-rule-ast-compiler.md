@@ -26,3 +26,7 @@
 - 外部列表的数据源随镜像切换发生变化：`ChinaMax` 近似替代为 v2fly `geosite:cn`，
   `Advertising` 等从 blackmatrix7 聚合列表切换为 v2fly 社区分类，覆盖面存在差异；
   `Hijacking` / `Privacy` / `Lan` 无上游等价分类，一次性转为本地 `custom/*.yaml` 维护。
+
+## 后续（2026-11-06）：规则字段收成字段表
+
+规则字段现由 `scripts/rules-compile.ts` 的 `FIELDS` 字段表统一驱动解析与三端发射。上文提到的 `domain_regex`、`source_ip_cidr`、`port_range`、`source_port`、`source_port_range`、`network` 因 `custom/*.yaml` 零使用而删除（Loon 的 `PROTOCOL` 方言随 `network` 一并移除），写入它们构建期报「未知的规则字段」。

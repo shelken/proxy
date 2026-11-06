@@ -6,7 +6,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadBase, loadSettings, RULES_URL, singBoxCommand, type Base, type Rule, type Settings } from "./settings.ts";
+import { chain, destinations, loadSettings, loadShared, RULES_URL, singBoxCommand, type Settings, type Shared } from "./settings.ts";
 
 const CONFIG = join(import.meta.dir, "../config/sing-box");
 const OUTPUTS: Record<string, string> = {
@@ -20,23 +20,6 @@ type Rec = Record<string, any>;
 export type Doc = Rec;
 
 const rulesUrl = (artifact: string) => `${RULES_URL}/${artifact}.srs`;
-const known = (tag: string, settings: Settings, base: Base) => tag in settings.groups || base.outbounds.some((o) => o.tag === tag);
-
-/** 规则去向沿分组默认候选走到底经过的全部名字（含自身）；成环在配置期报错。selector 没写 default 时内核选首个候选。 */
-function chain(rule: Rule, settings: Settings, base: Base): string[] {
-  const path = [rule.to];
-  for (;;) {
-    const at = path[path.length - 1];
-    const group = settings.groups[at];
-    const first = group?.type === undefined || group.type === "selector" ? group?.options[0] : undefined;
-    const next = group
-      ? (group.default ?? (first !== undefined && known(first, settings, base) ? first : undefined))
-      : base.outbounds.find((o) => o.tag === at)?.default;
-    if (next === undefined) return path;
-    if (path.includes(next)) throw new Error(`settings.yaml: 去向默认值成环: ${[...path, next].join(" -> ")}`);
-    path.push(next);
-  }
-}
 
 /**
  * 解析平台与 shared.yaml 里的 rule_set，这是模板引入 settings.yaml 的地方：
@@ -45,16 +28,16 @@ function chain(rule: Rule, settings: Settings, base: Base): string[] {
  * 传入 claimed 时（路由规则），不带 invert 的去向名引入的规则记入 claimed，不再追加到服务段。
  * logical 规则的子规则同样检查，但不认领。
  */
-function resolveRuleSets(rules: Rec[], settings: Settings, base: Base, companions: Set<string>, claimed?: Set<string>): Rec[] {
-  const dests = destinations(settings, base);
+function resolveRuleSets(rules: Rec[], settings: Settings, shared: Shared, companions: Set<string>, claimed?: Set<string>): Rec[] {
+  const dests = destinations(shared, settings.groups);
   return rules.map((rule) => {
-    const children = Array.isArray(rule.rules) ? resolveRuleSets(rule.rules, settings, base, companions) : undefined;
+    const children = Array.isArray(rule.rules) ? resolveRuleSets(rule.rules, settings, shared, companions) : undefined;
     if (rule.rule_set === undefined) return children ? { ...rule, rules: children } : rule;
     const names = ([rule.rule_set].flat() as string[]).flatMap((tag) => {
       const own = settings.byName.get(tag);
       if (own) {
         if (dests.has(tag)) throw new Error(`rule_set 里的 ${tag} 既是规则名又是去向名，请改规则名`);
-        if (rule.outbound && !rule.invert && !chain(own, settings, base).includes(rule.outbound)) {
+        if (rule.outbound && !rule.invert && !chain(own, settings, shared).includes(rule.outbound)) {
           throw new Error(`规则 ${tag} 的去向是 ${own.to}，但模板把它直接送往 ${rule.outbound}`);
         }
         return [tag];
@@ -64,7 +47,7 @@ function resolveRuleSets(rules: Rec[], settings: Settings, base: Base, companion
         return [tag];
       }
       if (!dests.has(tag)) throw new Error(`rule_set 里的 ${tag} 既不是 settings.yaml 的规则名，也不是去向名`);
-      const hit = settings.rules.filter((r) => chain(r, settings, base).includes(tag)).map((r) => r.name);
+      const hit = settings.rules.filter((r) => chain(r, settings, shared).includes(tag)).map((r) => r.name);
       if (claimed && !rule.invert) hit.forEach((n) => claimed.add(n));
       return hit;
     });
@@ -72,20 +55,17 @@ function resolveRuleSets(rules: Rec[], settings: Settings, base: Base, companion
   }).filter((r): r is Rec => r !== null);
 }
 
-const destinations = (settings: Settings, base: Base) =>
-  new Set(["reject", ...base.outbounds.map((o) => o.tag), ...Object.keys(settings.groups)]);
-
 const ruleSetBlock = (tag: string, url: string) => ({ type: "remote", tag, format: "binary", url, update_interval: "1d" });
 
 const isInclude = (x: unknown): x is { $include: string } =>
   typeof x === "object" && x !== null && !Array.isArray(x) && Object.keys(x).length === 1 && "$include" in x;
 const isObject = (x: unknown): x is Rec => typeof x === "object" && x !== null && !Array.isArray(x);
 
-const deepMerge = (base: Rec, over: Rec): Rec =>
+const deepMerge = (defaults: Rec, overrides: Rec): Rec =>
   Object.fromEntries(
-    [...new Set([...Object.keys(base), ...Object.keys(over)])].map((k) => [
+    [...new Set([...Object.keys(defaults), ...Object.keys(overrides)])].map((k) => [
       k,
-      isObject(base[k]) && isObject(over[k]) ? deepMerge(base[k], over[k]) : (over[k] ?? base[k]),
+      isObject(defaults[k]) && isObject(overrides[k]) ? deepMerge(defaults[k], overrides[k]) : (overrides[k] ?? defaults[k]),
     ]),
   );
 
@@ -104,7 +84,7 @@ function include(node: any, frags: Rec): any {
 }
 
 /** 平台模板展开 shared.yaml 的共用段，再展开 settings.yaml 生成的 groups、rule-sets、services。 */
-export function assemble(settings: Settings, shared: Base, platform: Doc) {
+export function assemble(settings: Settings, shared: Shared, platform: Doc) {
   const doc = include(platform, shared);
   const claimed = new Set<string>();
   const companions = new Set<string>();
@@ -129,7 +109,7 @@ export function assemble(settings: Settings, shared: Base, platform: Doc) {
 }
 
 /** 展开后交给官方 sing-box merge 规范化并写出 target。 */
-export async function mergeTo(target: string, shared: Base, platform: Doc, settings: Settings): Promise<void> {
+export async function mergeTo(target: string, shared: Shared, platform: Doc, settings: Settings): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "sing-box-input-"));
   try {
     await writeFile(join(dir, "00-template.json"), JSON.stringify(assemble(settings, shared, platform), null, 2) + "\n");
@@ -153,8 +133,8 @@ function firstDiff(a: Uint8Array, b: Uint8Array): string | null {
 }
 
 if (import.meta.main) {
-  const base = loadBase();
-  const settings = loadSettings(base);
+  const shared = loadShared();
+  const settings = loadSettings(shared);
   const check = Bun.argv.includes("--check");
   let failed = false;
 
@@ -163,7 +143,7 @@ if (import.meta.main) {
     const work = await mkdtemp(join(tmpdir(), "sing-box-build-"));
     const target = check ? join(work, "template.json") : join(CONFIG, OUTPUTS[role]);
     try {
-      await mergeTo(target, base, platform, settings);
+      await mergeTo(target, shared, platform, settings);
       if (!check) {
         console.log(`${OUTPUTS[role]}: 已生成`);
         continue;

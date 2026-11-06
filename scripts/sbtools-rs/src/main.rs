@@ -21,6 +21,7 @@ mod assemble;
 mod clashapi;
 mod config;
 mod crypto;
+mod kernel;
 mod node;
 mod paths;
 mod redact;
@@ -207,8 +208,8 @@ fn cmd_check(rest: &[String]) -> Result<(), String> {
         serde_json::Value::Object(o) => Some(serde_json::Value::Object(o.clone())),
         _ => None,
     };
-    let merged = server::merge_overlay(&base, overlay.as_ref())?;
-    server::kernel_check(&merged)?;
+    let merged = kernel::merge_overlay(&base, overlay.as_ref())?;
+    kernel::kernel_check(&merged)?;
 
     println!("✓ 内核 check 通过（底模: {}）", source.as_str());
     print!("{}", render_effective_summary(&merged));

@@ -3,7 +3,7 @@
 
 use sbtools::assemble::finalize;
 use sbtools::config::reject_path_fields;
-use sbtools::template::resolve_singbox_binary;
+use sbtools::kernel::resolve_singbox_binary;
 use serde_json::{Value, json};
 
 fn kernel_available() -> bool {

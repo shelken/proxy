@@ -24,7 +24,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { localizeRuleSets, planRuleSets, stageRuleSets } from "../../../../scripts/sandbox-loop.ts";
+import { localizeRuleSets, planRuleSets, stageRuleSets } from "../../../../scripts/rule-set-local.ts";
 
 const REPO = resolve(import.meta.dir, "../../../..");
 const ARTIFACTS_ROOT = join(REPO, ".sandbox-artifacts/verification");
@@ -137,7 +137,7 @@ export function doctor(outDir) {
   }
 
   const check = host("bun", ["scripts/build-config.ts", "--check"]);
-  if (check.code !== 0) problems.push(`底模与 settings/base/platforms 不一致：\n${check.out}${check.err}`);
+  if (check.code !== 0) problems.push(`底模与 settings/shared/platforms 不一致：\n${check.out}${check.err}`);
 
   const vm = guest("echo ok");
   if (vm.code !== 0) problems.push(`VM ${VM} 不可达：${vm.err.trim()}（just vm-start）`);
@@ -245,8 +245,8 @@ sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo 
 }
 
 /**
- * D5 外部 .srs 完整消费：走 sandbox-loop 的同一准备链（planRuleSets → stageRuleSets →
- * localizeRuleSets），再由 VM 内核加载命中。默认底模不启用小米，不反编译、不伪造其他客户端。
+ * D5 外部 .srs 完整消费：走 scripts/rule-set-local.ts 的同一准备链（planRuleSets →
+ * stageRuleSets → localizeRuleSets），再由 VM 内核加载命中。默认底模不启用小米，不反编译、不伪造其他客户端。
  */
 export function driveXiaomi(outDir) {
   const results = [];
@@ -325,7 +325,7 @@ export function driveDns(outDir) {
   add("D4/geosite-no-json", !existsSync(dnsJson("ChinaMax")), "geosite 无中间 JSON");
   add("D4/geoip-skip", !existsSync(srs("geoip-cn")), "geoip 不产伴生（IP 集合无 DNS 判定语义）");
 
-  const DNS_KEYS = new Set(["type", "mode", "rules", "invert", "domain", "domain_suffix", "domain_keyword", "domain_regex"]);
+  const DNS_KEYS = new Set(["type", "mode", "rules", "invert", "domain", "domain_suffix", "domain_keyword"]);
   const foreignKeys = (node) => {
     const bad = [];
     const visit = (n) => {

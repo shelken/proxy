@@ -75,7 +75,7 @@ fn assign_tags(nodes: &mut [Value], reserved: &[String]) {
 }
 
 /// 节点全集 → 反回环直连规则：域名保持原样，IP 字面量生成对应 CIDR。
-pub fn generate_node_direct_rule(nodes: &[Value], _template: &Value) -> Option<Value> {
+pub fn generate_node_direct_rule(nodes: &[Value]) -> Option<Value> {
     let mut domains: Vec<String> = Vec::new();
     let mut cidrs: Vec<String> = Vec::new();
     for node in nodes {
@@ -528,14 +528,13 @@ mod tests {
     /// 节点全集确定后生成域名和 IP 字面量的直连规则。
     #[test]
     fn node_direct_rule_generated_after_collect() {
-        let tpl = crate::template::embedded_template().expect("内嵌底模");
         let input = AssembleInput {
             sources: "hy2://pass@192.0.2.1:8388#selfhost|hy2://pass@node.invalid:8388#dom|anytls://pass@[2001:db8::1]:8443#v6".into(),
             fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
         };
 
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let rule = generate_node_direct_rule(&nodes, &tpl).expect("应生成反回环规则");
+        let rule = generate_node_direct_rule(&nodes).expect("应生成反回环规则");
         assert_eq!(rule["outbound"], "direct");
         let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
         for expected in ["192.0.2.1/32", "2001:db8::1/128"] {
@@ -598,7 +597,6 @@ mod tests {
     /// 同一 server 出现多次时不得产生重复 cidr（重复项会被 sing-box 拒）。
     #[test]
     fn node_direct_rule_deduplicates() {
-        let tpl = crate::template::embedded_template().expect("内嵌底模");
         let input = AssembleInput {
             sources: "hy2://pass@192.0.2.1:8388#a|hy2://pass@192.0.2.1:8443#b|\
                       anytls://pass@[2001:db8::1]:8443#c|anytls://pass@[2001:db8::1]:9443#d"
@@ -606,7 +604,7 @@ mod tests {
             fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
         };
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let rule = generate_node_direct_rule(&nodes, &tpl).expect("应生成反回环规则");
+        let rule = generate_node_direct_rule(&nodes).expect("应生成反回环规则");
         let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
         assert_eq!(
             cidrs.len(),

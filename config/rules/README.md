@@ -39,8 +39,6 @@ rules:
   - ip_cidr:
       - 10.0.0.0/8,no-resolve
   - port: 443
-  - port_range:
-      - 6881:6889
   - logical:
       - mode: and
         rules:
@@ -51,12 +49,11 @@ rules:
           - domain_keyword: assets-
 ```
 
-可用字段见 `scripts/rules-compile.ts` 的 `FIELD_ORDER`，另有 `ip_asn` 与 `logical`
+可用字段见 `scripts/rules-compile.ts` 的 `FIELDS` 字段表，另有 `logical`
 未知字段构建期直接报错，不静默丢弃；字段值只能是字符串或数字及其数组，其他类型一律报错
 
-`logical` 叶节点只接受 `FIELD_ORDER` 内的单个字段、单个标量值，键名连字符与
-下划线等价，多字段或数组叶子构建期报错。`network` 在 mihomo 端输出 `NETWORK`，
-在 Loon / Surge 端输出 `PROTOCOL`。DNS 伴生副本会保留叶子全为域名字段的逻辑树。
+`logical` 叶节点只接受字段表内的单个字段、单个标量值，键名连字符与下划线等价，
+多字段或数组叶子构建期报错。DNS 伴生副本会保留叶子全为域名字段的逻辑树。
 
 ## 二进制编译产物
 

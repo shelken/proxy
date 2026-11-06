@@ -34,13 +34,13 @@ export interface Settings {
   rules: Rule[];
   byName: Map<string, Rule>;
 }
-export interface Base {
+export interface Shared {
   outbounds: Array<{ tag: string; default?: string } & Record<string, any>>;
   [key: string]: unknown;
 }
 
-export const loadBase = (): Base =>
-  Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "shared.yaml"), "utf8")) as Base;
+export const loadShared = (): Shared =>
+  Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "shared.yaml"), "utf8")) as Shared;
 
 /** 稳定产物名：保留 Unicode 字母数字与 ._-，其余折叠为下划线；空名回退 rule。 */
 export function artifactName(tag: string): string {
@@ -81,8 +81,32 @@ function classify(source: string, at: string): RuleKind {
   return "local";
 }
 
+/** 去向集合：显式 reject、共用段的全部出站 tag、settings.yaml 的全部分组名。 */
+export const destinations = (shared: Shared, groups: Record<string, Group>): Set<string> =>
+  new Set(["reject", ...shared.outbounds.map((o) => o.tag), ...Object.keys(groups)]);
+
+/** tag 是否已有定义：settings.yaml 分组或共用段出站。 */
+const known = (tag: string, settings: Settings, shared: Shared): boolean =>
+  tag in settings.groups || shared.outbounds.some((o) => o.tag === tag);
+
+/** 规则去向沿分组默认候选走到底经过的全部名字（含自身）；成环在配置期报错。selector 没写 default 时内核选首个候选。 */
+export function chain(rule: Rule, settings: Settings, shared: Shared): string[] {
+  const path = [rule.to];
+  for (;;) {
+    const at = path[path.length - 1];
+    const group = settings.groups[at];
+    const first = group?.type === undefined || group.type === "selector" ? group?.options[0] : undefined;
+    const next = group
+      ? (group.default ?? (first !== undefined && known(first, settings, shared) ? first : undefined))
+      : shared.outbounds.find((o) => o.tag === at)?.default;
+    if (next === undefined) return path;
+    if (path.includes(next)) throw new Error(`settings.yaml: 去向默认值成环: ${[...path, next].join(" -> ")}`);
+    path.push(next);
+  }
+}
+
 /** 解析并校验 settings.yaml；本地来源在此解析为绝对路径。 */
-export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml")): Settings {
+export function loadSettings(shared: Shared, path = join(CONFIG_DIR, "settings.yaml")): Settings {
   const parsed = Bun.YAML.parse(readFileSync(path, "utf8")) as any;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("settings.yaml: 顶层必须是 groups 与 rules 映射");
@@ -97,13 +121,13 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
     if (value.default !== undefined && !value.options.includes(value.default)) {
       throw new Error(`settings.yaml: 分组 ${name} 的 default ${value.default} 不在 options 里`);
     }
-    if (base.outbounds.some((o) => o.tag === name)) {
+    if (shared.outbounds.some((o) => o.tag === name)) {
       throw new Error(`settings.yaml: 分组 ${name} 与 shared.yaml 已有出站同名`);
     }
     groups[name] = value;
   }
 
-  const destinations = new Set(["reject", ...base.outbounds.map((o) => o.tag), ...Object.keys(groups)]);
+  const dests = destinations(shared, groups);
   const rules: Rule[] = [];
   const seen = new Set<string>();
   for (const [i, value] of (parsed.rules ?? []).entries()) {
@@ -113,8 +137,8 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
     if (seen.has(rule.name)) throw new Error(`settings.yaml: 规则名重复: ${rule.name}`);
     if (typeof rule.source !== "string" || !rule.source) throw new Error(`settings.yaml: ${at} 缺少 source`);
     if (typeof rule.to !== "string" || !rule.to) throw new Error(`settings.yaml: ${at} 缺少 to`);
-    if (!destinations.has(rule.to)) {
-      throw new Error(`settings.yaml: ${at} 的去向 ${rule.to} 无效（可用: ${[...destinations].join(", ")}）`);
+    if (!dests.has(rule.to)) {
+      throw new Error(`settings.yaml: ${at} 的去向 ${rule.to} 无效（可用: ${[...dests].join(", ")}）`);
     }
     const kind = classify(rule.source, at);
     const localPath =

@@ -369,7 +369,7 @@ describe("template.json structural verification", () => {
 });
 
 // settings.yaml 是底模的唯一登记处：规则声明、匹配引用、分组与 DNS 伴生都从它生成。
-// 这里守生成的产物与 settings/base 一致，以及固定机制（拦截/解析/QUIC）没有被改坏。
+// 这里守生成的产物与 settings/shared 一致，以及固定机制（拦截/解析/QUIC）没有被改坏。
 describe("settings.yaml → template.json 生成契约", () => {
   test("log 级别为 info", () => {
     expect(template.log).toEqual({ level: "info" });
