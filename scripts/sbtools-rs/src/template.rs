@@ -252,9 +252,21 @@ mod tests {
         std::fs::write(&fake, "#!/bin/sh\necho FAKE_KERNEL_MARKER \"$@\"\n").unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let out = std::process::Command::new(resolve_singbox_from(Some(fake.clone().into())))
-            .arg("version")
-            .output()
+        // 其他测试线程 fork 时会让刚写完的脚本短暂处于「文本文件忙」（ETXTBSY），Linux 上直接执行会失败，重试即可
+        let out = (0..20)
+            .find_map(|_| {
+                match std::process::Command::new(resolve_singbox_from(Some(fake.clone().into())))
+                    .arg("version")
+                    .output()
+                {
+                    Err(e) if e.raw_os_error() == Some(26) => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        None
+                    }
+                    other => Some(other),
+                }
+            })
+            .expect("重试后仍是文本文件忙")
             .expect("假内核应可执行");
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(

@@ -557,7 +557,17 @@ mod tests {
 
         let base = json!({"outbounds": []});
         let layers = [(LAYER_BASE, &base)];
-        let err = run_singbox_merge_with(bad.as_os_str(), &dir, &layers).unwrap_err();
+        // 其他测试线程 fork 时会让刚写完的脚本短暂处于「文本文件忙」，Linux 上直接执行会失败，重试即可
+        let err = (0..20)
+            .map(|_| run_singbox_merge_with(bad.as_os_str(), &dir, &layers).unwrap_err())
+            .find(|e| {
+                let busy = e.contains("Text file busy");
+                if busy {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                !busy
+            })
+            .expect("重试后仍是文本文件忙");
         assert!(
             err.contains("overlay 非法字段"),
             "应带上 stderr 摘要，实际: {err}"
