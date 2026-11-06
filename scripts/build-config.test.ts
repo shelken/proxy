@@ -99,6 +99,23 @@ describe("默认 settings：生成结构", () => {
   });
 });
 
+describe("变异验证：断言不是恒真", () => {
+  test("把 reject 固定段移到 QUIC 守卫之后 → 顺序断言必须失败", () => {
+    const routeRules = [...base.route.rules];
+    const [slot] = routeRules.splice(
+      routeRules.findIndex((r) => r.slot === "reject"),
+      1,
+    );
+    routeRules.push(slot);
+    const mutated = { ...base, route: { ...base.route, rules: routeRules } } as Base;
+    const cfg = buildConfig(mutated, mac, defaults);
+    const rules = cfg.route.rules as Array<Record<string, any>>;
+    const reject = rules.findIndex((r) => r.action === "reject" && r.rule_set?.includes("Advertising"));
+    const quic = rules.findIndex((r) => r.network === "udp" && r.action === "reject");
+    expect(reject).toBeGreaterThan(quic);
+  });
+});
+
 describe("新增远程 .srs（小米）", () => {
   test("三端声明有且仅一次，进入拦截段，不改默认设置", () => {
     const { path } = withSettings(
