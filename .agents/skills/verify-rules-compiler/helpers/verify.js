@@ -24,7 +24,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { localizeRuleSets, planRuleSets, stageRuleSets } from "../../../../scripts/sandbox-loop.ts";
+import { localizeRuleSets, planRuleSets, stageRuleSets } from "../../../../scripts/rule-set-local.ts";
 
 const REPO = resolve(import.meta.dir, "../../../..");
 const ARTIFACTS_ROOT = join(REPO, ".sandbox-artifacts/verification");
@@ -245,8 +245,8 @@ sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo 
 }
 
 /**
- * D5 外部 .srs 完整消费：走 sandbox-loop 的同一准备链（planRuleSets → stageRuleSets →
- * localizeRuleSets），再由 VM 内核加载命中。默认底模不启用小米，不反编译、不伪造其他客户端。
+ * D5 外部 .srs 完整消费：走 scripts/rule-set-local.ts 的同一准备链（planRuleSets →
+ * stageRuleSets → localizeRuleSets），再由 VM 内核加载命中。默认底模不启用小米，不反编译、不伪造其他客户端。
  */
 export function driveXiaomi(outDir) {
   const results = [];
