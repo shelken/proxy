@@ -12,19 +12,10 @@ export const CUSTOM_DIR = resolve(import.meta.dir, "../config/rules/custom");
 export const RULES_URL = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox";
 
 export type RuleKind = "local" | "geosite" | "geoip" | "url";
-/** 规则的 DNS 策略：这类查询由对应服务器应答（reject 为直接拒绝）。 */
-export const DNS_MODES = ["reject", "lan", "fakeip", "direct-cn"] as const;
-export type DnsMode = (typeof DNS_MODES)[number];
-/** 规则的 QUIC 策略：allow 放行直连，reject 拒绝以降级 TCP。 */
-export const QUIC_MODES = ["allow", "reject"] as const;
-export type QuicMode = (typeof QUIC_MODES)[number];
-
 export interface Rule {
   name: string;
   source: string;
   to: string;
-  dns?: DnsMode;
-  quic?: QuicMode;
   kind: RuleKind;
   artifact: string;
   /** 本地 YAML 与 geosite 才产出 `-dns` 域名版伴生 */
@@ -32,9 +23,11 @@ export interface Rule {
   /** 本地来源的绝对路径 */
   path?: string;
 }
+/** 分组：options 是候选，其余字段（type、default、url……）原样写进 sing-box 出站。 */
 export interface Group {
   options: string[];
-  default: string;
+  default?: string;
+  [field: string]: unknown;
 }
 export interface Settings {
   groups: Record<string, Group>;
@@ -47,7 +40,7 @@ export interface Base {
 }
 
 export const loadBase = (): Base =>
-  Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "base.yaml"), "utf8")) as Base;
+  Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "shared.yaml"), "utf8")) as Base;
 
 /** 稳定产物名：保留 Unicode 字母数字与 ._-，其余折叠为下划线；空名回退 rule。 */
 export function artifactName(tag: string): string {
@@ -97,19 +90,17 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
 
   const groups: Record<string, Group> = {};
   for (const [name, value] of Object.entries<any>(parsed.groups ?? {})) {
-    if (!Array.isArray(value?.options) || typeof value.default !== "string") {
-      throw new Error(`settings.yaml: 分组 ${name} 需要 options 数组与 default 字符串`);
-    }
+    if (!Array.isArray(value?.options)) throw new Error(`settings.yaml: 分组 ${name} 需要 options 数组`);
     if (!value.options.every((o: unknown) => typeof o === "string" && o)) {
       throw new Error(`settings.yaml: 分组 ${name} 的 options 只能是非空字符串`);
     }
-    if (!value.options.includes(value.default)) {
+    if (value.default !== undefined && !value.options.includes(value.default)) {
       throw new Error(`settings.yaml: 分组 ${name} 的 default ${value.default} 不在 options 里`);
     }
     if (base.outbounds.some((o) => o.tag === name)) {
-      throw new Error(`settings.yaml: 分组 ${name} 与 base.yaml 已有出站同名`);
+      throw new Error(`settings.yaml: 分组 ${name} 与 shared.yaml 已有出站同名`);
     }
-    groups[name] = { options: value.options, default: value.default };
+    groups[name] = value;
   }
 
   const destinations = new Set(["reject", ...base.outbounds.map((o) => o.tag), ...Object.keys(groups)]);
@@ -126,16 +117,6 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
       throw new Error(`settings.yaml: ${at} 的去向 ${rule.to} 无效（可用: ${[...destinations].join(", ")}）`);
     }
     const kind = classify(rule.source, at);
-    if (rule.dns !== undefined) {
-      if (!DNS_MODES.includes(rule.dns)) throw new Error(`settings.yaml: ${at} 的 dns 无效（可用: ${DNS_MODES.join(", ")}）`);
-      if (kind !== "local" && kind !== "geosite") throw new Error(`settings.yaml: ${at} 的 dns 需要本地 YAML 或 geosite 来源（geoip 与外部 .srs 无域名版）`);
-    }
-    if (rule.quic !== undefined && !QUIC_MODES.includes(rule.quic)) {
-      throw new Error(`settings.yaml: ${at} 的 quic 无效（可用: ${QUIC_MODES.join(", ")}）`);
-    }
-    if (rule.quic === "allow" && rule.to !== "direct") {
-      throw new Error(`settings.yaml: ${at} 的 quic: allow 把 UDP 放行到直连，要求 to: direct`);
-    }
     const localPath =
       kind === "local" ? (isAbsolute(rule.source) ? rule.source : resolve(dirname(path), rule.source)) : undefined;
     if (localPath && !existsSync(localPath)) {
@@ -146,8 +127,6 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
       name: rule.name,
       source: rule.source,
       to: rule.to,
-      dns: rule.dns,
-      quic: rule.quic,
       kind,
       artifact: artifactName(rule.name),
       companion: kind === "local" || kind === "geosite",

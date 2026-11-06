@@ -1,0 +1,83 @@
+# shared.yaml — 三个平台共用的部分，每个顶层键是一段名字，平台文件用 $include 引入。
+#   数组里：- { $include: 名字 }  换成这一段的全部元素，位置由平台文件决定
+#   对象里：$include: 名字        把这一段的字段并进来，平台文件里写的同名字段优先
+# 结构与 sing-box 的 JSON 一致。分组、规则集声明和服务路由由 settings.yaml 生成，
+# 名字是 groups、rule-sets、services，同样用 $include 引入，见 scripts/build-config.ts。
+
+log:
+  level: info
+
+dns-servers:
+  - { type: udp, tag: dns-direct-cn, server: 223.5.5.5 }
+  - type: https
+    tag: dns-proxy
+    server: 1.1.1.1
+    detour: dns-auto
+    tls: { enabled: true, server_name: cloudflare-dns.com }
+  - { type: fakeip, tag: dns-fakeip, inet4_range: 198.18.0.0/15 }
+
+dns-options: { strategy: prefer_ipv4, optimistic: true, final: dns-proxy }
+
+# DNS 规则的顺序即匹配顺序；rule_set 里写 settings.yaml 的规则名，-dns 是它的域名版伴生，自动声明
+dns-rules:
+  - { rule_set: [MyReject-dns], action: reject }
+  - { rule_set: [Lan-dns], server: dns-lan, disable_optimistic_cache: true }
+  - { domain_suffix: [local, lan, home.arpa], server: dns-lan, disable_optimistic_cache: true }
+  - { rule_set: [MyDirect-dns], server: dns-lan, disable_optimistic_cache: true }
+  - { clash_mode: direct, server: dns-lan }
+  - { query_type: [PTR], server: dns-lan }
+  - { rule_set: [MyProxy-dns], query_type: [A, AAAA], server: dns-fakeip }
+  - { rule_set: [ChinaMax-dns], server: dns-direct-cn }
+  - { query_type: [A, AAAA], server: dns-fakeip }
+
+http-clients:
+  - { tag: rule-set-dl, detour: rule-set-dl-group }
+
+experimental:
+  clash_api: { external_controller: 127.0.0.1:9090, external_ui: ui, default_mode: rule }
+  cache_file: { enabled: true, path: cache.db, store_fakeip: true, store_dns: true }
+
+# 内部出站：DNS 与规则集下载使用，客户端面板不显示。面板显示的分组在 settings.yaml 的 groups
+outbounds:
+  - { type: direct, tag: direct }
+  - type: urltest
+    tag: dns-auto
+    outbounds: ["(?i)(vps|hy2|selfhost)", "(?i)(港|HK|Hong)", "(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)", "(?i)(新加坡|坡|狮城|SG|Singapore)"]
+    url: https://www.gstatic.com/generate_204
+    interval: 1m
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: rule-set-dl-group
+    outbounds: ["(?i)anytls", ".*"]
+    url: https://www.gstatic.com/generate_204
+    interval: 1m
+    tolerance: 50
+    interrupt_exist_connections: true
+
+route-options:
+  auto_detect_interface: true
+  final: proxy
+  default_domain_resolver: { server: dns-lan }
+  default_http_client: rule-set-dl
+
+# 路由规则分两段，各平台可以在两段之间插入自己的规则。顺序即匹配顺序：
+# rule_set 写规则名，是引用 settings.yaml 的那条规则；写去向名（reject、download、direct），
+# 是引入 settings.yaml 里去向落在它的全部规则（direct 沿分组默认值解析到最终直连）；
+# 「只有 rule_set 加动作」的规则已完整路由了所引入的规则，其余规则由 services 追加在最后。
+route-intake:
+  - { action: sniff, sniffer: [http, tls, quic, dns, bittorrent] }
+  - { protocol: dns, action: hijack-dns }
+  - { port: 53, action: hijack-dns }
+
+route-policy:
+  - { ip_is_private: true, action: route, outbound: direct }
+  - { rule_set: [reject], action: reject }
+  - { network: udp, port: [443, 80], rule_set: [MyProxy], action: reject, no_drop: true }
+  - { network: udp, port: [443, 80], rule_set: [ChinaMax, Lan, cftunnel, geoip-cn], action: route, outbound: direct }
+  - { network: udp, port: [443, 80], action: reject, no_drop: true }
+  - { clash_mode: direct, action: route, outbound: direct }
+  - { clash_mode: global, action: route, outbound: proxy }
+  - { protocol: bittorrent, action: route, outbound: torrent }
+  - { rule_set: [download], action: route, outbound: download }
+  - { rule_set: [direct], invert: true, action: resolve, server: dns-proxy, strategy: ipv4_only }

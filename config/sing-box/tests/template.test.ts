@@ -17,8 +17,8 @@ const CONFIG_DIR = resolve(import.meta.dir, "..");
 /** 本仓库发布规则产物的前缀（与 scripts/build-config.ts 的 RULES_URL 一致）。 */
 const PUBLISH_PREFIX = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox";
 const settings = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "settings.yaml"), "utf8")) as {
-  groups: Record<string, { options: string[]; default: string }>;
-  rules: Array<{ name: string; source: string; to: string; dns?: string }>;
+  groups: Record<string, { options: string[]; default?: string }>;
+  rules: Array<{ name: string; source: string; to: string }>;
 };
 
 // 内核 merge 的输出会省略默认值 `action: "route"`、
@@ -128,7 +128,8 @@ describe("template.json structural verification", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
     const source = settings.rules.find((r) => r.name === "Lan");
-    if (source?.dns === "lan") {
+    const active = source?.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
+    if (active) {
       expect(lanRule?.server).toBe("dns-lan");
     } else {
       expect(lanRule).toBeUndefined();
@@ -148,9 +149,10 @@ describe("template.json structural verification", () => {
   test("个人域规则集走系统 DNS 且排在 FakeIP 之前（存在且为直连时）", () => {
     const rules = template.dns?.rules ?? [];
     const source = settings.rules.find((r) => r.name === "MyDirect");
+    const active = source && source.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
-    if (source?.dns !== "lan") {
-      // 删除或去掉 dns 策略时不得残留 DNS 引用
+    if (!active) {
+      // 删除/改向/外部来源（无伴生）时不得残留 DNS 引用
       expect(zoneRule).toBeUndefined();
       return;
     }
@@ -331,21 +333,21 @@ describe("template.json structural verification", () => {
     assertMyDirectAndProxyBeforeServices(template.route?.rules ?? [], template.outbounds ?? []);
   });
 
-  test("DNS 层拦截只引用声明了 dns: reject 的规则，且排在 FakeIP 之前", () => {
+  test("DNS 层拦截只引用去向为 reject 的清单，且排在 FakeIP 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
     const rejects = dnsRules.filter((r: { action?: string }) => r.action === "reject");
-    // 拦截清单必须仍在设置里且声明 dns: reject；删掉或去掉声明时这里也应随之无拦截规则
+    // 拦截清单必须仍在设置里且去向为 reject；删掉或改向时这里也应随之无拦截规则
     for (const rule of rejects) {
       for (const tag of asArray((rule as { rule_set?: string | string[] }).rule_set)) {
         const source = settings.rules.find((r) => r.name === tag.replace(/-dns$/, ""));
-        expect(source?.dns).toBe("reject");
+        expect(source?.to).toBe("reject");
       }
     }
     const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
     expect(fakeipIndex).toBeGreaterThan(-1);
     for (const rule of rejects) expect(dnsRules.indexOf(rule)).toBeLessThan(fakeipIndex);
     // 历史行为守卫：默认设置里 MyReject 是本地拒绝清单（有伴生），DNS 层必须拦住它
-    if (settings.rules.some((r) => r.name === "MyReject" && r.dns === "reject")) {
+    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject" && !/^(https?:\/\/|geoip:)/.test(r.source))) {
       expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
     }
   });
@@ -418,15 +420,11 @@ describe("settings.yaml → template.json 生成契约", () => {
     }
   });
 
-  test("每个分组都生成 selector，顺序与 settings 一致", () => {
-    const selectors = template.outbounds
-      .filter((o: { type: string }) => o.type === "selector")
-      .map((o: { tag: string }) => o.tag);
-    expect(selectors).toEqual(expect.arrayContaining(Object.keys(settings.groups)));
+  test("每个分组都生成出站，候选与默认值与 settings 一致", () => {
     for (const [name, def] of Object.entries(settings.groups)) {
-      const selector = template.outbounds.find((o: { tag: string }) => o.tag === name);
-      expect(selector?.outbounds).toEqual(def.options);
-      expect(selector?.default).toBe(def.default);
+      const group = template.outbounds.find((o: { tag: string }) => o.tag === name);
+      expect(group?.outbounds).toEqual(def.options);
+      expect(group?.default).toBe(def.default);
     }
   });
 

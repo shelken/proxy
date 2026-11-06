@@ -1,4 +1,7 @@
-# platforms/mac.yaml — Mac 平台层：TUN 入站、本网解析器与部署域静态应答（原生字段）。
+# mac.yaml — Mac 的完整模板，结构与 sing-box 的 JSON 一致。
+# { $include: 名字 } 引入 shared.yaml 的共用段，settings.yaml 生成的段名字是 groups、rule-sets、services。
+
+log: { $include: log }
 
 inbounds:
   - type: tun
@@ -16,8 +19,29 @@ inbounds:
   - { type: mixed, tag: mixed-in, listen: 127.0.0.1, listen_port: 2080 }
 
 dns:
+  $include: dns-options
   servers:
     - { type: local, tag: dns-lan }
+    - { $include: dns-servers }
   rules:
     - { domain_suffix: [.int.ooooo.space], query_type: [A], action: predefined, answer: ["*. IN A 192.168.69.46"] }
     - { domain_suffix: [int.ooooo.space], action: predefined }
+    - { $include: dns-rules }
+
+http_clients:
+  - { $include: http-clients }
+
+experimental: { $include: experimental }
+
+outbounds:
+  - { $include: outbounds }
+  - { $include: groups }
+
+route:
+  $include: route-options
+  rules:
+    - { $include: route-intake }
+    - { $include: route-policy }
+    - { $include: services }
+  rule_set:
+    - { $include: rule-sets }

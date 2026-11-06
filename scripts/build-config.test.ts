@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
-// 底模生成器的集成测试：走真实规范化输入（settings.ts）、makePolicy 与官方 merge。
+// 底模生成器的集成测试：走真实规范化输入（settings.ts）、assemble 与官方 merge。
 // 默认基线的逐项归一化对比由 template.test.ts 与 just template-check 守。
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { makePolicy, mergeTo, type Platform, type Role } from "./build-config.ts";
+import { assemble, mergeTo, type Doc, type Role } from "./build-config.ts";
 import { artifactName, loadBase, loadSettings, singBoxCommand, type Settings } from "./settings.ts";
 import { buildOne } from "./rules-compile.ts";
 import {
@@ -25,9 +25,9 @@ const settingsFile = readFileSync(fixtureSettings, "utf8");
 const platforms = Object.fromEntries(
   (["mac", "ios", "router"] as const).map((role) => [
     role,
-    Bun.YAML.parse(readFileSync(join(CONFIG, "platforms", `${role}.yaml`), "utf8")) as Platform,
+    Bun.YAML.parse(readFileSync(join(CONFIG, "platforms", `${role}.yaml`), "utf8")) as Doc,
   ]),
-) as Record<Role, Platform>;
+) as Record<Role, Doc>;
 const defaults = loadSettings(base, fixtureSettings);
 
 const tempDirs: string[] = [];
@@ -58,10 +58,17 @@ const withRule = (cfg: any, tag: string) => cfg.route.rules.filter((r: any) => [
 /** 走真实 merge 产出终态配置（mac/ios/router 任一）。 */
 async function merged(settings: Settings, role: Role = "mac") {
   const target = join(tempDir("merged-"), "template.json");
-  await mergeTo(target, base, platforms[role], settings, role);
+  await mergeTo(target, base, platforms[role], settings);
   return JSON.parse(readFileSync(target, "utf8"));
 }
-const policy = (settings: Settings, role: Role = "mac") => makePolicy(settings, base, role);
+/** assemble 展开后的完整配置，取测试关心的三段。 */
+const policy = (settings: Settings, role: Role = "mac") => {
+  const d = assemble(settings, base, platforms[role]);
+  return {
+    dns: { rules: d.dns.rules as Array<Record<string, any>> },
+    route: { rules: d.route.rules as Array<Record<string, any>>, rule_set: d.route.rule_set as Array<Record<string, any>> },
+  };
+};
 
 /** 解析宿主 sing-box 可执行文件，供真实门禁子进程使用。 */
 function hostSingBox(): string {
@@ -139,65 +146,49 @@ describe("默认直连链：resolve 排除", () => {
   });
 });
 
-describe("规则自带 dns / quic 策略", () => {
+describe("骨架与 settings 的关系", () => {
   const mutate = (fn: (doc: any) => void) => loadSettings(base, tempSettings(fn));
   const byName = (doc: any, name: string) => doc.rules.find((r: any) => r.name === name);
-  const udp = (p: ReturnType<typeof policy>) => p.route.rules.filter((r) => r.network === "udp");
+  const rejectSets = (p: ReturnType<typeof policy>) => p.route.rules.find((r) => r.action === "reject" && r.rule_set && !r.network)?.rule_set;
+  const tail = (p: ReturnType<typeof policy>) => p.route.rules.filter((r) => r.action === "route" && r.rule_set).map((r) => r.rule_set[0]);
 
-  test("改名与改去向不影响策略：策略跟着规则走", () => {
-    const p = policy(mutate((d) => {
-      byName(d, "Lan").name = "LAN";
-      byName(d, "MyProxy").to = "direct";
-    }));
-    expect(JSON.stringify(p.dns.rules)).toContain("LAN-dns");
-    expect(JSON.stringify(p.dns.rules)).toContain("MyProxy-dns");
-    expect(JSON.stringify(udp(p))).toContain("MyProxy");
-    expect(JSON.stringify(udp(p))).toContain("LAN");
+  test("新增 to: reject 的规则自动进入拦截，不再进入服务段", () => {
+    const p = policy(mutate((d) => { d.rules.push({ name: "Tracking", source: localSource, to: "reject" }); }));
+    expect(rejectSets(p)).toContain("Tracking");
+    expect(tail(p)).not.toContain("Tracking");
   });
 
-  test("去掉 dns / quic 字段：对应规则与伴生声明消失", () => {
-    const p = policy(mutate((d) => {
-      delete byName(d, "MyReject").dns;
-      delete byName(d, "ChinaMax").dns;
-      delete byName(d, "ChinaMax").quic;
-    }));
-    expect(JSON.stringify(p.dns.rules)).not.toContain("MyReject-dns");
-    expect(JSON.stringify(p.dns.rules)).not.toContain("ChinaMax-dns");
-    expect(p.route.rule_set.map((r) => r.tag)).not.toContain("MyReject-dns");
-    expect(JSON.stringify(udp(p))).not.toContain("ChinaMax");
+  test("拦截规则改去向：离开拦截，进入服务段", () => {
+    const p = policy(mutate((d) => { byName(d, "MyReject").to = "proxy"; }));
+    expect(rejectSets(p)).not.toContain("MyReject");
+    expect(tail(p)).toContain("MyReject");
   });
 
-  test("同策略的规则合并为一条，不产生空 rule_set", () => {
-    const p = policy(mutate((d) => {
-      for (const name of ["ChinaMax", "Lan", "cftunnel", "geoip-cn"]) delete byName(d, name).quic;
-      delete byName(d, "MyProxy").quic;
-    }));
-    expect(udp(p)).toHaveLength(1);
-    for (const rule of [...p.route.rules, ...p.dns.rules]) {
-      if (Array.isArray((rule as any).rule_set)) expect((rule as any).rule_set.length).toBeGreaterThan(0);
+  test("新增普通规则按书写顺序追加在服务段末尾", () => {
+    const p = policy(mutate((d) => { d.rules.push({ name: "Last", source: localSource, to: "proxy" }); }));
+    expect(tail(p).at(-1)).toBe("Last");
+  });
+
+  test("平台文件引用的规则被删除或改名：构建失败并点名", () => {
+    for (const name of ["Lan", "MyProxy", "ChinaMax", "MyReject", "MyDirect", "cftunnel", "geoip-cn"]) {
+      expect(() => policy(mutate((d) => { d.rules = d.rules.filter((r: any) => r.name !== name); }))).toThrow(
+        new RegExp(`rule_set 里的 ${name}(-dns)? 既不是`),
+      );
     }
-    const lan = p.dns.rules.filter((r: any) => r.server === "dns-lan" && r.rule_set);
-    expect(lan).toHaveLength(1);
-    expect((lan[0] as any).rule_set).toEqual(["MyDirect-dns", "Lan-dns"]);
   });
 
-  test("删除规则后无残留引用", async () => {
-    const path = tempSettings((d) => {
-      d.rules = d.rules.filter((r: any) => !["MyReject", "MyProxy", "ChinaMax"].includes(r.name));
-    });
-    const cfg = await merged(loadSettings(base, path));
-    const text = JSON.stringify(cfg);
-    for (const tag of ["MyReject-dns", "MyProxy-dns", "ChinaMax-dns", "MyReject", "MyProxy", "ChinaMax"]) {
-      expect(text).not.toContain(`"${tag}`);
+  test("DNS 骨架引用没有域名版的来源：构建失败", () => {
+    expect(() => policy(mutate((d) => { byName(d, "Lan").source = "geoip:cn"; }))).toThrow(/Lan-dns/);
+  });
+
+  test("三个平台的骨架共享同一组顺序契约", async () => {
+    for (const role of ["mac", "ios", "router"] as const) {
+      const cfg = await merged(defaults, role);
+      assertRejectBeforeClashMode(cfg.route.rules);
+      assertMyDirectAndProxyBeforeServices(cfg.route.rules, cfg.outbounds);
+      assertMyProxyQuicBeforeExempt(cfg.route.rules);
+      assertMyProxyDnsBeforeChinaMax(cfg.dns.rules);
     }
-    assertAllRuleSetsDeclared(cfg.route);
-  });
-
-  test("非法取值与无域名版来源报错", () => {
-    expect(() => mutate((d) => { byName(d, "Lan").dns = "nope"; })).toThrow(/dns 无效/);
-    expect(() => mutate((d) => { byName(d, "Lan").quic = "nope"; })).toThrow(/quic 无效/);
-    expect(() => mutate((d) => { byName(d, "geoip-cn").dns = "lan"; })).toThrow(/dns 需要本地 YAML 或 geosite/);
-    expect(() => mutate((d) => { byName(d, "Lan").to = "proxy"; })).toThrow(/quic: allow .*to: direct/);
   });
 });
 
@@ -230,11 +221,7 @@ describe("名称与来源校验", () => {
   });
 
   test("中文名：模板 URL 与编译产物文件名同源", async () => {
-    const dir = tempDir("settings-");
-    writeFileSync(join(dir, "local.yaml"), "rules:\n  - domain_suffix: [example.com]\n");
-    const path = join(dir, "settings.yaml");
-    writeFileSync(path, JSON.stringify({ rules: [{ name: "小米追踪", source: "./local.yaml", to: "proxy" }] }));
-    const settings = loadSettings(base, path);
+    const settings = loadSettings(base, tempSettings((d) => { d.rules.push({ name: "小米追踪", source: localSource, to: "proxy" }); }));
     const p = policy(settings);
     expect(p.route.rule_set.find((r) => r.tag === "小米追踪")?.url.endsWith(`/${artifactName("小米追踪")}.srs`)).toBe(true);
 
@@ -266,12 +253,12 @@ describe("名称与来源校验", () => {
     };
     expectError({ rules: [{ name: "X", source: "https://e.com/x.srs", to: "nowhere" }] }, /规则 X 的去向 nowhere 无效/);
     expectError({ rules: [
-      { name: "X", source: "https://e.com/x.srs", to: "proxy" },
-      { name: "X", source: "https://e.com/y.srs", to: "proxy" },
+      { name: "X", source: "https://e.com/x.srs", to: "direct" },
+      { name: "X", source: "https://e.com/y.srs", to: "direct" },
     ] }, /规则名重复: X/);
-    expectError({ rules: [{ name: "X", source: "./missing.yaml", to: "proxy" }] }, /规则 X 的来源不存在/);
+    expectError({ rules: [{ name: "X", source: "./missing.yaml", to: "direct" }] }, /规则 X 的来源不存在/);
     expectError({ groups: { g: { options: ["proxy"], default: "direct" } }, rules: [] }, /分组 g 的 default direct 不在 options 里/);
-    expectError({ groups: { proxy: { options: ["direct"], default: "direct" } }, rules: [] }, /分组 proxy 与 base.yaml 已有出站同名/);
+    expectError({ groups: { direct: { options: ["proxy"], default: "proxy" } }, rules: [] }, /分组 direct 与 shared.yaml 已有出站同名/);
   });
 });
 
@@ -303,9 +290,8 @@ describe("官方 merge 契约", () => {
 });
 
 describe("改真实 settings → 重建三端 → 完整门禁", () => {
-  test("删除 MyReject 并追加本地 A B 后，三端仍通过语义门禁", async () => {
+  test("追加本地 A B 后，三端仍通过语义门禁", async () => {
     const path = tempSettings((d) => {
-      d.rules = d.rules.filter((r: any) => r.name !== "MyReject");
       d.rules.push({ name: "A B", source: localSource, to: "proxy" });
     });
     const settings = loadSettings(base, path);
@@ -346,19 +332,12 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
       if (rule.source.startsWith(".")) rule.source = resolve(FIXTURES, rule.source);
     }
     const cases: Array<[string, (doc: any) => void]> = [
-      ...["MyReject", "MyDirect", "MyProxy", "Lan", "ChinaMax"].map((tag): [string, (doc: any) => void] => [
+      ...["Facebook", "Gemini", "Adult"].map((tag): [string, (doc: any) => void] => [
         `删除 ${tag}`, (doc) => { doc.rules = doc.rules.filter((rule: any) => rule.name !== tag); },
       ]),
-      ["MyReject 改 proxy", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").to = "proxy"; }],
-      ["Lan 改 proxy", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "Lan"); r.to = "proxy"; delete r.quic; }],
       ["Facebook 改 hk", (doc) => { doc.rules.find((rule: any) => rule.name === "Facebook").to = "hk"; }],
-      // 无域名版的来源不能带 dns 策略，换来源时一并去掉
-      ["MyReject 改远程", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "MyReject"); r.source = "https://example.com/tracking.srs"; delete r.dns; }],
-      ["Lan 改远程", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "Lan"); r.source = "https://example.com/tracking.srs"; delete r.dns; }],
-      ...["Lan", "MyDirect", "MyReject"].map((tag): [string, (doc: any) => void] => [
-        `${tag} 改 IP 清单`, (doc) => { const r = doc.rules.find((rule: any) => rule.name === tag); r.source = "geoip:cn"; delete r.dns; },
-      ]),
-      ["远程来源带查询参数", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "MyReject"); r.source = "http://example.com/tracking.srs?revision=1"; delete r.dns; }],
+      ["新增远程 .srs 进拦截", (doc) => { doc.rules.push({ name: "tracking", source: "https://example.com/tracking.srs", to: "reject" }); }],
+      ["远程来源带查询参数", (doc) => { doc.rules.push({ name: "tracking", source: "http://example.com/tracking.srs?revision=1", to: "reject" }); }],
       ["追加本地 A B", (doc) => { doc.rules.push({ name: "A B", source: localSource, to: "reject" }); }],
       ["追加中文名", (doc) => { doc.rules.push({ name: "小米追踪", source: localSource, to: "proxy" }); }],
     ];

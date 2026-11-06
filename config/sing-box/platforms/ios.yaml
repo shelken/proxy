@@ -1,4 +1,7 @@
-# platforms/ios.yaml — iOS 平台层：TUN 入站、内嵌 Tailscale、本网解析器与部署域应答（原生字段）。
+# ios.yaml — iOS 的完整模板，内嵌 Tailscale，结构与 sing-box 的 JSON 一致（ADR-0010）。
+# { $include: 名字 } 引入 shared.yaml 的共用段，settings.yaml 生成的段名字是 groups、rule-sets、services。
+
+log: { $include: log }
 
 inbounds:
   - type: tun
@@ -21,6 +24,7 @@ endpoints:
     system_interface: false
 
 dns:
+  $include: dns-options
   servers:
     - type: tailscale
       tag: dns-ts
@@ -28,9 +32,31 @@ dns:
       accept_default_resolvers: false
       accept_search_domain: true
     - { type: local, tag: dns-lan }
+    - { $include: dns-servers }
   rules:
     # Peer 的 DNS 查询绕过 route.rules 直接进 dnsRouter，路由层入站拒绝覆盖不到
     - { inbound: [ts-ep], action: reject }
     - { preferred_by: dns-ts, server: dns-ts, disable_optimistic_cache: true }
     - { domain_suffix: [.int.ooooo.space], query_type: [A], action: predefined, answer: ["*. IN A 192.168.69.46"] }
     - { domain_suffix: [int.ooooo.space], action: predefined }
+    - { $include: dns-rules }
+
+http_clients:
+  - { $include: http-clients }
+
+experimental: { $include: experimental }
+
+outbounds:
+  - { $include: outbounds }
+  - { $include: groups }
+
+route:
+  $include: route-options
+  rules:
+    - { inbound: [ts-ep], action: reject }
+    - { $include: route-intake }
+    - { preferred_by: ts-ep, action: route, outbound: ts-ep }
+    - { $include: route-policy }
+    - { $include: services }
+  rule_set:
+    - { $include: rule-sets }

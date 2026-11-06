@@ -153,7 +153,8 @@ describe("DNS 归属契约：底模与 overlay 的分界", () => {
       asArray(r.rule_set).includes("Lan-dns"),
     );
     const source = settings.rules.find((r: any) => r.name === "Lan");
-    if (source?.dns === "lan") {
+    const active = source?.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
+    if (active) {
       expect(lan?.server).toBe("dns-lan");
     } else {
       expect(lan).toBeUndefined();

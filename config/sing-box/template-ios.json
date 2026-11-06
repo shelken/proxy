@@ -60,10 +60,7 @@
         "action": "reject"
       },
       {
-        "rule_set": [
-          "MyDirect-dns",
-          "Lan-dns"
-        ],
+        "rule_set": "Lan-dns",
         "server": "dns-lan",
         "disable_optimistic_cache": true
       },
@@ -73,6 +70,11 @@
           "lan",
           "home.arpa"
         ],
+        "server": "dns-lan",
+        "disable_optimistic_cache": true
+      },
+      {
+        "rule_set": "MyDirect-dns",
         "server": "dns-lan",
         "disable_optimistic_cache": true
       },
@@ -489,19 +491,12 @@
         "outbound": "direct"
       },
       {
-        "rule_set": "Advertising",
-        "action": "reject"
-      },
-      {
-        "rule_set": "Hijacking",
-        "action": "reject"
-      },
-      {
-        "rule_set": "MyReject",
-        "action": "reject"
-      },
-      {
-        "rule_set": "Privacy",
+        "rule_set": [
+          "Advertising",
+          "Hijacking",
+          "MyReject",
+          "Privacy"
+        ],
         "action": "reject"
       },
       {
@@ -695,14 +690,14 @@
       },
       {
         "type": "remote",
-        "tag": "MyDirect-dns",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
+        "tag": "Lan-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
         "update_interval": "24h0m0s"
       },
       {
         "type": "remote",
-        "tag": "Lan-dns",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
+        "tag": "MyDirect-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
         "update_interval": "24h0m0s"
       },
       {

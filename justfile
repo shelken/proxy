@@ -78,8 +78,8 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 # --- 生产底模装配与校验 ---
 # 单入口：一次重建 mac、iOS 与路由器三份底模。
-# 日常维护改 config/sing-box/settings.yaml（规则与分组）；稳定原生字段在 base.yaml，
-# 平台差异在 platforms/。与设置相关的路由/DNS 顺序由 scripts/build-config.ts 的 makePolicy 固定表达。
+# 日常维护改 config/sing-box/settings.yaml（分组与分流）；共用的原生字段在 shared.yaml，
+# 各平台完整的模板在 platforms/，模板里用 $include 引入共用段，由 scripts/build-config.ts 展开。
 # 开发时只跑这一条命令，无需记住各个产物各自怎么生成；
 # 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
@@ -95,7 +95,7 @@ template-build:
         fi
     done
 
-# 校验三份底模与 settings.yaml + base.yaml + platforms/ 一致：重算一遍逐字节比对（CI 同口径）
+# 校验三份底模与 platforms/ + shared.yaml + settings.yaml 一致：重算一遍逐字节比对（CI 同口径）
 template-check:
     bun scripts/build-config.ts --check
 
@@ -112,7 +112,7 @@ check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
 # 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
-# 三份产物都是完整配置，直接 check 产物；产物与源码（settings.yaml + base.yaml + platforms/）的一致性由 just template-check 保证。
+# 三份产物都是完整配置，直接 check 产物；产物与源码（settings.yaml + shared.yaml + platforms/）的一致性由 just template-check 保证。
 # 路由角色引用不到只有 overlay 才有的 tag（`default_domain_resolver` 会被内核判为 not found），
 # 先装配出终态（merge-variant-fixture.sh）再 check。
 check-deprecated:
@@ -163,7 +163,7 @@ check-rust-fast:
 check-rust-test:
     cargo test --workspace --locked
 
-# sing-box 底模：settings.yaml + base.yaml + platforms/ 与三份 template 一致 + 结构 check + 废弃写法 + 模板测试
+# sing-box 底模：settings.yaml + shared.yaml + platforms/ 与三份 template 一致 + 结构 check + 废弃写法 + 模板测试
 check-template:
     @just template-check
     @just check-singbox

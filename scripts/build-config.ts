@@ -1,14 +1,12 @@
 #!/usr/bin/env bun
-// 三份底模装配：settings.yaml（用户规则与分组）+ base.yaml（原生共享字段）+ platforms/（平台原生层）。
-//
-// 输入按 00-platform / 01-base / 02-policy 三个原生文档交给官方 sing-box merge：
-// 数组按文件序拼接，标量取更早文件（已由 build-config.test.ts 的 merge 契约测试验证）。
-// 与设置相关的路由/DNS 规则在 makePolicy 的一个固定顺序里生成，不做字段白名单转抄。
+// 三份底模装配：platforms/*.yaml 是各平台完整的 sing-box 模板（YAML，结构与 JSON 一致），
+// 共用的部分在 shared.yaml、你的分组与分流在 settings.yaml，模板里用 $include 引入。
+// 本文件把 $include 展开成完整配置，再交给官方 sing-box merge 规范化后写出 JSON。
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DNS_MODES, loadBase, loadSettings, RULES_URL, singBoxCommand, type Base, type DnsMode, type QuicMode, type Rule, type Settings } from "./settings.ts";
+import { loadBase, loadSettings, RULES_URL, singBoxCommand, type Base, type Rule, type Settings } from "./settings.ts";
 
 const CONFIG = join(import.meta.dir, "../config/sing-box");
 const OUTPUTS: Record<string, string> = {
@@ -18,143 +16,127 @@ const OUTPUTS: Record<string, string> = {
 };
 
 export type Role = keyof typeof OUTPUTS;
-export type Platform = {
-  inbounds: unknown[];
-  endpoints?: unknown[];
-  dns?: Record<string, unknown>;
-  experimental?: Record<string, unknown>;
-};
+type Rec = Record<string, any>;
+export type Doc = Rec;
 
 const rulesUrl = (artifact: string) => `${RULES_URL}/${artifact}.srs`;
-const ruleSetBlock = (tag: string, url: string) => ({
-  type: "remote",
-  tag,
-  format: "binary",
-  url,
-  update_interval: "1d",
-});
-
-/** 沿 settings 分组与 base selector.default 解析最终默认去向；成环在配置期报错。 */
-function effectiveTo(rule: Rule, settings: Settings, base: Base): string {
-  const seen = new Set<string>();
-  let to = rule.to;
+/** 规则去向沿分组 default 走到底经过的全部名字（含自身）；成环在配置期报错。 */
+function chain(rule: Rule, settings: Settings, base: Base): string[] {
+  const path = [rule.to];
   for (;;) {
-    const next = settings.groups[to]?.default ?? base.outbounds.find((o) => o.tag === to)?.default;
-    if (next === undefined) return to;
-    if (seen.has(to)) throw new Error(`settings.yaml: 去向默认值成环: ${[...seen, to].join(" -> ")}`);
-    seen.add(to);
-    to = next;
+    const at = path[path.length - 1];
+    const next = settings.groups[at]?.default ?? base.outbounds.find((o) => o.tag === at)?.default;
+    if (next === undefined) return path;
+    if (path.includes(next)) throw new Error(`settings.yaml: 去向默认值成环: ${[...path, next].join(" -> ")}`);
+    path.push(next);
   }
 }
 
-// 规则按自己声明的 dns 策略落到对应服务器；同一策略的规则合并成一条，顺序固定：
-// reject → lan（含本网后缀）→ clash direct / PTR → fakeip → direct-cn → 兜底 fakeip。
-// 本网解析器的 tag 在 platforms/ 与设备 overlay 里提供，router 不定义它。
-function policyDns(settings: Settings) {
-  const names = (mode: DnsMode) => settings.rules.filter((r) => r.dns === mode).map((r) => r.name);
-  const sets = (mode: DnsMode) => names(mode).map((n) => `${n}-dns`);
-  const rules: Array<Record<string, any>> = [];
-  const add = (mode: DnsMode, rule: Record<string, any>) => {
-    if (sets(mode).length) rules.push({ ...rule, rule_set: sets(mode) });
-  };
-  add("reject", { action: "reject" });
-  add("lan", { server: "dns-lan", disable_optimistic_cache: true });
-  rules.push({ domain_suffix: ["local", "lan", "home.arpa"], server: "dns-lan", disable_optimistic_cache: true });
-  rules.push({ clash_mode: "direct", server: "dns-lan" });
-  rules.push({ query_type: ["PTR"], server: "dns-lan" });
-  add("fakeip", { query_type: ["A", "AAAA"], server: "dns-fakeip" });
-  add("direct-cn", { server: "dns-direct-cn" });
-  rules.push({ query_type: ["A", "AAAA"], server: "dns-fakeip" });
-  const companions = DNS_MODES.flatMap(names);
-  return { rules, companions };
-}
-
-/** QUIC 守卫：quic: reject 的规则先拒 UDP 443/80，quic: allow 的规则放行直连，其余兜底拒绝。 */
-function quicRules(settings: Settings): Array<Record<string, any>> {
-  const names = (mode: QuicMode) => settings.rules.filter((r) => r.quic === mode).map((r) => r.name);
-  const quic = { network: "udp", port: [443, 80] };
-  const rules: Array<Record<string, any>> = [];
-  if (names("reject").length) rules.push({ ...quic, rule_set: names("reject"), action: "reject", no_drop: true });
-  if (names("allow").length) rules.push({ ...quic, rule_set: names("allow"), action: "route", outbound: "direct" });
-  rules.push({ ...quic, action: "reject", no_drop: true });
-  return rules;
-}
-
-function routeRules(settings: Settings, base: Base, role: Role): Array<Record<string, any>> {
-  const rules: Array<Record<string, any>> = [];
-  // 平台入口守卫：router 的 dns-in 与 iOS 的 ts-ep 都必须在 sniff 之前
-  if (role === "router") rules.push({ inbound: ["dns-in"], action: "hijack-dns" });
-  if (role === "ios") rules.push({ inbound: ["ts-ep"], action: "reject" });
-  rules.push({ action: "sniff", sniffer: ["http", "tls", "quic", "dns", "bittorrent"] });
-  rules.push({ protocol: "dns", action: "hijack-dns" });
-  rules.push({ port: 53, action: "hijack-dns" });
-  // iOS Tailscale 路由排在 DNS 劫持之后、私网直连之前
-  if (role === "ios") rules.push({ preferred_by: "ts-ep", action: "route", outbound: "ts-ep" });
-  rules.push({ ip_is_private: true, action: "route", outbound: "direct" });
-  for (const rule of settings.rules.filter((r) => r.to === "reject")) {
-    rules.push({ rule_set: [rule.name], action: "reject" });
-  }
-  rules.push(...quicRules(settings));
-  rules.push({ clash_mode: "direct", action: "route", outbound: "direct" });
-  rules.push({ clash_mode: "global", action: "route", outbound: "proxy" });
-  rules.push({ protocol: "bittorrent", action: "route", outbound: "torrent" });
-  for (const rule of settings.rules.filter((r) => r.to === "download")) {
-    rules.push({ rule_set: [rule.name], action: "route", outbound: "download" });
-  }
-  const direct = settings.rules.filter((r) => effectiveTo(r, settings, base) === "direct").map((r) => r.name);
-  rules.push(
-    direct.length > 0
-      ? { rule_set: direct, invert: true, action: "resolve", server: "dns-proxy", strategy: "ipv4_only" }
-      : { action: "resolve", server: "dns-proxy", strategy: "ipv4_only" },
-  );
-  for (const rule of settings.rules) {
-    if (rule.to !== "reject" && rule.to !== "download") {
-      rules.push({ rule_set: [rule.name], action: "route", outbound: rule.to });
+/**
+ * 解析平台与 base 里的 rule_set，这是平台文件引入 settings.yaml 的地方：
+ * - 写规则名：引用那条规则，DNS 里还可以写它的 -dns 伴生
+ * - 写去向名（reject、download、direct……）：引入 settings.yaml 里去向落在它的全部规则
+ * 「只有 rule_set 加动作」的规则已经完整路由了所引入的规则，它们不再追加到服务段。
+ */
+function resolveRuleSets(rules: Rec[], settings: Settings, base: Base, claimed: Set<string>, companions: Set<string>): Rec[] {
+  const out: Rec[] = [];
+  for (const rule of rules) {
+    if (rule.rule_set === undefined) {
+      out.push(rule);
+      continue;
     }
+    const plain = Object.keys(rule).every((k) => ["rule_set", "action", "outbound"].includes(k));
+    const names = ([rule.rule_set].flat() as string[]).flatMap((tag) => {
+      if (settings.byName.has(tag)) {
+        if (plain) claimed.add(tag);
+        return [tag];
+      }
+      if (tag.endsWith("-dns") && settings.byName.get(tag.slice(0, -4))?.companion) {
+        companions.add(tag.slice(0, -4));
+        return [tag];
+      }
+      const hit = settings.rules.filter((r) => chain(r, settings, base).includes(tag)).map((r) => r.name);
+      if (hit.length === 0 && !destinations(settings, base).has(tag)) {
+        throw new Error(`rule_set 里的 ${tag} 既不是 settings.yaml 的规则名，也不是去向名`);
+      }
+      if (plain) hit.forEach((n) => claimed.add(n));
+      return hit;
+    });
+    if (names.length) out.push({ ...rule, rule_set: names });
   }
-  return rules;
+  return out;
 }
 
-/** 设置驱动的策略层：route.rules / dns.rules / 设置分组 selector / rule_set 声明。 */
-export function makePolicy(settings: Settings, base: Base, role: Role) {
-  const dns = policyDns(settings);
-  const groups = Object.entries(settings.groups).map(([tag, g]) => ({
-    type: "selector",
-    tag,
-    outbounds: g.options,
-    default: g.default,
-    interrupt_exist_connections: true,
-  }));
-  const companions = dns.companions.map((name) => {
-    const artifact = settings.byName.get(name)!.artifact;
-    return ruleSetBlock(`${name}-dns`, rulesUrl(`${artifact}-dns`));
-  });
-  const mains = settings.rules.map((rule) =>
-    ruleSetBlock(rule.name, rule.kind === "url" ? rule.source : rulesUrl(rule.artifact)),
+const destinations = (settings: Settings, base: Base) =>
+  new Set(["reject", ...base.outbounds.map((o) => o.tag), ...Object.keys(settings.groups)]);
+
+const ruleSetBlock = (tag: string, url: string) => ({ type: "remote", tag, format: "binary", url, update_interval: "1d" });
+
+const isInclude = (x: unknown): x is { $include: string } =>
+  typeof x === "object" && x !== null && !Array.isArray(x) && Object.keys(x).length === 1 && "$include" in x;
+const isObject = (x: unknown): x is Rec => typeof x === "object" && x !== null && !Array.isArray(x);
+
+const deepMerge = (base: Rec, over: Rec): Rec =>
+  Object.fromEntries(
+    [...new Set([...Object.keys(base), ...Object.keys(over)])].map((k) => [
+      k,
+      isObject(base[k]) && isObject(over[k]) ? deepMerge(base[k], over[k]) : (over[k] ?? base[k]),
+    ]),
   );
-  return {
-    dns: { rules: dns.rules },
-    outbounds: groups,
-    route: { rules: routeRules(settings, base, role), rule_set: [...companions, ...mains] },
-  };
+
+/**
+ * 展开 $include：数组里的 { $include: 名字 } 换成那一段的全部元素；对象里的 `$include: 名字`
+ * 把那一段的字段并进来，本地写的同名字段优先。名字不在 frags 里的原样保留，留给下一轮。
+ */
+function include(node: any, frags: Rec): any {
+  if (Array.isArray(node)) {
+    return node.flatMap((x) => (isInclude(x) && x.$include in frags ? include(frags[x.$include], frags) : [include(x, frags)]));
+  }
+  if (!isObject(node)) return node;
+  const { $include, ...rest } = node;
+  const own = Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, include(v, frags)]));
+  return typeof $include === "string" && $include in frags ? deepMerge(include(frags[$include], frags), own) : node.$include ? { $include, ...own } : own;
 }
 
-/** 把平台层、base 层、策略层交给官方 merge；target 为输出文件。 */
-export async function mergeTo(target: string, base: Base, platform: Platform, settings: Settings, role: Role): Promise<void> {
+/** 平台模板展开 shared.yaml 的共用段，再展开 settings.yaml 生成的 groups、rule-sets、services。 */
+export function assemble(settings: Settings, shared: Base, platform: Doc) {
+  const doc = include(platform, shared);
+  const claimed = new Set<string>();
+  const companions = new Set<string>();
+  doc.route.rules = resolveRuleSets(doc.route.rules, settings, shared, claimed, companions);
+  doc.dns.rules = resolveRuleSets(doc.dns.rules, settings, shared, claimed, companions);
+  return include(doc, {
+    groups: Object.entries(settings.groups).map(([tag, { options, ...native }]) => ({
+      type: "selector",
+      tag,
+      outbounds: options,
+      ...native,
+      interrupt_exist_connections: true,
+    })),
+    "rule-sets": [
+      ...[...companions].map((n) => ruleSetBlock(`${n}-dns`, rulesUrl(`${settings.byName.get(n)!.artifact}-dns`))),
+      ...settings.rules.map((r) => ruleSetBlock(r.name, r.kind === "url" ? r.source : rulesUrl(r.artifact))),
+    ],
+    services: settings.rules
+      .filter((r) => !claimed.has(r.name))
+      .map((r) => ({ rule_set: [r.name], action: "route", outbound: r.to })),
+  });
+}
+
+/** 展开后交给官方 sing-box merge 规范化并写出 target。 */
+export async function mergeTo(target: string, shared: Base, platform: Doc, settings: Settings): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "sing-box-input-"));
   try {
-    await writeFile(join(dir, "00-platform.json"), JSON.stringify(platform, null, 2) + "\n");
-    await writeFile(join(dir, "01-base.json"), JSON.stringify(base, null, 2) + "\n");
-    await writeFile(join(dir, "02-policy.json"), JSON.stringify(makePolicy(settings, base, role), null, 2) + "\n");
+    await writeFile(join(dir, "00-template.json"), JSON.stringify(assemble(settings, shared, platform), null, 2) + "\n");
     const proc = Bun.spawnSync([...singBoxCommand(), "merge", target, "-C", dir], { stdio: ["ignore", "ignore", "pipe"] });
-    if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败 (${role}): exit ${proc.exitCode}\n${proc.stderr}`);
+    if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败: exit ${proc.exitCode}\n${proc.stderr}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
 const readPlatform = async (role: Role) =>
-  Bun.YAML.parse(await Bun.file(join(CONFIG, "platforms", `${role}.yaml`)).text()) as Platform;
+  Bun.YAML.parse(await Bun.file(join(CONFIG, "platforms", `${role}.yaml`)).text()) as Doc;
 
 function firstDiff(a: Uint8Array, b: Uint8Array): string | null {
   if (a.length === b.length && a.every((v, i) => v === b[i])) return null;
@@ -176,7 +158,7 @@ if (import.meta.main) {
     const work = await mkdtemp(join(tmpdir(), "sing-box-build-"));
     const target = check ? join(work, "template.json") : join(CONFIG, OUTPUTS[role]);
     try {
-      await mergeTo(target, base, platform, settings, role);
+      await mergeTo(target, base, platform, settings);
       if (!check) {
         console.log(`${OUTPUTS[role]}: 已生成`);
         continue;

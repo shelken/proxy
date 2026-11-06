@@ -1,5 +1,18 @@
 # 固定测试夹具，勿当用户配置：以下分组与规则只服务回归，不随日常 settings.yaml 变更。
+# 自动测速组的公共字段，下面的地区组用 <<: *urltest 引用
+x-urltest: &urltest { type: urltest, url: http://www.gstatic.com/generate_204, interval: 10m0s, tolerance: 50 }
+
 groups:
+  selfhost: { options: ["(?i)hy2.*v6", "(?i)anytls", "(?i)hy2", "(?i)(vps|hy2|selfhost)"] }
+  proxy: { options: ["selfhost", ".*"], default: selfhost }
+  hk: { <<: *urltest, options: ["(?i)(港|HK|Hong)"] }
+  jp: { <<: *urltest, options: ["(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"] }
+  us: { <<: *urltest, options: ["(?i)(美|波特兰|达拉斯|俄勒冈|凤凰城|费利蒙|硅谷|拉斯维加斯|洛杉矶|圣何塞|圣克拉拉|西雅图|芝加哥|US|United States)"] }
+  tw: { <<: *urltest, options: ["(?i)(台|TW|Tai)"] }
+  sg: { <<: *urltest, options: ["(?i)(新加坡|坡|狮城|SG|Singapore)"] }
+  kr: { <<: *urltest, options: ["(?i)(KR|Korea|KOR|首尔|韩|韓)"] }
+  torrent: { options: ["direct", "selfhost", "proxy"], default: direct }
+  download: { options: ["selfhost", "proxy", "direct", ".*"], default: selfhost }
   "gemini":
     options: ["openai", "selfhost", "proxy", "(?i)(日本|川日|东京|大阪|JP|Japan)"]
     default: "openai"
@@ -55,7 +68,6 @@ rules:
   - name: "MyReject"
     source: "./domains.yaml"
     to: "reject"
-    dns: "reject"
   - name: "Privacy"
     source: "./domains.yaml"
     to: "reject"
@@ -65,12 +77,9 @@ rules:
   - name: "MyDirect"
     source: "./domains.yaml"
     to: "direct"
-    dns: "lan"
   - name: "MyProxy"
     source: "./domains.yaml"
     to: "proxy"
-    dns: "fakeip"
-    quic: "reject"
   - name: "Gemini"
     source: "./domains.yaml"
     to: "gemini"
@@ -119,21 +128,15 @@ rules:
   - name: "ChinaMax"
     source: "geosite:cn"
     to: "direct"
-    dns: "direct-cn"
-    quic: "allow"
   - name: "Lan"
     source: "./domains.yaml"
     to: "direct"
-    dns: "lan"
-    quic: "allow"
   - name: "cftunnel"
     source: "./domains.yaml"
     to: "direct"
-    quic: "allow"
   - name: "geoip-cn"
     source: "geoip:cn"
     to: "direct"
-    quic: "allow"
   - name: "Facebook"
     source: "geosite:facebook"
     to: "proxy"
