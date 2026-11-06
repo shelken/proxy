@@ -2,6 +2,7 @@
 
 use crate::assemble::{self, AssembleInput};
 use crate::crypto;
+use crate::kernel;
 use crate::template;
 use axum::{
     Router,
@@ -13,15 +14,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::Read;
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// 订阅响应体单请求上限。
 const MAX_SUB_BODY: usize = 5 * 1024 * 1024;
-
-static REQUEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 解密后的客户端载荷。
 #[derive(Debug)]
@@ -76,26 +73,6 @@ fn parse_payload(plaintext: &[u8]) -> Result<Payload, String> {
     })
 }
 
-/// 请求独立临时目录（进程唯一 + 请求序号），RAII 清理。
-struct TempMergeDir {
-    path: PathBuf,
-}
-
-impl TempMergeDir {
-    fn create() -> Result<Self, String> {
-        let seq = REQUEST_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("sbtools-merge-{}-{seq}", std::process::id()));
-        std::fs::create_dir_all(&path).map_err(|e| format!("创建临时目录失败: {e}"))?;
-        Ok(Self { path })
-    }
-}
-
-impl Drop for TempMergeDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
 /// 复用现有装配管线：sources → 节点全集 → 反回环层 → finalize。
 /// 返回填充好的完整底模 JSON、反回环层（无节点时为 `None`）、实际底模来源。
 ///
@@ -117,8 +94,8 @@ fn assemble_base(
     let nodes = assemble::collect_nodes(&input.sources, &input)?;
 
     let (mut tpl, source) = template::load_template(payload.template_url.as_deref())?;
-    let direct_layer = assemble::generate_node_direct_rule(&nodes, &tpl)
-        .map(|rule| json!({"route": {"rules": [rule]}}));
+    let direct_layer =
+        assemble::generate_node_direct_rule(&nodes).map(|rule| json!({"route": {"rules": [rule]}}));
     assemble::finalize(&mut tpl, nodes)?;
     Ok((tpl, direct_layer, source))
 }
@@ -142,104 +119,6 @@ fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-/// merge 输入层的文件名。**字典序 = 合并优先级**，前缀不是序号而是语义：
-/// 数组按此序拼接（先者在前），标量取先者（first wins）。改名会让覆盖关系静默翻转。
-///
-/// - `00-direct` 反回环直连规则，必须排在所有规则之前（含设备 overlay 的规则）
-/// - `01-overlay` 设备侧覆盖，需压过底模标量
-/// - `02-base` 底模本体
-const LAYER_DIRECT: &str = "00-direct";
-const LAYER_OVERLAY: &str = "01-overlay";
-const LAYER_BASE: &str = "02-base";
-
-/// 调用内核合并各输入层，返回结果 JSON 字符串。
-///
-/// `layers` 是 `(文件名前缀, 内容)` 列表，**其名字的字典序决定合并顺序**：
-/// 数组按文件名字典序拼接、标量取字典序最前的那份（实测，与 `-c` 的 argv 顺序
-/// 无关）。调用方必须按期望优先级给出层名。
-fn run_singbox_merge(dir: &TempMergeDir, layers: &[(&str, &Value)]) -> Result<String, String> {
-    run_singbox_merge_with(&template::resolve_singbox_binary(), dir, layers)
-}
-
-/// merge 实现本体，内核路径由参数注入：测试需要验证「路径不存在时报错指向该路径」
-/// 这条契约，而内联读环境变量无法确定性覆盖（env 是进程全局，并行测试下互相污染）。
-fn run_singbox_merge_with(
-    bin: &std::ffi::OsStr,
-    dir: &TempMergeDir,
-    layers: &[(&str, &Value)],
-) -> Result<String, String> {
-    // 层按文件名字典序生效，调用方必须已按期望顺序给出；这里只按序落盘。
-    let mut args: Vec<String> = Vec::with_capacity(layers.len() * 2);
-    for (name, value) in layers {
-        let path = dir.path.join(format!("{name}.json"));
-        std::fs::write(
-            &path,
-            serde_json::to_vec_pretty(value).map_err(|e| format!("序列化 {name} 失败: {e}"))?,
-        )
-        .map_err(|e| format!("写 {name} 失败: {e}"))?;
-        args.push("-c".into());
-        args.push(path.display().to_string());
-    }
-
-    let result_path = dir.path.join("result.json");
-    let output = std::process::Command::new(bin)
-        .arg("merge")
-        .arg(result_path.display().to_string())
-        .args(&args)
-        .output()
-        .map_err(|e| format!("启动内核失败（{}）: {e}", bin.to_string_lossy()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let brief: String = stderr.lines().take(5).collect::<Vec<_>>().join("; ");
-        return Err(format!("内核 merge 失败: {brief}"));
-    }
-    std::fs::read_to_string(&result_path).map_err(|e| format!("读取合并结果失败: {e}"))
-}
-
-/// 离线校验用：把 overlay 合并到底模上，返回合并结果 JSON。
-///
-/// 与 `handle_sub` 走同一条合并路径（同一套层名与优先级），差别只在没有反回环层
-/// （它需要订阅节点，属运行期数据）。层序不变，故 overlay 与底模的相对优先级一致。
-pub fn merge_overlay(base: &Value, overlay: Option<&Value>) -> Result<Value, String> {
-    let dir = TempMergeDir::create()?;
-    let mut layers: Vec<(&str, &Value)> = Vec::with_capacity(2);
-    if let Some(ov) = overlay {
-        layers.push((LAYER_OVERLAY, ov));
-    }
-    layers.push((LAYER_BASE, base));
-    let text = run_singbox_merge(&dir, &layers)?;
-    serde_json::from_str(&text).map_err(|e| format!("合并结果不是合法 JSON: {e}"))
-}
-
-/// 离线校验用：对配置跑一次内核 `check`（只验语法与引用，不建 TUN、不联网）。
-pub fn kernel_check(cfg: &Value) -> Result<(), String> {
-    let dir = TempMergeDir::create()?;
-    let path = dir.path.join("candidate.json");
-    std::fs::write(
-        &path,
-        serde_json::to_vec_pretty(cfg).map_err(|e| format!("序列化候选配置失败: {e}"))?,
-    )
-    .map_err(|e| format!("写候选配置失败: {e}"))?;
-    let output = std::process::Command::new(template::resolve_singbox_binary())
-        .arg("check")
-        .arg("-c")
-        .arg(path.display().to_string())
-        .output()
-        .map_err(|e| format!("启动内核失败: {e}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let brief: String = stderr
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("\n  ");
-    Err(format!("内核 check 失败:\n  {brief}"))
-}
-
 /// 单次请求完整处理：解密 → 装配 → 合并 → JSON 字符串。
 fn handle_sub(
     secret_key: &crypto::CryptoStaticSecret,
@@ -251,13 +130,13 @@ fn handle_sub(
     // 层名字典序 = 合并优先级：反回环规则优先于一切，overlay 压过底模标量。
     let mut layers: Vec<(&str, &Value)> = Vec::with_capacity(3);
     if let Some(direct) = direct_layer.as_ref() {
-        layers.push((LAYER_DIRECT, direct));
+        layers.push((kernel::LAYER_DIRECT, direct));
     }
     if let Some(overlay) = payload.overlay.as_ref() {
-        layers.push((LAYER_OVERLAY, overlay));
+        layers.push((kernel::LAYER_OVERLAY, overlay));
     }
-    layers.push((LAYER_BASE, &base));
-    let merged = run_singbox_merge(&TempMergeDir::create()?, &layers)?;
+    layers.push((kernel::LAYER_BASE, &base));
+    let merged = kernel::merge_layers(&layers)?;
     Ok((merged, source))
 }
 
@@ -401,31 +280,7 @@ pub fn run(port: u16) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// e2e 测试的内核门禁：返回 `Some(原因)` 表示应跳过，`None` 表示可用。
-    ///
-    /// 显式设置了 `SING_BOX` 却不可用时**不跳过**：沙箱里内核装在
-    /// `/opt/proxy-test/bin` 不在 PATH，全靠这个变量定位，静默跳过会让 e2e
-    /// 覆盖率降级且无人察觉——那正是这些测试存在的意义。只有「未显式设置
-    /// 且 PATH 上也没有」才允许跳过（开发机上没装内核的常见情形）。
-    fn kernel_unavailable_reason() -> Option<String> {
-        let bin = template::resolve_singbox_binary();
-        let explicit = std::env::var_os("SING_BOX").is_some_and(|v| !v.is_empty());
-        let probe = std::process::Command::new(&bin).arg("version").output();
-
-        let detail = match probe {
-            Ok(o) if o.status.success() => return None,
-            Ok(o) => format!("退出码 {:?}", o.status.code()),
-            Err(e) => format!("无法执行: {e}"),
-        };
-
-        assert!(
-            !explicit,
-            "SING_BOX 已显式设为 {bin:?} 但不可用（{detail}）：\
-             这是环境配置错误，不能按「内核缺失」跳过",
-        );
-        Some(format!("{bin:?} 不可用（{detail}）"))
-    }
+    use crate::kernel::kernel_unavailable_reason;
 
     #[test]
     fn parse_payload_roundtrip() {
@@ -521,60 +376,6 @@ mod tests {
         );
     }
 
-    /// 内核路径不存在时，报错必须含该路径本身。
-    /// 报错只说「启动失败」会让沙箱里调试的人先去怀疑 PATH，
-    /// 而真正的问题在 SING_BOX 指向了一个不存在的文件。
-    #[test]
-    fn missing_kernel_error_names_the_path() {
-        let dir = TempMergeDir::create().unwrap();
-        let base = json!({"outbounds": []});
-        let layers = [(LAYER_BASE, &base)];
-        let bad = std::ffi::OsString::from("/nonexistent/definitely-not-a-kernel");
-        let err = run_singbox_merge_with(&bad, &dir, &layers).unwrap_err();
-        assert!(
-            err.contains("/nonexistent/definitely-not-a-kernel"),
-            "报错须含注入的内核路径，实际: {err}"
-        );
-    }
-
-    /// 内核 merge 失败时，报错须带上其 stderr 摘要（截前 5 行）。
-    /// 否则用户只看到「失败」而不知道是 overlay 语法错还是底模冲突。
-    #[test]
-    #[cfg(unix)]
-    fn kernel_failure_surfaces_stderr() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = TempMergeDir::create().unwrap();
-        let script_dir =
-            std::env::temp_dir().join(format!("sbtools-badbox-{}", std::process::id()));
-        std::fs::create_dir_all(&script_dir).unwrap();
-        let bad = script_dir.join("bad-kernel");
-        std::fs::write(
-            &bad,
-            "#!/bin/sh\necho 'ERROR: overlay 非法字段 xxx' >&2\nexit 1\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        let base = json!({"outbounds": []});
-        let layers = [(LAYER_BASE, &base)];
-        // 其他测试线程 fork 时会让刚写完的脚本短暂处于「文本文件忙」，Linux 上直接执行会失败，重试即可
-        let err = (0..20)
-            .map(|_| run_singbox_merge_with(bad.as_os_str(), &dir, &layers).unwrap_err())
-            .find(|e| {
-                let busy = e.contains("Text file busy");
-                if busy {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                !busy
-            })
-            .expect("重试后仍是文本文件忙");
-        assert!(
-            err.contains("overlay 非法字段"),
-            "应带上 stderr 摘要，实际: {err}"
-        );
-        let _ = std::fs::remove_dir_all(&script_dir);
-    }
-
     #[test]
     fn wrong_key_returns_403_semantics() {
         let (sk_hex, _) = crypto::generate_keypair_hex();
@@ -657,13 +458,12 @@ mod tests {
 
     /// 按生产同样的层名与顺序合并（`handle_sub` 的层构造逻辑）。
     fn merge_layers_for_test(direct: &Value, overlay: Option<&Value>, base: &Value) -> Value {
-        let dir = TempMergeDir::create().expect("临时目录");
-        let mut layers: Vec<(&str, &Value)> = vec![(LAYER_DIRECT, direct)];
+        let mut layers: Vec<(&str, &Value)> = vec![(kernel::LAYER_DIRECT, direct)];
         if let Some(ov) = overlay {
-            layers.push((LAYER_OVERLAY, ov));
+            layers.push((kernel::LAYER_OVERLAY, ov));
         }
-        layers.push((LAYER_BASE, base));
-        let merged = run_singbox_merge(&dir, &layers).expect("合并成功");
+        layers.push((kernel::LAYER_BASE, base));
+        let merged = kernel::merge_layers(&layers).expect("合并成功");
         serde_json::from_str(&merged).expect("合法 JSON")
     }
 
@@ -721,87 +521,5 @@ mod tests {
         let v2: Value = serde_json::from_str(&merged2).unwrap();
         assert_eq!(v2["log"]["level"], json!("debug"));
         assert!(v2["inbounds"].is_array(), "底模入站不应被 overlay 抹掉");
-    }
-
-    /// 守 merge 的标量优先级契约：层名字典序在前的层，标量胜出。
-    ///
-    /// 这条依赖内核的实测行为（`server.rs` 里 LAYER_* 的注释所述），一旦内核
-    /// 改变语义，overlay 覆盖底模标量会静默失效。没有断言时只能靠线上现象发现。
-    #[test]
-    fn overlay_scalar_wins_over_base_after_merge() {
-        if let Some(reason) = kernel_unavailable_reason() {
-            eprintln!("skip: {reason}");
-            return;
-        }
-        let base = json!({
-            "log": {"level": "warn"},
-            "route": {"final": "proxy", "default_domain_resolver": {"server": "dns-direct-cn"}}
-        });
-        let overlay = json!({
-            "log": {"level": "debug"},
-            "route": {"default_domain_resolver": {"server": "dns-lan"}}
-        });
-        let merged = merge_overlay(&base, Some(&overlay)).expect("合并应成功");
-        assert_eq!(
-            merged["log"]["level"],
-            json!("debug"),
-            "overlay 标量应压过底模"
-        );
-        // 内核 merge 会把 `{server: x}` 规范成裸字符串（实测），直接钉住生效值。
-        // 不写「对象或字符串都接受」的兜底：那等于把这条测试要守的优先级放宽成
-        // 两种形态之一，覆盖失效时也能通过。
-        assert_eq!(
-            merged["route"]["default_domain_resolver"],
-            json!("dns-lan"),
-            "overlay 的 resolver 应胜出并规范成裸字符串"
-        );
-
-        // 无 overlay 时底模标量保留，且同样被规范化——这是上面断言的对照面：
-        // 若合并方向反了，这里会拿到 dns-direct-cn 而不是 dns-lan
-        let merged_base = merge_overlay(&base, None).expect("无 overlay 合并应成功");
-        assert_eq!(merged_base["log"]["level"], json!("warn"));
-        assert_eq!(
-            merged_base["route"]["default_domain_resolver"],
-            json!("dns-direct-cn"),
-            "无 overlay 时应保留底模的 resolver"
-        );
-    }
-
-    /// 守 merge 的「同名 tag 不可覆盖」契约，并钉住 1.14.3 起的新语义。
-    ///
-    /// 结构合并本身不看 tag 语义：同名 `dns.servers` 在合并产物里**两条并存**，
-    /// 不会互相覆盖。1.14.2 及以前运行期是「后来者替换先到者」，表现为 `02-base`
-    /// 静默胜出；1.14.3 起建 DNS 传输时直接报 `duplicate DNS server tag`。
-    ///
-    /// 方向与 `overlay_scalar_wins_over_base_after_merge` 相反，这正是「一个字典序
-    /// 无法同时满足标量覆盖与按 tag 覆盖」的证据：若用 overlay 按 tag 换底模的 DNS
-    /// server，本 pin 版本下产出的配置**起不来**，devices 拿到的是一个坏订阅。
-    #[test]
-    fn duplicate_dns_server_tag_is_rejected_not_overridden() {
-        if let Some(reason) = kernel_unavailable_reason() {
-            eprintln!("skip: {reason}");
-            return;
-        }
-        let base = json!({
-            "dns": {
-                "servers": [{"type": "udp", "tag": "shared", "server": "192.0.2.53"}],
-                "final": "shared"
-            }
-        });
-        let overlay = json!({
-            "dns": {"servers": [{"type": "udp", "tag": "shared", "server": "198.51.100.53"}]}
-        });
-
-        let merged = merge_overlay(&base, Some(&overlay)).expect("结构合并应成功");
-        let servers = merged["dns"]["servers"].as_array().expect("servers 为数组");
-        assert_eq!(servers.len(), 2, "同名 tag 在合并产物中并存，而非互相覆盖");
-        assert_eq!(servers[0]["tag"], json!("shared"));
-        assert_eq!(servers[1]["tag"], json!("shared"));
-
-        let err = kernel_check(&merged).expect_err("同名 tag 的产物不得通过 check");
-        assert!(
-            err.contains("duplicate DNS server tag"),
-            "内核应拒绝同名 DNS server tag，实际: {err}"
-        );
     }
 }

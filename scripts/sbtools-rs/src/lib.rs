@@ -1,7 +1,7 @@
 //! sbtools 库根 — 客户端加密编码 + 服务端原生合并。
 //!
 //! 模块边界：crypto（X25519+AES-GCM）、config（YAML 校验与加密）、assemble（节点装配）、
-//! server（HTTP + 官方 sing-box merge）、template（内嵌底模或远程下载）。
+//! server（HTTP 服务）、kernel（内核 CLI：定位、merge、check）、template（内嵌底模或远程下载）。
 
 // 整个 crate 零警告 + 严格规则：本地与 CI 用同一套门禁，避免「本地能过 CI 不过」
 #![forbid(unsafe_code)]
@@ -23,6 +23,7 @@ pub mod assemble;
 pub mod clashapi;
 pub mod config;
 pub mod crypto;
+pub mod kernel;
 pub mod node;
 pub mod paths;
 pub mod redact;

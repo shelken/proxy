@@ -33,7 +33,7 @@ flowchart LR
     SFM -->|"GET /sub?d="| S
 
     subgraph SVR["服务端 (容器)"]
-        S["server.rs<br/>tiny_http"] --> D["decrypt_payload"]
+        S["server.rs<br/>axum"] --> D["decrypt_payload"]
         D --> P["parse_payload<br/>subs / nodes / overlay"]
         P --> A["assemble_base"]
         A --> M["sing-box merge"]
@@ -182,7 +182,7 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 复现
 
 ```bash
-# 层名与顺序的唯一定义处：server.rs 的 LAYER_DIRECT / LAYER_OVERLAY / LAYER_BASE
+# 层名与顺序的唯一定义处：kernel.rs 的 LAYER_DIRECT / LAYER_OVERLAY / LAYER_BASE
 d=$(mktemp -d)
 printf '%s' '{"dns":{"servers":[{"type":"udp","tag":"shared","server":"9.9.9.9"}]}}' \
   > "$d/01-overlay.json"
@@ -331,7 +331,8 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | `scripts/sbtools-rs/src/main.rs` | CLI 入口与 `encode` / `server` / `trace` / `check` / `config` / `logs` / `keygen` / `version` 分派 |
 | `scripts/sbtools-rs/src/config.rs` | YAML 结构、校验、overlay 安全审查、公钥拉取、URL 组装与本地观测配置加载 |
 | `scripts/sbtools-rs/src/crypto.rs` | X25519 + HKDF + AES-GCM 加解密，私钥推导公钥 |
-| `scripts/sbtools-rs/src/server.rs` | HTTP 路由、载荷解析、CLI 合并调用、临时目录 RAII |
+| `scripts/sbtools-rs/src/server.rs` | HTTP 路由、载荷解析、装配编排 |
+| `scripts/sbtools-rs/src/kernel.rs` | 内核 CLI：定位 `sing-box`、各层 merge、离线 check |
 | `scripts/sbtools-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
 | `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
 | `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
