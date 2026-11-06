@@ -12,10 +12,19 @@ export const CUSTOM_DIR = resolve(import.meta.dir, "../config/rules/custom");
 export const RULES_URL = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox";
 
 export type RuleKind = "local" | "geosite" | "geoip" | "url";
+/** 规则的 DNS 策略：这类查询由对应服务器应答（reject 为直接拒绝）。 */
+export const DNS_MODES = ["reject", "lan", "fakeip", "direct-cn"] as const;
+export type DnsMode = (typeof DNS_MODES)[number];
+/** 规则的 QUIC 策略：allow 放行直连，reject 拒绝以降级 TCP。 */
+export const QUIC_MODES = ["allow", "reject"] as const;
+export type QuicMode = (typeof QUIC_MODES)[number];
+
 export interface Rule {
   name: string;
   source: string;
   to: string;
+  dns?: DnsMode;
+  quic?: QuicMode;
   kind: RuleKind;
   artifact: string;
   /** 本地 YAML 与 geosite 才产出 `-dns` 域名版伴生 */
@@ -117,6 +126,16 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
       throw new Error(`settings.yaml: ${at} 的去向 ${rule.to} 无效（可用: ${[...destinations].join(", ")}）`);
     }
     const kind = classify(rule.source, at);
+    if (rule.dns !== undefined) {
+      if (!DNS_MODES.includes(rule.dns)) throw new Error(`settings.yaml: ${at} 的 dns 无效（可用: ${DNS_MODES.join(", ")}）`);
+      if (kind !== "local" && kind !== "geosite") throw new Error(`settings.yaml: ${at} 的 dns 需要本地 YAML 或 geosite 来源（geoip 与外部 .srs 无域名版）`);
+    }
+    if (rule.quic !== undefined && !QUIC_MODES.includes(rule.quic)) {
+      throw new Error(`settings.yaml: ${at} 的 quic 无效（可用: ${QUIC_MODES.join(", ")}）`);
+    }
+    if (rule.quic === "allow" && rule.to !== "direct") {
+      throw new Error(`settings.yaml: ${at} 的 quic: allow 把 UDP 放行到直连，要求 to: direct`);
+    }
     const localPath =
       kind === "local" ? (isAbsolute(rule.source) ? rule.source : resolve(dirname(path), rule.source)) : undefined;
     if (localPath && !existsSync(localPath)) {
@@ -127,6 +146,8 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
       name: rule.name,
       source: rule.source,
       to: rule.to,
+      dns: rule.dns,
+      quic: rule.quic,
       kind,
       artifact: artifactName(rule.name),
       companion: kind === "local" || kind === "geosite",

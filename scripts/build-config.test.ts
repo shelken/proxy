@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { inactiveAnchors, makePolicy, mergeTo, type Platform, type Role } from "./build-config.ts";
+import { makePolicy, mergeTo, type Platform, type Role } from "./build-config.ts";
 import { artifactName, loadBase, loadSettings, singBoxCommand, type Settings } from "./settings.ts";
 import { buildOne } from "./rules-compile.ts";
 import {
@@ -139,29 +139,49 @@ describe("默认直连链：resolve 排除", () => {
   });
 });
 
-describe("改去向/删除：关联随设置撤销", () => {
+describe("规则自带 dns / quic 策略", () => {
   const mutate = (fn: (doc: any) => void) => loadSettings(base, tempSettings(fn));
   const byName = (doc: any, name: string) => doc.rules.find((r: any) => r.name === name);
+  const udp = (p: ReturnType<typeof policy>) => p.route.rules.filter((r) => r.network === "udp");
 
-  test("MyReject 改 proxy：DNS reject 与伴生声明消失", () => {
-    const p = policy(mutate((d) => { byName(d, "MyReject").to = "proxy"; }));
+  test("改名与改去向不影响策略：策略跟着规则走", () => {
+    const p = policy(mutate((d) => {
+      byName(d, "Lan").name = "LAN";
+      byName(d, "MyProxy").to = "direct";
+    }));
+    expect(JSON.stringify(p.dns.rules)).toContain("LAN-dns");
+    expect(JSON.stringify(p.dns.rules)).toContain("MyProxy-dns");
+    expect(JSON.stringify(udp(p))).toContain("MyProxy");
+    expect(JSON.stringify(udp(p))).toContain("LAN");
+  });
+
+  test("去掉 dns / quic 字段：对应规则与伴生声明消失", () => {
+    const p = policy(mutate((d) => {
+      delete byName(d, "MyReject").dns;
+      delete byName(d, "ChinaMax").dns;
+      delete byName(d, "ChinaMax").quic;
+    }));
     expect(JSON.stringify(p.dns.rules)).not.toContain("MyReject-dns");
-    expect(p.route.rule_set.map((r) => r.tag)).not.toContain("MyReject-dns");
-  });
-
-  test("ChinaMax 改 proxy：QUIC 直连豁免与 DNS 直连解析消失", () => {
-    const p = policy(mutate((d) => { byName(d, "ChinaMax").to = "proxy"; }));
-    expect(JSON.stringify(p.route.rules.filter((r) => r.network === "udp"))).not.toContain("ChinaMax");
     expect(JSON.stringify(p.dns.rules)).not.toContain("ChinaMax-dns");
+    expect(p.route.rule_set.map((r) => r.tag)).not.toContain("MyReject-dns");
+    expect(JSON.stringify(udp(p))).not.toContain("ChinaMax");
   });
 
-  test("MyProxy 改 direct：QUIC 拒绝与 fakeip 解析消失", () => {
-    const p = policy(mutate((d) => { byName(d, "MyProxy").to = "direct"; }));
-    expect(JSON.stringify(p.route.rules.filter((r) => r.network === "udp"))).not.toContain("MyProxy");
-    expect(JSON.stringify(p.dns.rules)).not.toContain("MyProxy-dns");
+  test("同策略的规则合并为一条，不产生空 rule_set", () => {
+    const p = policy(mutate((d) => {
+      for (const name of ["ChinaMax", "Lan", "cftunnel", "geoip-cn"]) delete byName(d, name).quic;
+      delete byName(d, "MyProxy").quic;
+    }));
+    expect(udp(p)).toHaveLength(1);
+    for (const rule of [...p.route.rules, ...p.dns.rules]) {
+      if (Array.isArray((rule as any).rule_set)) expect((rule as any).rule_set.length).toBeGreaterThan(0);
+    }
+    const lan = p.dns.rules.filter((r: any) => r.server === "dns-lan" && r.rule_set);
+    expect(lan).toHaveLength(1);
+    expect((lan[0] as any).rule_set).toEqual(["MyDirect-dns", "Lan-dns"]);
   });
 
-  test("删除 MyReject/MyProxy/ChinaMax 后无残留引用", async () => {
+  test("删除规则后无残留引用", async () => {
     const path = tempSettings((d) => {
       d.rules = d.rules.filter((r: any) => !["MyReject", "MyProxy", "ChinaMax"].includes(r.name));
     });
@@ -173,33 +193,11 @@ describe("改去向/删除：关联随设置撤销", () => {
     assertAllRuleSetsDeclared(cfg.route);
   });
 
-  test("四直连全改 proxy 不产生空 rule_set", () => {
-    const p = policy(mutate((d) => {
-      for (const name of ["ChinaMax", "Lan", "cftunnel", "geoip-cn"]) byName(d, name).to = "proxy";
-    }));
-    for (const rule of [...p.route.rules, ...p.dns.rules]) {
-      if (Array.isArray((rule as any).rule_set)) expect((rule as any).rule_set.length).toBeGreaterThan(0);
-    }
-  });
-});
-
-describe("策略锚点：缺失或改去向要有提示", () => {
-  const mutate = (fn: (doc: any) => void) => loadSettings(base, tempSettings(fn));
-
-  test("默认设置没有未生效的锚点", () => {
-    expect(inactiveAnchors(defaults)).toEqual([]);
-  });
-
-  test("改名与改去向各自给出带规则名的提示", () => {
-    const warnings = inactiveAnchors(
-      mutate((d) => {
-        d.rules.find((r: any) => r.name === "Lan").name = "LAN";
-        d.rules.find((r: any) => r.name === "MyProxy").to = "direct";
-      }),
-    );
-    expect(warnings).toHaveLength(2);
-    expect(warnings.find((w) => w.includes("Lan"))).toContain("不在设置里");
-    expect(warnings.find((w) => w.includes("MyProxy"))).toContain("direct");
+  test("非法取值与无域名版来源报错", () => {
+    expect(() => mutate((d) => { byName(d, "Lan").dns = "nope"; })).toThrow(/dns 无效/);
+    expect(() => mutate((d) => { byName(d, "Lan").quic = "nope"; })).toThrow(/quic 无效/);
+    expect(() => mutate((d) => { byName(d, "geoip-cn").dns = "lan"; })).toThrow(/dns 需要本地 YAML 或 geosite/);
+    expect(() => mutate((d) => { byName(d, "Lan").to = "proxy"; })).toThrow(/quic: allow .*to: direct/);
   });
 });
 
@@ -352,14 +350,15 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
         `删除 ${tag}`, (doc) => { doc.rules = doc.rules.filter((rule: any) => rule.name !== tag); },
       ]),
       ["MyReject 改 proxy", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").to = "proxy"; }],
-      ["Lan 改 proxy", (doc) => { doc.rules.find((rule: any) => rule.name === "Lan").to = "proxy"; }],
+      ["Lan 改 proxy", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "Lan"); r.to = "proxy"; delete r.quic; }],
       ["Facebook 改 hk", (doc) => { doc.rules.find((rule: any) => rule.name === "Facebook").to = "hk"; }],
-      ["MyReject 改远程", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").source = "https://example.com/tracking.srs"; }],
-      ["Lan 改远程", (doc) => { doc.rules.find((rule: any) => rule.name === "Lan").source = "https://example.com/tracking.srs"; }],
+      // 无域名版的来源不能带 dns 策略，换来源时一并去掉
+      ["MyReject 改远程", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "MyReject"); r.source = "https://example.com/tracking.srs"; delete r.dns; }],
+      ["Lan 改远程", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "Lan"); r.source = "https://example.com/tracking.srs"; delete r.dns; }],
       ...["Lan", "MyDirect", "MyReject"].map((tag): [string, (doc: any) => void] => [
-        `${tag} 改 IP 清单`, (doc) => { doc.rules.find((rule: any) => rule.name === tag).source = "geoip:cn"; },
+        `${tag} 改 IP 清单`, (doc) => { const r = doc.rules.find((rule: any) => rule.name === tag); r.source = "geoip:cn"; delete r.dns; },
       ]),
-      ["远程来源带查询参数", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").source = "http://example.com/tracking.srs?revision=1"; }],
+      ["远程来源带查询参数", (doc) => { const r = doc.rules.find((rule: any) => rule.name === "MyReject"); r.source = "http://example.com/tracking.srs?revision=1"; delete r.dns; }],
       ["追加本地 A B", (doc) => { doc.rules.push({ name: "A B", source: localSource, to: "reject" }); }],
       ["追加中文名", (doc) => { doc.rules.push({ name: "小米追踪", source: localSource, to: "proxy" }); }],
     ];

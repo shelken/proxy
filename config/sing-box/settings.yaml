@@ -7,10 +7,13 @@
 #             name    规则名，同时是产物文件名与 sing-box rule_set tag
 #             source  规则来源：本地 YAML（相对本文件）/ geosite:x / geoip:x / 外部 .srs URL
 #             to      去向：reject / direct / proxy / 本文件或 base 里的出站/分组名
-#
-# 这 7 个规则名被 DNS 与 QUIC 规则按名字引用，且 to 必须保持如下约定；
-# 改名、删除或改去向不会报错，只会省略依赖它的规则（构建时打印 WARN）：
-#   MyReject→reject  Lan/MyDirect/ChinaMax/cftunnel/geoip-cn→direct  MyProxy→proxy
+#             dns     可选，DNS 策略（需本地 YAML 或 geosite 来源）：
+#                       reject     查询直接拒绝
+#                       lan        交给本网解析器，不用乐观缓存
+#                       fakeip     A/AAAA 一律返回 fakeip，先于 direct-cn 匹配
+#                       direct-cn  交给国内直连解析器
+#             quic    可选，UDP 443/80 策略：reject 拒绝以降级 TCP，allow 放行直连；
+#                     两者都不写的规则，其 QUIC 由末尾兜底拒绝
 
 groups:
   gemini:
@@ -69,6 +72,7 @@ rules:
   - name: MyReject
     source: ../rules/custom/MyReject.yaml
     to: reject
+    dns: reject
   - name: Privacy
     source: ../rules/custom/Privacy.yaml
     to: reject
@@ -80,12 +84,15 @@ rules:
   - name: MyDirect
     source: ../rules/custom/MyDirect.yaml
     to: direct
+    dns: lan
   - name: MySelfhost
     source: ../rules/custom/MySelfhost.yaml
     to: selfhost
   - name: MyProxy
     source: ../rules/custom/MyProxy.yaml
     to: proxy
+    dns: fakeip
+    quic: reject
 
   - { name: Gemini, source: ../rules/custom/Gemini.yaml, to: gemini }
   - { name: OpenAI, source: ../rules/custom/OpenAI.yaml, to: openai }
@@ -104,10 +111,10 @@ rules:
   - { name: PayPal, source: geosite:paypal, to: paypal }
   - { name: Apple, source: geosite:apple, to: apple }
 
-  - { name: ChinaMax, source: geosite:cn, to: direct }
-  - { name: Lan, source: ../rules/custom/Lan.yaml, to: direct }
-  - { name: cftunnel, source: ../rules/custom/cftunnel.yaml, to: direct }
-  - { name: geoip-cn, source: geoip:cn, to: direct }
+  - { name: ChinaMax, source: geosite:cn, to: direct, dns: direct-cn, quic: allow }
+  - { name: Lan, source: ../rules/custom/Lan.yaml, to: direct, dns: lan, quic: allow }
+  - { name: cftunnel, source: ../rules/custom/cftunnel.yaml, to: direct, quic: allow }
+  - { name: geoip-cn, source: geoip:cn, to: direct, quic: allow }
 
   - { name: Facebook, source: geosite:facebook, to: proxy }
   - { name: Instagram, source: geosite:instagram, to: proxy }

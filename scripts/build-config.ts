@@ -8,7 +8,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { artifactName, loadBase, loadSettings, RULES_URL, singBoxCommand, type Base, type Rule, type Settings } from "./settings.ts";
+import { DNS_MODES, loadBase, loadSettings, RULES_URL, singBoxCommand, type Base, type DnsMode, type QuicMode, type Rule, type Settings } from "./settings.ts";
 
 const CONFIG = join(import.meta.dir, "../config/sing-box");
 const OUTPUTS: Record<string, string> = {
@@ -47,76 +47,36 @@ function effectiveTo(rule: Rule, settings: Settings, base: Base): string {
   }
 }
 
-/**
- * 策略锚点：DNS 与 QUIC 规则按名字引用这些规则，并要求固定去向。
- * 改名或改去向后相关规则会被省略，由 inactiveAnchors 提示。
- */
-const ANCHORS: Record<string, string> = {
-  MyReject: "reject",
-  Lan: "direct",
-  MyDirect: "direct",
-  MyProxy: "proxy",
-  ChinaMax: "direct",
-  cftunnel: "direct",
-  "geoip-cn": "direct",
-};
-
-/** 锚点当前是否生效；dns 还要求该清单能产出 -dns 伴生。 */
-function active(name: string, settings: Settings, dns = false): boolean {
-  const rule = settings.byName.get(name);
-  return rule !== undefined && rule.to === ANCHORS[name] && (!dns || rule.companion);
-}
-
-/** 未生效的锚点说明：规则不在设置里，或去向不是约定值。 */
-export function inactiveAnchors(settings: Settings): string[] {
-  return Object.entries(ANCHORS).flatMap(([name, to]) => {
-    const rule = settings.byName.get(name);
-    if (!rule) return [`规则 ${name} 不在设置里，依赖它的 DNS/QUIC 规则已省略`];
-    if (rule.to !== to) return [`规则 ${name} 的去向是 ${rule.to}，约定为 ${to}，依赖它的 DNS/QUIC 规则已省略`];
-    return [];
-  });
-}
-
-// 与设置相关的 DNS 规则：固定顺序，link 段按当前设置解析，其余原样保留。
-const DNS_POLICY: Array<Record<string, any> & { link?: string }> = [
-  { link: "MyReject", action: "reject" },
-  { link: "Lan", server: "dns-lan", disable_optimistic_cache: true },
-  { domain_suffix: ["local", "lan", "home.arpa"], server: "dns-lan", disable_optimistic_cache: true },
-  { link: "MyDirect", server: "dns-lan", disable_optimistic_cache: true },
-  { clash_mode: "direct", server: "dns-lan" },
-  { query_type: ["PTR"], server: "dns-lan" },
-  { link: "MyProxy", query_type: ["A", "AAAA"], server: "dns-fakeip" },
-  { link: "ChinaMax", server: "dns-direct-cn" },
-  { query_type: ["A", "AAAA"], server: "dns-fakeip" },
-];
-
+// 规则按自己声明的 dns 策略落到对应服务器；同一策略的规则合并成一条，顺序固定：
+// reject → lan（含本网后缀）→ clash direct / PTR → fakeip → direct-cn → 兜底 fakeip。
+// 本网解析器的 tag 在 platforms/ 与设备 overlay 里提供，router 不定义它。
 function policyDns(settings: Settings) {
+  const names = (mode: DnsMode) => settings.rules.filter((r) => r.dns === mode).map((r) => r.name);
+  const sets = (mode: DnsMode) => names(mode).map((n) => `${n}-dns`);
   const rules: Array<Record<string, any>> = [];
-  const companions: string[] = [];
-  for (const { link, ...rule } of DNS_POLICY) {
-    if (link === undefined) rules.push(rule);
-    else if (active(link, settings, true)) {
-      companions.push(link);
-      rules.push({ ...rule, rule_set: [`${link}-dns`] });
-    }
-  }
+  const add = (mode: DnsMode, rule: Record<string, any>) => {
+    if (sets(mode).length) rules.push({ ...rule, rule_set: sets(mode) });
+  };
+  add("reject", { action: "reject" });
+  add("lan", { server: "dns-lan", disable_optimistic_cache: true });
+  rules.push({ domain_suffix: ["local", "lan", "home.arpa"], server: "dns-lan", disable_optimistic_cache: true });
+  rules.push({ clash_mode: "direct", server: "dns-lan" });
+  rules.push({ query_type: ["PTR"], server: "dns-lan" });
+  add("fakeip", { query_type: ["A", "AAAA"], server: "dns-fakeip" });
+  add("direct-cn", { server: "dns-direct-cn" });
+  rules.push({ query_type: ["A", "AAAA"], server: "dns-fakeip" });
+  const companions = DNS_MODES.flatMap(names);
   return { rules, companions };
 }
 
-/**
- * QUIC 守卫：代理清单先拒 UDP 443/80，国内直连清单放行，其余兜底拒绝。
- * 直连放行只认这四个锚点；其他 to: direct 的规则不在其中，其 UDP 443/80 会被兜底拒绝。
- */
+/** QUIC 守卫：quic: reject 的规则先拒 UDP 443/80，quic: allow 的规则放行直连，其余兜底拒绝。 */
 function quicRules(settings: Settings): Array<Record<string, any>> {
+  const names = (mode: QuicMode) => settings.rules.filter((r) => r.quic === mode).map((r) => r.name);
+  const quic = { network: "udp", port: [443, 80] };
   const rules: Array<Record<string, any>> = [];
-  if (active("MyProxy", settings)) {
-    rules.push({ network: "udp", port: [443, 80], rule_set: ["MyProxy"], action: "reject", no_drop: true });
-  }
-  const direct = ["ChinaMax", "Lan", "cftunnel", "geoip-cn"].filter((name) => active(name, settings));
-  if (direct.length) {
-    rules.push({ network: "udp", port: [443, 80], rule_set: direct, action: "route", outbound: "direct" });
-  }
-  rules.push({ network: "udp", port: [443, 80], action: "reject", no_drop: true });
+  if (names("reject").length) rules.push({ ...quic, rule_set: names("reject"), action: "reject", no_drop: true });
+  if (names("allow").length) rules.push({ ...quic, rule_set: names("allow"), action: "route", outbound: "direct" });
+  rules.push({ ...quic, action: "reject", no_drop: true });
   return rules;
 }
 
@@ -208,7 +168,6 @@ function firstDiff(a: Uint8Array, b: Uint8Array): string | null {
 if (import.meta.main) {
   const base = loadBase();
   const settings = loadSettings(base);
-  for (const warning of inactiveAnchors(settings)) console.warn(`WARN: ${warning}`);
   const check = Bun.argv.includes("--check");
   let failed = false;
 
