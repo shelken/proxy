@@ -177,6 +177,48 @@ describe("骨架与 settings 的关系", () => {
     }
   });
 
+  /** 用改过的 shared.yaml 段装配 mac，检查展开规则对原生写法变化的反应。 */
+  const withShared = (patch: Record<string, any>, settings: Settings = defaults) =>
+    assemble(settings, { ...base, ...patch } as any, platforms.mac);
+  const policyRules = () => base["route-policy"] as Array<Record<string, any>>;
+  const services = (cfg: any) => cfg.route.rules.filter((r: any) => r.action === "route" && r.rule_set).map((r: any) => r.rule_set[0]);
+
+  test("拦截规则加上动作参数（no_drop）仍认领，不重复追加", () => {
+    const cfg = withShared({ "route-policy": policyRules().map((r) => (r.action === "reject" && r.rule_set ? { ...r, no_drop: true } : r)) });
+    expect(services(cfg)).not.toContain("MyReject");
+    expect(cfg.route.rules.some((r: any) => r.outbound === "reject")).toBe(false);
+  });
+
+  test("DNS 规则引用路由规则的同名规则，不会让它丢掉服务路由", () => {
+    const cfg = withShared({ "dns-rules": [{ rule_set: ["PayPal"], action: "reject" }, ...(base["dns-rules"] as any[])] });
+    expect(services(cfg)).toContain("PayPal");
+  });
+
+  test("logical 规则里的 -dns 伴生也被检查和声明", () => {
+    const logical = { type: "logical", mode: "and", rules: [{ rule_set: ["Privacy-dns"] }, { query_type: ["A"] }], action: "reject" };
+    const cfg = withShared({ "dns-rules": [logical, ...(base["dns-rules"] as any[])] });
+    expect(cfg.route.rule_set.map((r: any) => r.tag)).toContain("Privacy-dns");
+    expect(() => withShared({ "dns-rules": [{ ...logical, rules: [{ rule_set: ["Nope-dns"] }] }] })).toThrow(/Nope-dns/);
+  });
+
+  test("规则名与去向名同名时报歧义，不静默改变引入范围", () => {
+    const settings = mutate((d) => { d.rules.push({ name: "direct", source: localSource, to: "direct" }); });
+    expect(() => assemble(settings, base, platforms.mac)).toThrow(/既是规则名又是去向名/);
+  });
+
+  test("selector 没写 default：沿首个候选解析去向链", () => {
+    const settings = mutate((d) => { delete d.groups.paypal.default; });
+    const cfg = assemble(settings, base, platforms.mac);
+    const resolve = cfg.route.rules.find((r: any) => r.action === "resolve");
+    expect(resolve.rule_set).toContain(settings.rules.find((r) => r.to === "paypal")!.name);
+  });
+
+  test("模板把规则直接送往 direct 时，规则自己的去向必须是 direct", () => {
+    expect(() => assemble(mutate((d) => { byName(d, "Lan").to = "proxy"; }), base, platforms.mac)).toThrow(
+      /规则 Lan 的去向是 proxy，但模板把它直接送往 direct/,
+    );
+  });
+
   test("DNS 骨架引用没有域名版的来源：构建失败", () => {
     expect(() => policy(mutate((d) => { byName(d, "Lan").source = "geoip:cn"; }))).toThrow(/Lan-dns/);
   });
@@ -335,6 +377,8 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
       ...["Facebook", "Gemini", "Adult"].map((tag): [string, (doc: any) => void] => [
         `删除 ${tag}`, (doc) => { doc.rules = doc.rules.filter((rule: any) => rule.name !== tag); },
       ]),
+      ["MyReject 改 proxy（DNS 拦截由 shared.yaml 固定）", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").to = "proxy"; }],
+      ["MyDirect 改 proxy", (doc) => { doc.rules.find((rule: any) => rule.name === "MyDirect").to = "proxy"; }],
       ["Facebook 改 hk", (doc) => { doc.rules.find((rule: any) => rule.name === "Facebook").to = "hk"; }],
       ["新增远程 .srs 进拦截", (doc) => { doc.rules.push({ name: "tracking", source: "https://example.com/tracking.srs", to: "reject" }); }],
       ["远程来源带查询参数", (doc) => { doc.rules.push({ name: "tracking", source: "http://example.com/tracking.srs?revision=1", to: "reject" }); }],

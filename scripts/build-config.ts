@@ -20,12 +20,18 @@ type Rec = Record<string, any>;
 export type Doc = Rec;
 
 const rulesUrl = (artifact: string) => `${RULES_URL}/${artifact}.srs`;
-/** 规则去向沿分组 default 走到底经过的全部名字（含自身）；成环在配置期报错。 */
+const known = (tag: string, settings: Settings, base: Base) => tag in settings.groups || base.outbounds.some((o) => o.tag === tag);
+
+/** 规则去向沿分组默认候选走到底经过的全部名字（含自身）；成环在配置期报错。selector 没写 default 时内核选首个候选。 */
 function chain(rule: Rule, settings: Settings, base: Base): string[] {
   const path = [rule.to];
   for (;;) {
     const at = path[path.length - 1];
-    const next = settings.groups[at]?.default ?? base.outbounds.find((o) => o.tag === at)?.default;
+    const group = settings.groups[at];
+    const first = group?.type === undefined || group.type === "selector" ? group?.options[0] : undefined;
+    const next = group
+      ? (group.default ?? (first !== undefined && known(first, settings, base) ? first : undefined))
+      : base.outbounds.find((o) => o.tag === at)?.default;
     if (next === undefined) return path;
     if (path.includes(next)) throw new Error(`settings.yaml: 去向默认值成环: ${[...path, next].join(" -> ")}`);
     path.push(next);
@@ -33,38 +39,37 @@ function chain(rule: Rule, settings: Settings, base: Base): string[] {
 }
 
 /**
- * 解析平台与 base 里的 rule_set，这是平台文件引入 settings.yaml 的地方：
- * - 写规则名：引用那条规则，DNS 里还可以写它的 -dns 伴生
+ * 解析平台与 shared.yaml 里的 rule_set，这是模板引入 settings.yaml 的地方：
+ * - 写规则名：引用那条规则，DNS 里还可以写它的 -dns 伴生；规则送往的 outbound 必须在它的去向链上
  * - 写去向名（reject、download、direct……）：引入 settings.yaml 里去向落在它的全部规则
- * 「只有 rule_set 加动作」的规则已经完整路由了所引入的规则，它们不再追加到服务段。
+ * 传入 claimed 时（路由规则），不带 invert 的去向名引入的规则记入 claimed，不再追加到服务段。
+ * logical 规则的子规则同样检查，但不认领。
  */
-function resolveRuleSets(rules: Rec[], settings: Settings, base: Base, claimed: Set<string>, companions: Set<string>): Rec[] {
-  const out: Rec[] = [];
-  for (const rule of rules) {
-    if (rule.rule_set === undefined) {
-      out.push(rule);
-      continue;
-    }
-    const plain = Object.keys(rule).every((k) => ["rule_set", "action", "outbound"].includes(k));
+function resolveRuleSets(rules: Rec[], settings: Settings, base: Base, companions: Set<string>, claimed?: Set<string>): Rec[] {
+  const dests = destinations(settings, base);
+  return rules.map((rule) => {
+    const children = Array.isArray(rule.rules) ? resolveRuleSets(rule.rules, settings, base, companions) : undefined;
+    if (rule.rule_set === undefined) return children ? { ...rule, rules: children } : rule;
     const names = ([rule.rule_set].flat() as string[]).flatMap((tag) => {
-      if (settings.byName.has(tag)) {
-        if (plain) claimed.add(tag);
+      const own = settings.byName.get(tag);
+      if (own) {
+        if (dests.has(tag)) throw new Error(`rule_set 里的 ${tag} 既是规则名又是去向名，请改规则名`);
+        if (rule.outbound && !rule.invert && !chain(own, settings, base).includes(rule.outbound)) {
+          throw new Error(`规则 ${tag} 的去向是 ${own.to}，但模板把它直接送往 ${rule.outbound}`);
+        }
         return [tag];
       }
       if (tag.endsWith("-dns") && settings.byName.get(tag.slice(0, -4))?.companion) {
         companions.add(tag.slice(0, -4));
         return [tag];
       }
+      if (!dests.has(tag)) throw new Error(`rule_set 里的 ${tag} 既不是 settings.yaml 的规则名，也不是去向名`);
       const hit = settings.rules.filter((r) => chain(r, settings, base).includes(tag)).map((r) => r.name);
-      if (hit.length === 0 && !destinations(settings, base).has(tag)) {
-        throw new Error(`rule_set 里的 ${tag} 既不是 settings.yaml 的规则名，也不是去向名`);
-      }
-      if (plain) hit.forEach((n) => claimed.add(n));
+      if (claimed && !rule.invert) hit.forEach((n) => claimed.add(n));
       return hit;
     });
-    if (names.length) out.push({ ...rule, rule_set: names });
-  }
-  return out;
+    return names.length ? { ...rule, rule_set: names } : null;
+  }).filter((r): r is Rec => r !== null);
 }
 
 const destinations = (settings: Settings, base: Base) =>
@@ -103,8 +108,8 @@ export function assemble(settings: Settings, shared: Base, platform: Doc) {
   const doc = include(platform, shared);
   const claimed = new Set<string>();
   const companions = new Set<string>();
-  doc.route.rules = resolveRuleSets(doc.route.rules, settings, shared, claimed, companions);
-  doc.dns.rules = resolveRuleSets(doc.dns.rules, settings, shared, claimed, companions);
+  doc.route.rules = resolveRuleSets(doc.route.rules, settings, shared, companions, claimed);
+  doc.dns.rules = resolveRuleSets(doc.dns.rules, settings, shared, companions);
   return include(doc, {
     groups: Object.entries(settings.groups).map(([tag, { options, ...native }]) => ({
       type: "selector",

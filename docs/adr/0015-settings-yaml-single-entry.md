@@ -19,7 +19,7 @@
 - `$include` 有两种写法：数组里的 `- { $include: 名字 }` 换成这一段的全部元素，对象里的 `$include: 名字` 把这一段的字段并进来，模板里的同名字段优先。`settings.yaml` 生成的三段是 `groups`、`rule-sets`、`services`
 - `settings.yaml` 只有 `groups` 与 `rules{name,source,to}`。所有出站分组，包括 `selfhost`、`proxy`、地区组、`torrent`、`download`，都在 `groups` 里，客户端面板显示的顺序就是 `groups` 的书写顺序。接口不再增加字段，除非是日常常用的
 - `rule_set` 里写规则名，引用 `settings.yaml` 的那条规则，DNS 里还可以写它的 `-dns` 伴生，伴生的声明自动生成。写去向名（`reject`、`download`、`direct`）则引入去向落在它的全部规则，`direct` 沿分组默认值解析到最终直连。引用不存在的名字时构建报错并点名
-- 「只有 `rule_set` 加动作」的规则已完整路由了所引入的规则，其余规则按 `settings.yaml` 的顺序追加在 `services`
+- 路由规则里不带 `invert` 的去向名引入的规则，不再追加到 `services`，其余规则按 `settings.yaml` 的顺序追加。按名字把规则直接送往某个 outbound 时，构建检查它的去向链经默认值落在这个 outbound 上，规则名与去向名同名时报歧义，`selector` 没写 `default` 时沿首个候选解析
 - `route-policy` 里的 QUIC 直连名单与 DNS 规则按名字引用具体规则，名字写在 YAML 里，不在代码里
 
 ## Consequences

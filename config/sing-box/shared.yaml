@@ -64,7 +64,8 @@ route-options:
 # 路由规则分两段，各平台可以在两段之间插入自己的规则。顺序即匹配顺序：
 # rule_set 写规则名，是引用 settings.yaml 的那条规则；写去向名（reject、download、direct），
 # 是引入 settings.yaml 里去向落在它的全部规则（direct 沿分组默认值解析到最终直连）；
-# 「只有 rule_set 加动作」的规则已完整路由了所引入的规则，其余规则由 services 追加在最后。
+# 路由规则里不带 invert 的去向名，引入的规则不再重复路由，其余规则由 services 追加在最后；
+# 按名字把规则直接送往某个 outbound 时，规则自己的去向必须经默认值落在这个 outbound 上，否则构建报错。
 route-intake:
   - { action: sniff, sniffer: [http, tls, quic, dns, bittorrent] }
   - { protocol: dns, action: hijack-dns }

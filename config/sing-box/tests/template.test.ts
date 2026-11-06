@@ -127,13 +127,8 @@ describe("template.json structural verification", () => {
   test("routes Lan, local domain suffixes, and PTR queries to local system DNS", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
-    const source = settings.rules.find((r) => r.name === "Lan");
-    const active = source?.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
-    if (active) {
-      expect(lanRule?.server).toBe("dns-lan");
-    } else {
-      expect(lanRule).toBeUndefined();
-    }
+    // shared.yaml 固定引用 Lan-dns，settings 里没有 Lan 时构建本身就会失败
+    expect(lanRule?.server).toBe("dns-lan");
 
     const suffixRule = rules.find((r) => r.domain_suffix?.includes("local"));
     expect(suffixRule).toBeDefined();
@@ -146,16 +141,9 @@ describe("template.json structural verification", () => {
     expect(ptrRule.server).toBe("dns-lan");
   });
 
-  test("个人域规则集走系统 DNS 且排在 FakeIP 之前（存在且为直连时）", () => {
+  test("个人域规则集走系统 DNS 且排在 FakeIP 之前", () => {
     const rules = template.dns?.rules ?? [];
-    const source = settings.rules.find((r) => r.name === "MyDirect");
-    const active = source && source.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
-    if (!active) {
-      // 删除/改向/外部来源（无伴生）时不得残留 DNS 引用
-      expect(zoneRule).toBeUndefined();
-      return;
-    }
     expect(zoneRule).toBeDefined();
     const zoneIndex = rules.indexOf(zoneRule);
     // 必须是 dns-lan：局域网内由路由器应答真实内网 IP，
@@ -333,23 +321,21 @@ describe("template.json structural verification", () => {
     assertMyDirectAndProxyBeforeServices(template.route?.rules ?? [], template.outbounds ?? []);
   });
 
-  test("DNS 层拦截只引用去向为 reject 的清单，且排在 FakeIP 之前", () => {
+  test("DNS 层拦截引用的都是 settings 里的规则，且排在 FakeIP 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
     const rejects = dnsRules.filter((r: { action?: string }) => r.action === "reject");
-    // 拦截清单必须仍在设置里且去向为 reject；删掉或改向时这里也应随之无拦截规则
+    // 拦截的 -dns 伴生必须对应 settings 里的规则；DNS 拦截由 shared.yaml 固定，不随 to 变化
     for (const rule of rejects) {
       for (const tag of asArray((rule as { rule_set?: string | string[] }).rule_set)) {
         const source = settings.rules.find((r) => r.name === tag.replace(/-dns$/, ""));
-        expect(source?.to).toBe("reject");
+        expect(source).toBeDefined();
       }
     }
     const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
     expect(fakeipIndex).toBeGreaterThan(-1);
     for (const rule of rejects) expect(dnsRules.indexOf(rule)).toBeLessThan(fakeipIndex);
-    // 历史行为守卫：默认设置里 MyReject 是本地拒绝清单（有伴生），DNS 层必须拦住它
-    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject" && !/^(https?:\/\/|geoip:)/.test(r.source))) {
-      expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
-    }
+    // 历史行为守卫：MyReject 是本地拒绝清单（有伴生），DNS 层必须拦住它
+    expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
   });
 
   test("BT 仅按协议嗅探分流，默认直连而非固定出站", () => {
