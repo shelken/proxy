@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // settings.yaml 的唯一规范化输入：解析、校验、本地路径解析、产物命名与碰撞检测。
 // build-config（装配底模）与 rules-compile（编译规则产物）都取同一份模型，
-// 避免两套解析/命名/路径解释（PR #153 审查）。
+// 避免两套解析/命名/路径解释。
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -71,10 +71,10 @@ function classify(source: string, at: string): RuleKind {
     }
     return "url";
   }
-  if (source.startsWith("geosite:") || source.startsWith("geoip:")) {
-    const geo = geoTarget(source);
-    if (!geo) throw new Error(`settings.yaml: ${at} 的来源格式无效（geosite:x / geoip:x）: ${source}`);
-    return geo.kind;
+  const geo = geoTarget(source);
+  if (geo) return geo.kind;
+  if (/^geo(site|ip):/.test(source)) {
+    throw new Error(`settings.yaml: ${at} 的来源格式无效（geosite:x / geoip:x）: ${source}`);
   }
   return "local";
 }

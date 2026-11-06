@@ -19,5 +19,4 @@ inbounds:
   - { type: direct, tag: dns-in, listen: "::", listen_port: 53 }
 
 experimental:
-  clash_api: { external_controller: 0.0.0.0:9090, external_ui: ui, default_mode: rule }
-  cache_file: { enabled: true, path: cache.db, store_fakeip: true, store_dns: true }
+  clash_api: { external_controller: 0.0.0.0:9090 }

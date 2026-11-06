@@ -186,8 +186,8 @@ export async function mergeTo(target: string, base: Base, platform: Platform, se
     await writeFile(join(dir, "00-platform.json"), JSON.stringify(platform, null, 2) + "\n");
     await writeFile(join(dir, "01-base.json"), JSON.stringify(base, null, 2) + "\n");
     await writeFile(join(dir, "02-policy.json"), JSON.stringify(makePolicy(settings, base, role), null, 2) + "\n");
-    const proc = Bun.spawnSync([...singBoxCommand(), "merge", target, "-C", dir], { stdio: ["ignore", "inherit", "inherit"] });
-    if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败 (${role}): exit ${proc.exitCode}`);
+    const proc = Bun.spawnSync([...singBoxCommand(), "merge", target, "-C", dir], { stdio: ["ignore", "ignore", "pipe"] });
+    if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败 (${role}): exit ${proc.exitCode}\n${proc.stderr}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

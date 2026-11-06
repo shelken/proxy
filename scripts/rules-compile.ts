@@ -360,7 +360,7 @@ export function findRule(settings: Settings, target: string): Rule {
   return hit;
 }
 
-export function runBuild(options: { all?: boolean; tag?: string }): number {
+export function runBuild(options: { all?: boolean; tag?: string }): void {
   const settings = loadSettings(loadBase());
   const orphans = orphanCustomLists(settings.rules);
   if (orphans.length > 0) {
@@ -378,7 +378,6 @@ export function runBuild(options: { all?: boolean; tag?: string }): number {
     else console.log(`mirrored ${rule.name} <- ${rule.source}`);
   }
   console.log(`done: built=${targets.length}`);
-  return 0;
 }
 
 if (import.meta.main) {
@@ -387,5 +386,5 @@ if (import.meta.main) {
     console.error("用法: bun scripts/rules-compile.ts build --all | build <name>");
     process.exit(2);
   }
-  process.exit(runBuild(rest.includes("--all") ? { all: true } : { tag: rest.find((a) => !a.startsWith("-")) }));
+  runBuild(rest.includes("--all") ? { all: true } : { tag: rest.find((a) => !a.startsWith("-")) });
 }
