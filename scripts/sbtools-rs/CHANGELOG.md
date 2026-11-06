@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/shelken/proxy/compare/v0.7.4...v0.8.0) - 2026-11-06
+
+### Added
+
+- *(sing-box)* 固化 Loon 手写分流规则 ([#137](https://github.com/shelken/proxy/pull/137))
+
+### Fixed
+
+- *(sing-box)* 路由角色的 DNS 归属交给设备侧，53 端口交回路由规则 ([#151](https://github.com/shelken/proxy/pull/151))
+- *(sbtools)* 按请求汇总未支持节点参数并修正 HTTP 验收 ([#140](https://github.com/shelken/proxy/pull/140))
+
+### Other
+
+- *(sbtools)* trace 报告改为结论行加因果链 ([#156](https://github.com/shelken/proxy/pull/156))
+- *(scripts)* 同一件事收进一个 module，删除零使用字段 ([#155](https://github.com/shelken/proxy/pull/155))
+- *(sbtools)* 假内核脚本遇到「文本文件忙」时重试，修复 CI 偶发失败
+- *(sbtools)* 移除节点域名二次解析 ([#139](https://github.com/shelken/proxy/pull/139))
+- *(sbtools)* 钉住同名 tag 不可覆盖的内核语义
+
 ## [0.7.4](https://github.com/shelken/proxy/compare/v0.7.3...v0.7.4) - 2026-10-23
 
 ### Added
