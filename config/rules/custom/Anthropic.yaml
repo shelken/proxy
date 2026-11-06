@@ -20,6 +20,8 @@ rules:
   - ip_cidr:
       # ARIN 归属 Anthropic 的整段，含官方给客户端的入口段 160.79.104.0/23、2607:6bc0::/48
       - 160.79.104.0/21,no-resolve
+      - 153.61.224.0/22,no-resolve
+      - 153.61.208.0/20,no-resolve
       - 2607:6bc0::/32,no-resolve
   # sing-box 端无法表达（编译时忽略并告警），Mihomo/Loon 端按 ASN 兜底
   - ip_asn:
