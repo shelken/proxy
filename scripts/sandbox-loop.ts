@@ -224,8 +224,8 @@ function relevantDiff(from: string, to: string): string {
  * 才暴露成 `parse rule-set: open ...: no such file or directory`，报错点离根因
  * （没跑全量构建）很远。这里按底模声明的 tag 当场核对，缺了就直说要先构建。
  *
- * 与 `just rules-check` 的区别：那条校验清单与底模是否一致，这条只问「本地产物
- * 是否齐到能喂给内核」，两者互补。
+ * 与 `just template-check` 的区别：那条校验 settings/base/platforms 与三份底模是否一致，
+ * 这条只问「本地产物是否齐到能喂给内核」，两者互补。
  */
 function verifyLocalArtifacts(): void {
   const templatePath = resolve(import.meta.dir, "../config/sing-box/template.json");
@@ -263,9 +263,9 @@ function pushToGuest(): void {
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
-    cp ${REPO_IN_GUEST}/config/sing-box/modules.yaml ${WORK}/modules.yaml
-    cp -r ${REPO_IN_GUEST}/config/sing-box/fragments ${WORK}/fragments
-    # tests/ 整目录在 VM 内跑，变体结构测试还要读各自的底模与 modules.yaml 的 role 注册
+    cp ${REPO_IN_GUEST}/config/sing-box/base.yaml ${WORK}/base.yaml
+    cp ${REPO_IN_GUEST}/config/sing-box/settings.yaml ${WORK}/settings.yaml
+    # tests/ 整目录在 VM 内跑，结构测试要读同目录的 base.yaml / settings.yaml（生成真源）
     cp ${REPO_IN_GUEST}/config/sing-box/template-ios.json ${WORK}/template-ios.json
     cp ${REPO_IN_GUEST}/config/sing-box/template-router.json ${WORK}/template-router.json
     cp -r ${REPO_IN_GUEST}/config/sing-box/tests/. ${WORK}/tests/

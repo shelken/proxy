@@ -1,0 +1,150 @@
+# base.yaml — 三份底模共享的稳定部分：DNS、协议守卫、基础路由与固定优先级。
+#
+# 用户日常只改 settings.yaml；本文件描述内部机制，除非明确知道后果否则不要动。
+# `slot:` / `platform:` 标记由 scripts/build-config.ts 展开，展开位置就是首匹配顺序：
+#   reject 段在一切分流之前，download 段在 BT 之后、resolve 之前，rest 段尊重 settings 顺序。
+# 本文件引用的清单名（rule_set、DNS 伴生、resolve 排除）必须在 settings.yaml 里声明，
+# 否则构建报错，避免产物引用未声明的 tag。
+
+# 本仓库发布规则产物的地址：settings 里以本地路径 / geosite: / geoip: 声明的规则从这里取 .srs
+rule_set_url: https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/{tag}.srs
+
+log:
+  level: info
+
+# DNS 规则引用的域名版伴生规则集，声明顺序固定（先于全部业务清单声明）
+dns_rule_sets: [Lan-dns, MyDirect-dns, MyReject-dns, MyProxy-dns, ChinaMax-dns]
+
+# v4 解析排除清单的固定部分；生成时追加 settings 里默认直连的规则与分组
+resolve_exclude: [ChinaMax, Lan, MyDirect, cftunnel, geoip-cn]
+
+dns:
+  servers:
+    - { type: udp, tag: dns-direct-cn, server: 223.5.5.5 }
+    - type: https
+      tag: dns-proxy
+      server: 1.1.1.1
+      detour: dns-auto
+      tls: { enabled: true, server_name: cloudflare-dns.com }
+    - { type: fakeip, tag: dns-fakeip, inet4_range: 198.18.0.0/15 }
+  rules:
+    - { rule_set: [MyReject-dns], action: reject }
+    - { rule_set: [Lan-dns], server: dns-lan, disable_optimistic_cache: true }
+    - { domain_suffix: [local, lan, home.arpa], server: dns-lan, disable_optimistic_cache: true }
+    - { rule_set: [MyDirect-dns], server: dns-lan, disable_optimistic_cache: true }
+    - { clash_mode: direct, server: dns-lan }
+    - { query_type: [PTR], server: dns-lan }
+    - { rule_set: [MyProxy-dns], query_type: [A, AAAA], server: dns-fakeip }
+    - { rule_set: [ChinaMax-dns], server: dns-direct-cn }
+    - { query_type: [A, AAAA], server: dns-fakeip }
+  strategy: prefer_ipv4
+  optimistic: true
+  final: dns-proxy
+
+http_clients:
+  - { tag: rule-set-dl, detour: rule-set-dl-group }
+
+experimental:
+  clash_api: { external_controller: 127.0.0.1:9090, external_ui: ui, default_mode: rule }
+  cache_file: { enabled: true, path: cache.db, store_fakeip: true, store_dns: true }
+
+outbounds:
+  - { type: direct, tag: direct }
+  - type: urltest
+    tag: dns-auto
+    outbounds: ["(?i)(vps|hy2|selfhost)", "(?i)(港|HK|Hong)", "(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)", "(?i)(新加坡|坡|狮城|SG|Singapore)"]
+    url: https://www.gstatic.com/generate_204
+    interval: 1m
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: rule-set-dl-group
+    outbounds: ["(?i)anytls", ".*"]
+    url: https://www.gstatic.com/generate_204
+    interval: 1m
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: selector
+    tag: selfhost
+    outbounds: ["(?i)hy2.*v6", "(?i)anytls", "(?i)hy2", "(?i)(vps|hy2|selfhost)"]
+    interrupt_exist_connections: true
+  - type: selector
+    tag: proxy
+    outbounds: [selfhost, ".*"]
+    default: selfhost
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: hk
+    outbounds: ["(?i)(港|HK|Hong)"]
+    url: http://www.gstatic.com/generate_204
+    interval: 10m0s
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: jp
+    outbounds: ["(?i)(日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"]
+    url: http://www.gstatic.com/generate_204
+    interval: 10m0s
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: us
+    outbounds: ["(?i)(美|波特兰|达拉斯|俄勒冈|凤凰城|费利蒙|硅谷|拉斯维加斯|洛杉矶|圣何塞|圣克拉拉|西雅图|芝加哥|US|United States)"]
+    url: http://www.gstatic.com/generate_204
+    interval: 10m0s
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: tw
+    outbounds: ["(?i)(台|TW|Tai)"]
+    url: http://www.gstatic.com/generate_204
+    interval: 10m0s
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: sg
+    outbounds: ["(?i)(新加坡|坡|狮城|SG|Singapore)"]
+    url: http://www.gstatic.com/generate_204
+    interval: 10m0s
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: urltest
+    tag: kr
+    outbounds: ["(?i)(KR|Korea|KOR|首尔|韩|韓)"]
+    url: http://www.gstatic.com/generate_204
+    interval: 10m0s
+    tolerance: 50
+    interrupt_exist_connections: true
+  - type: selector
+    tag: torrent
+    outbounds: [direct, selfhost, proxy]
+    default: direct
+    interrupt_exist_connections: true
+  - type: selector
+    tag: download
+    outbounds: [selfhost, proxy, direct, ".*"]
+    default: selfhost
+    interrupt_exist_connections: true
+
+route:
+  auto_detect_interface: true
+  final: proxy
+  default_domain_resolver: { server: dns-lan }
+  default_http_client: rule-set-dl
+  rules:
+    - { platform: head }
+    - { action: sniff, sniffer: [http, tls, quic, dns, bittorrent] }
+    - { protocol: dns, action: hijack-dns }
+    - { port: 53, action: hijack-dns }
+    - { platform: hijack }
+    - { ip_is_private: true, action: route, outbound: direct }
+    - { slot: reject }
+    - { network: udp, port: [443, 80], rule_set: [MyProxy], action: reject, no_drop: true }
+    - { network: udp, port: [443, 80], rule_set: [ChinaMax, Lan, cftunnel, geoip-cn], action: route, outbound: direct }
+    - { network: udp, port: [443, 80], action: reject, no_drop: true }
+    - { clash_mode: direct, action: route, outbound: direct }
+    - { clash_mode: global, action: route, outbound: proxy }
+    - { protocol: bittorrent, action: route, outbound: torrent }
+    - { slot: download }
+    - { slot: resolve }
+    - { slot: rest }

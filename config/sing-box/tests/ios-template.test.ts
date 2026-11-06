@@ -9,15 +9,6 @@ import {
   assertMyProxyQuicBeforeExempt,
   assertRejectBeforeClashMode,
 } from "./lib/contracts.ts";
-import {
-  MAC_ORDER,
-  applyPatch,
-  assertFragmentDir,
-  assertOrder,
-  assertRoleOrder,
-  roleKeys,
-  type VariantPatch,
-} from "./lib/manifest.ts";
 
 const load = async (name: string) =>
   JSON.parse(await Bun.file(resolve(import.meta.dir, "..", name)).text());
@@ -55,37 +46,18 @@ export const assertMagicDns = (dns: Record<string, any>) => {
   expect(server?.endpoint).toBe("ts-ep");
 };
 
-// iOS 的差异面：inbounds 换成 iOS 版，另加 4 个 Tailscale 片段（全在 fragments/ios 下）。
-// 插入锚点就是顺序约束：入站拒绝早于 sniff 与 DNS 劫持，Tailscale 路由晚于 sniff，
-// endpoint 落在 dns 段之后、路由全局属性之前——与主线产物的数组顺序逐条对应。
-export const IOS_DIFF: VariantPatch = {
-  fragments: [
-    "ios/inbounds.json",
-    "ios/tailscale-dns.json",
-    "ios/tailscale-endpoint.json",
-    "ios/tailscale-inbound-reject.json",
-    "ios/tailscale-route.json",
-  ],
-  replace: [{ from: "fragment:base/inbounds.json", to: "fragment:ios/inbounds.json" }],
-  insertAfter: [
-    { anchor: "fragment:ios/inbounds.json", items: ["fragment:ios/tailscale-dns.json"] },
-    { anchor: "catalog:dns", items: ["fragment:ios/tailscale-endpoint.json"] },
-    {
-      anchor: "fragment:base/route-globals.json",
-      items: ["fragment:ios/tailscale-inbound-reject.json"],
-    },
-    {
-      anchor: "fragment:base/sniff-and-dns-hijack.json",
-      items: ["fragment:ios/tailscale-route.json"],
-    },
-  ],
-};
+// iOS 的差异面：inbounds 换成 iOS 版，另加 Tailscale 片段（入站拒绝、endpoint、DNS、路由）。
+// 顺序约束就是产物里的位置：入站拒绝早于 sniff 与 DNS 劫持，Tailscale 路由晚于 sniff、早于私网直连。
 
 // 内核 merge 会省略取默认值的布尔字段（false），断言按默认值对待。
 describe("template-ios.json 结构契约（ADR-0010）", () => {
   test("通过 sing-box check", () => {
     const proc = Bun.spawnSync([SING_BOX, "check", "-c", resolve(import.meta.dir, "../template-ios.json")]);
     expect(proc.exitCode).toBe(0);
+  });
+
+  test("log 级别为 info", () => {
+    expect(ios.log).toEqual({ level: "info" });
   });
 
   test("ts-ep 入站拒绝是第一条路由规则：Tailnet 连入手机会被改写成 127.0.0.1，晚于私网直连就读到本机服务", () => {
@@ -158,18 +130,8 @@ describe("共享顺序契约（iOS 侧）", () => {
   });
 });
 
-// iOS 差异面必须显式登记：roles.ios 与基准顺序的差异只能是注册的这一组，
-// fragments/ios 出现注册外的片段即失败，防止无意扩大共享底模的平台差异。
-describe("modules.yaml 角色注册（ADR-0013）", () => {
-  test("roles.ios = 基准顺序 + 注册的 Tailscale 差异，且顺序逐步一致", () => {
-    assertRoleOrder("ios", applyPatch(MAC_ORDER, IOS_DIFF));
-  });
-
-  test("fragments/ios 的文件集合与登记的差异面一致", () => {
-    assertFragmentDir("ios", IOS_DIFF.fragments);
-  });
-
-  // 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+// 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+describe("生成产物不变量", () => {
   test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
     assertAllRuleSetsDeclared(ios.route);
   });
@@ -255,21 +217,5 @@ describe("变异验证：断言能拦住坏情况", () => {
     );
     delete dnsRules[idx].preferred_by;
     expect(() => assertMagicDns(bad.dns)).toThrow();
-  });
-
-  test("fragments/ios 出现未登记片段 → assertFragmentDir 必须失败", () => {
-    expect(() => assertFragmentDir("ios", [...IOS_DIFF.fragments, "ios/99-unknown.json"])).toThrow();
-  });
-
-  test("roles.ios 把入站拒绝挪到 sniff 之后 → assertRoleOrder 必须失败", () => {
-    const moved = roleKeys("ios").filter(
-      (key) => key !== "fragment:ios/tailscale-inbound-reject.json",
-    );
-    moved.splice(
-      moved.indexOf("fragment:base/sniff-and-dns-hijack.json") + 1,
-      0,
-      "fragment:ios/tailscale-inbound-reject.json",
-    );
-    expect(() => assertOrder(moved, applyPatch(MAC_ORDER, IOS_DIFF))).toThrow();
   });
 });

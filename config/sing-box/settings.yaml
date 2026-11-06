@@ -1,0 +1,112 @@
+# settings.yaml — 日常维护入口：共享分流规则与出站分组。
+#
+# 三份底模（Mac / iOS / 路由器）由本文件 + base.yaml + platforms/ 生成，改这里即三端生效。
+#   groups  出站分组：options 是节点候选（正则，沿用 sing-box selector 语义），default 是默认节点；
+#           组名可被 rules 的 to 引用，也可被其他组的 options 引用。
+#   rules   共享规则，顺序即首匹配顺序（拦截段除外，见 base.yaml）：
+#             name    规则名，同时是产物文件名与 sing-box rule_set tag
+#             source  规则来源：本地 YAML（相对本文件）/ geosite:x / geoip:x / 外部 .srs URL
+#             to      去向：reject / direct / proxy / 本文件或 base 里的出站/分组名
+#           相邻且去向相同的规则会合并成一条 rule_set 列表，只有效果相同。
+
+groups:
+  gemini:
+    options: [openai, selfhost, proxy, "(?i)(日本|川日|东京|大阪|JP|Japan)"]
+    default: openai
+  openai:
+    options: [selfhost, proxy, "(?i)(港|日本|台湾|GPT|美)"]
+    default: selfhost
+  anthropic:
+    options: [openai, selfhost, "(?i)(新加坡|坡|狮城|SG|Singapore|日本|川日|东京|大阪|泉日|埼玉|沪日|深日|JP|Japan)"]
+    default: openai
+  appleai:
+    options: [direct, selfhost, proxy]
+    default: selfhost
+  opencode:
+    options: [proxy, selfhost, ".*"]
+    default: proxy
+  zai:
+    options: [proxy, selfhost, ".*"]
+    default: proxy
+  grok:
+    options: [proxy, selfhost, ".*"]
+    default: proxy
+  "1024proxy":
+    options: [proxy, selfhost, "(?i)1024"]
+    default: proxy
+  dev:
+    options: [selfhost, proxy, "(?i)(港|HK|Hong)"]
+    default: selfhost
+  ptcg:
+    options: [selfhost, proxy, direct, "(?i)(日本|JP)"]
+    default: selfhost
+  japansite:
+    options: [proxy, selfhost, "(?i)(日本|川日|东京|大阪|JP|Japan)"]
+    default: proxy
+  adultnsfw:
+    options: [selfhost, proxy, direct, "(?i)(vps|hy2|港)"]
+    default: selfhost
+  microsoft:
+    options: [direct, proxy]
+    default: direct
+  paypal:
+    options: [direct, proxy]
+    default: direct
+  apple:
+    options: [direct, proxy, selfhost]
+    default: direct
+
+rules:
+  - name: Advertising
+    source: geosite:category-ads-all
+    to: reject
+  - name: Hijacking
+    source: ../rules/custom/Hijacking.yaml
+    to: reject
+  - name: MyReject
+    source: ../rules/custom/MyReject.yaml
+    to: reject
+  - name: Privacy
+    source: ../rules/custom/Privacy.yaml
+    to: reject
+
+  - name: Download
+    source: ../rules/custom/Download.yaml
+    to: download
+
+  - name: MyDirect
+    source: ../rules/custom/MyDirect.yaml
+    to: direct
+  - name: MyProxy
+    source: ../rules/custom/MyProxy.yaml
+    to: proxy
+
+  - { name: Gemini, source: ../rules/custom/Gemini.yaml, to: gemini }
+  - { name: OpenAI, source: ../rules/custom/OpenAI.yaml, to: openai }
+  - { name: Anthropic, source: ../rules/custom/Anthropic.yaml, to: anthropic }
+  - { name: Apple-AI, source: ../rules/custom/Apple-AI.yaml, to: appleai }
+  - { name: opencode, source: ../rules/custom/opencode.yaml, to: opencode }
+  - { name: zai, source: ../rules/custom/zai.yaml, to: zai }
+  - { name: grok, source: ../rules/custom/grok.yaml, to: grok }
+  - { name: 1024proxy, source: ../rules/custom/1024proxy.yaml, to: 1024proxy }
+  - { name: dev, source: ../rules/custom/dev.yaml, to: dev }
+  - { name: ptcg, source: ../rules/custom/ptcg.yaml, to: ptcg }
+  - { name: Japan, source: ../rules/custom/Japan.yaml, to: japansite }
+  - { name: Adult, source: ../rules/custom/Adult.yaml, to: adultnsfw }
+
+  - { name: "Microsoft", source: geosite:microsoft, to: microsoft }
+  - { name: PayPal, source: geosite:paypal, to: paypal }
+  - { name: Apple, source: geosite:apple, to: apple }
+
+  - { name: ChinaMax, source: geosite:cn, to: direct }
+  - { name: Lan, source: ../rules/custom/Lan.yaml, to: direct }
+  - { name: cftunnel, source: ../rules/custom/cftunnel.yaml, to: direct }
+  - { name: geoip-cn, source: geoip:cn, to: direct }
+
+  - { name: Facebook, source: geosite:facebook, to: proxy }
+  - { name: Instagram, source: geosite:instagram, to: proxy }
+  - { name: Spotify, source: geosite:spotify, to: proxy }
+  - { name: Telegram, source: geosite:telegram, to: proxy }
+  - { name: TikTok, source: geosite:tiktok, to: proxy }
+  - { name: Twitter, source: geosite:twitter, to: proxy }
+  - { name: YouTube, source: geosite:youtube, to: proxy }

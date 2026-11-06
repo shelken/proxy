@@ -1,7 +1,7 @@
-# 规则产物构建：config/rules 变更后编译各端产物并发布到 sing-box-rules 分支。
+# 规则产物构建：settings.yaml / custom 规则变更后编译各端产物并发布到 sing-box-rules 分支。
 #
 # 底模（config/sing-box/template.json）以 update_interval: 1d 远程引用该分支的 .srs：
-# 少了这条链路，改了清单客户端也只会一直拉到旧规则。
+# 少了这条链路，改了 settings.yaml 客户端也只会一直拉到旧规则。
 name: build-rule-sets
 
 on:
@@ -11,11 +11,13 @@ on:
       # 发布分支自身由本工作流写入，不该再触发一轮
       - "sing-box-rules"
     paths:
-      - "config/rules/index.yaml"
+      - "config/sing-box/settings.yaml"
       - "config/rules/custom/**"
       - "config/sing-box/**"
       - "scripts/rules-compile.ts"
       - "scripts/rules-compile.test.ts"
+      - "scripts/build-config.ts"
+      - "scripts/build-config.test.ts"
       - ".github/workflows/build-rule-sets.yml"
   schedule:
     # 每天 20:23 UTC（北京 04:23）。上游清单（blackmatrix7 等）的内容会变，
@@ -53,10 +55,7 @@ jobs:
           cache: true
           install_args: sing-box
       - name: 单元测试
-        run: bun test scripts/rules-compile.test.ts
-
-      - name: 校验清单与底模一致
-        run: bun scripts/rules-compile.ts check
+        run: bun test scripts/rules-compile.test.ts scripts/build-config.test.ts
 
       - name: 构建全部产物
         run: bun scripts/rules-compile.ts build --all

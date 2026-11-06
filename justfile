@@ -78,14 +78,14 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 # --- 生产底模装配与校验 ---
 # 单入口：一次重建 mac、iOS 与路由器三份底模。
-# 顺序与能力开关都写在 config/sing-box/modules.yaml：roles 列表的顺序就是合并顺序，
-# 条目不在列表里就等于没有这个能力；片段内容在 config/sing-box/fragments/（ADR-0013）。
+# 日常维护改 config/sing-box/settings.yaml（规则与分组）；稳定机制在 base.yaml，
+# 平台差异在 platforms/。合并顺序与固定优先级写在 base.yaml 的 slot/platform 标记里。
 # 开发时只跑这一条命令，无需记住各个产物各自怎么生成；
 # 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:
     #!/usr/bin/env bash
     set -euo pipefail
-    bun scripts/modules-build.ts
+    bun scripts/build-config.ts
     # 报告哪份产物变了，方便确认改动范围没超出预期；对比 HEAD，已暂存的改动也算变化
     for t in template.json template-ios.json template-router.json; do
         if git diff --quiet HEAD -- "config/sing-box/$t" 2>/dev/null && git ls-files --error-unmatch "config/sing-box/$t" >/dev/null 2>&1; then
@@ -95,9 +95,9 @@ template-build:
         fi
     done
 
-# 校验三份底模与 modules.yaml + fragments/ 一致：重算一遍逐字节比对（CI 同口径）
+# 校验三份底模与 settings.yaml + base.yaml + platforms/ 一致：重算一遍逐字节比对（CI 同口径）
 template-check:
-    bun scripts/modules-build.ts --check
+    bun scripts/build-config.ts --check
 
 # 变体底模由 just template-build 一并生成，不单独提供 build 入口
 
@@ -112,7 +112,7 @@ check-singbox:
     @{{sing_box_cmd}} check -c config/sing-box/template.json
 
 # 废弃写法检查：内核对废弃字段只报 WARN 不失败，这里把 WARN 升级为失败。
-# 三份产物都是完整配置，直接 check 产物；产物与源码（modules.yaml + fragments/）的一致性由 just template-check 保证。
+# 三份产物都是完整配置，直接 check 产物；产物与源码（settings.yaml + base.yaml + platforms/）的一致性由 just template-check 保证。
 # 路由角色引用不到只有 overlay 才有的 tag（`default_domain_resolver` 会被内核判为 not found），
 # 先装配出终态（merge-variant-fixture.sh）再 check。
 check-deprecated:
@@ -149,14 +149,9 @@ check-deprecated:
 rules-build:
     @bun scripts/rules-compile.ts build --all
 
-# 只构建单个 tag（如 just rules-build-one OpenAI）
+# 只构建单条规则（如 just rules-build-one OpenAI）
 rules-build-one tag:
     @bun scripts/rules-compile.ts build {{tag}}
-
-# 校验清单（index.yaml）的 tag 集合与底模（template.json）声明是否一致
-# 改了底模的规则集引用却忘了同步清单时，这里会直接报出是哪个 tag
-rules-check:
-    @bun scripts/rules-compile.ts check
 
 
 # --- 提交前检查：按改动范围分组，prek 用 files 只触发相关那组 ---
@@ -168,15 +163,19 @@ check-rust-fast:
 check-rust-test:
     cargo test --workspace --locked
 
-# sing-box 底模：modules.yaml 与三份 template 一致 + 结构 check + 废弃写法 + 模板测试
+# sing-box 底模：settings.yaml + base.yaml + platforms/ 与三份 template 一致 + 结构 check + 废弃写法 + 模板测试
 check-template:
     @just template-check
     @just check-singbox
     @just check-deprecated
     SING_BOX=$(mise which sing-box 2>/dev/null || which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
 
+# 生成器与规则编译器单元测试：settings 校验、装配契约、AST 与三端发射
+check-rules:
+    bun test scripts/build-config.test.ts scripts/rules-compile.test.ts
+
 # 全量检查（手动跑 / CI 同口径）
-verify: check-rust-fast check-rust-test check-template rules-check
+verify: check-rust-fast check-rust-test check-template check-rules
 
 
 # 在沙箱中全链路追踪指定域名的分流与真实出口节点

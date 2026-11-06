@@ -105,7 +105,7 @@ export function launch(outDir) {
     phase: "ready",
     commit: host("git", ["rev-parse", "HEAD"]).out.trim(),
     dirty: host("git", ["status", "--porcelain"]).out.trim(),
-    indexSha: sha256(join(REPO, "config/rules/index.yaml")),
+    settingsSha: sha256(join(REPO, "config/sing-box/settings.yaml")),
     templateSha: sha256(join(REPO, "config/sing-box/template.json")),
     builtTags: Number(built[1]),
     generatedAt: new Date().toISOString(),
@@ -135,8 +135,8 @@ export function doctor(outDir) {
     }
   }
 
-  const check = host("bun", ["scripts/rules-compile.ts", "check"]);
-  if (check.code !== 0) problems.push(`清单-底模契约校验失败：\n${check.out}${check.err}`);
+  const check = host("bun", ["scripts/build-config.ts", "--check"]);
+  if (check.code !== 0) problems.push(`底模与 settings/base/platforms 不一致：\n${check.out}${check.err}`);
 
   const vm = guest("echo ok");
   if (vm.code !== 0) problems.push(`VM ${VM} 不可达：${vm.err.trim()}（just vm-start）`);

@@ -11,15 +11,6 @@ import {
   assertMyProxyQuicBeforeExempt,
   assertRejectBeforeClashMode,
 } from "./lib/contracts.ts";
-import {
-  MAC_ORDER,
-  applyPatch,
-  assertFragmentDir,
-  assertOrder,
-  assertRoleOrder,
-  roleKeys,
-  type VariantPatch,
-} from "./lib/manifest.ts";
 
 const templatePath = resolve(import.meta.dir, "../template-router.json");
 const router = JSON.parse(await Bun.file(templatePath).text());
@@ -50,18 +41,7 @@ export const assertGatewayTun = (inbounds: Array<Record<string, any>>) => {
 
 // 路由器的差异面：inbounds 换成路由器版（tun 开门 + dns-in），experimental 换成对局域网监听版，
 // 另加 dns-in 的劫持规则——它必须排在 sniff 之前，否则查询落到 ip_is_private → direct 绕成环。
-// 旁路由的 DNS 不跟随自身系统解析器、也不应答部署域：底模对应能力整条不列入（ADR-0014）。
-export const ROUTER_DIFF: VariantPatch = {
-  fragments: ["router/dns-in.json", "router/experimental.json", "router/inbounds.json"],
-  replace: [
-    { from: "fragment:base/inbounds.json", to: "fragment:router/inbounds.json" },
-    { from: "fragment:base/experimental.json", to: "fragment:router/experimental.json" },
-  ],
-  remove: ["fragment:base/dns-lan-resolver.json", "fragment:base/dns-deployment.json"],
-  insertAfter: [
-    { anchor: "fragment:base/route-globals.json", items: ["fragment:router/dns-in.json"] },
-  ],
-};
+// 旁路由的 DNS 不跟随自身系统解析器、也不应答部署域：平台文件不提供这些内容（ADR-0014）。
 
 // 层名承重：merge 的生效顺序由文件路径字典序决定，与 -c 的 argv 顺序无关（docs/sbtools.md §6）
 const mergeLayers = (layers: Array<[string, unknown]>) => {
@@ -96,6 +76,10 @@ const OVERLAY_FIXTURE = JSON.parse(
 );
 
 describe("template-router.json 结构契约（ADR-0012）", () => {
+  test("log 级别为 info", () => {
+    expect(router.log).toEqual({ level: "info" });
+  });
+
   // 单份底模不做内核 check：它引用不到只有 overlay 才有的 dns-lan（ADR-0014），内核在
   // check 阶段直接报 default domain resolver not found。装配终态后的内核 check 在
   // 「overlay 夹具」那组（Linux 上跑，CI 同口径），macOS 宿主交给 `just kernel-check-vm router`
@@ -249,16 +233,8 @@ describe("共享顺序契约（路由器侧）", () => {
   });
 });
 
-describe("modules.yaml 角色注册（ADR-0013）", () => {
-  test("roles.router = 基准顺序 + 注册的网关差异，且顺序逐步一致", () => {
-    assertRoleOrder("router", applyPatch(MAC_ORDER, ROUTER_DIFF));
-  });
-
-  test("fragments/router 的文件集合与登记的差异面一致", () => {
-    assertFragmentDir("router", ROUTER_DIFF.fragments);
-  });
-
-  // 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+// 产物不变量：规则引用的 tag 必须在同一份产物里声明（内核对此静默，见 lib/contracts.ts）
+describe("生成产物不变量", () => {
   test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
     assertAllRuleSetsDeclared(router.route);
   });
@@ -281,21 +257,5 @@ describe("变异验证：断言能拦住坏情况", () => {
     const inbounds = clone(router.inbounds);
     delete inbounds.find((i: any) => i.type === "tun").auto_redirect;
     expect(() => assertGatewayTun(inbounds)).toThrow();
-  });
-
-  test("fragments/router 出现未登记片段 → assertFragmentDir 必须失败", () => {
-    expect(() =>
-      assertFragmentDir("router", [...ROUTER_DIFF.fragments, "router/99-unknown.json"]),
-    ).toThrow();
-  });
-
-  test("roles.router 把 dns-in 挪到 sniff 之后 → assertRoleOrder 必须失败", () => {
-    const moved = roleKeys("router").filter((key) => key !== "fragment:router/dns-in.json");
-    moved.splice(
-      moved.indexOf("fragment:base/sniff-and-dns-hijack.json") + 1,
-      0,
-      "fragment:router/dns-in.json",
-    );
-    expect(() => assertOrder(moved, applyPatch(MAC_ORDER, ROUTER_DIFF))).toThrow();
   });
 });

@@ -1,28 +1,30 @@
 #!/usr/bin/env bun
 /**
- * 规则编译器：`config/rules/index.yaml` 清单 → 各客户端规则产物。
+ * 规则编译器：`config/sing-box/settings.yaml` 的规则来源 → 各客户端产物。
  *
  * 两种源、各自最短路径：
  *   - geosite:x / geoip:x  外部原生引用：直接下载 MetaCubeX/meta-rules-dat 的
  *                          三端同源产物（.srs / mihomo yaml / .list），零解析。
- *   - custom/*.yaml        内部结构化规则：YAML → AST → 三端发射，
+ *   - 本地 *.yaml          内部结构化规则：YAML → AST → 三端发射，
  *                          sing-box 端再经官方 `rule-set compile` 编成 .srs。
  *
  * 另有 `-dns` 伴生规则集：DNS 规则在拿到响应前只能按查询名判定，IP 类条目在
  * 1.14 起废弃、1.16 移除，所以被 DNS 规则引用的清单要有一份只含域名条目的副本。
  *
- * 不做的事：不解析订阅、不装配节点（那是 sbtools 服务端的职责）、不写 template.json
- * （底模是手写的单一配置源，这里只校验它与清单是否漂移）。
+ * 外部 .srs（http/https 来源）由底模直接远程引用，这里不反编译、不产三端产物。
+ *
+ * 不做的事：不解析订阅、不装配节点（那是 sbtools 服务端的职责）、不写 template*.json
+ * （底模由 scripts/build-config.ts 生成，settings 与底模同源，不存在清单漂移）。
  */
 
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const MANIFEST_PATH = join(ROOT, "config/rules/index.yaml");
+const SETTINGS_PATH = join(ROOT, "config/sing-box/settings.yaml");
 const GENERATED_DIR = join(ROOT, "config/rules/generated");
-const TEMPLATE_PATH = join(ROOT, "config/sing-box/template.json");
+const CUSTOM_DIR = join(ROOT, "config/rules/custom");
 
 const META_RULES_SING = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo";
 const META_RULES_MIHOMO = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo";
@@ -34,7 +36,6 @@ const DNS_RULE_FIELDS = [
   "domain_regex",
 ] as const;
 const DNS_SUFFIX = "-dns";
-const ZONE_RULESET_TAG = "zone-internal";
 
 /** 产物内规则字段的排序：域名类在前，过程/网络类在后，逻辑规则恒排最后。 */
 const FIELD_ORDER = [
@@ -63,7 +64,7 @@ export type Client = "singbox" | "clash" | "plain";
 type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 export type SingBoxRule = Record<string, JsonValue>;
 
-export interface ManifestItem {
+export interface RuleSource {
   tag: string;
   source: string;
 }
@@ -72,7 +73,6 @@ export interface BuildResult {
   client: Client;
   path: string;
   total: number;
-  skipped: number;
 }
 
 // ---------------------------------------------------------------- 源读取
@@ -88,49 +88,42 @@ function fetchBytes(url: string): Buffer {
   return proc.stdout;
 }
 
+/** 外部原生 .srs：底模直接远程引用，不经本地编译。 */
+export const isExternalUrl = (source: string): boolean => /^https?:\/\//.test(source);
 
 /**
- * `custom/` 下存在但没被清单引用的列表。
+ * `custom/` 下存在但没被 settings 引用的列表。
  *
- * 只把文件放进 custom/ 不会产出任何规则：清单是唯一入口。这是最容易踩的坑
- * （加完文件以为 CI 会自己发现），所以显式提醒而不是静默忽略。
+ * 只把文件放进 custom/ 不会产出任何规则：settings.yaml 的 rules 是唯一入口。
+ * 这是最容易踩的坑（加完文件以为 CI 会自己发现），所以显式提醒而不是静默忽略。
  */
-export function orphanCustomLists(items: ManifestItem[]): string[] {
-  const referenced = new Set(items.map((i) => i.source));
-  const customDir = join(ROOT, "config/rules/custom");
+export function orphanCustomLists(items: RuleSource[]): string[] {
+  const referenced = new Set(items.map((i) => basename(i.source)));
   let entries: string[] = [];
   try {
-    entries = readdirSync(customDir);
+    entries = readdirSync(CUSTOM_DIR);
   } catch {
     return [];
   }
   return entries
     .filter((name) => name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".list"))
+    .filter((name) => !referenced.has(name))
     .map((name) => `config/rules/custom/${name}`)
-    .filter((rel) => !referenced.has(rel))
     .sort();
 }
 
-/**
- * 解析清单 YAML：顶层是 `tag: source` 映射，注释与空行由 YAML 解析器处理。
- *
- * 纯数字 tag 在文件里须带引号，否则 YAML 解析成数字键——JS 对象键恒为字符串，
- * 这里不额外转换，由文件侧约定保证形态一致。
- */
-export function loadManifest(path = MANIFEST_PATH): ManifestItem[] {
-  const raw = readFileSync(path, "utf8");
-  const parsed = Bun.YAML.parse(raw);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`清单必须是 tag: source 映射: ${path}`);
+/** 读取 settings.yaml 的 rules：只取编译需要的 tag 与来源。 */
+export function loadRules(path = SETTINGS_PATH): RuleSource[] {
+  const parsed = Bun.YAML.parse(readFileSync(path, "utf8")) as { rules?: unknown };
+  if (!Array.isArray(parsed?.rules)) {
+    throw new Error(`settings.yaml 缺少 rules 列表: ${path}`);
   }
-  const items: ManifestItem[] = [];
-  for (const [tag, source] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof source !== "string" || !source) {
-      throw new Error(`清单项 ${tag} 的 source 必须是非空字符串`);
-    }
-    items.push({ tag, source });
-  }
-  return items;
+  return parsed.rules.map((value) => {
+    const r = value as { name?: unknown; source?: unknown };
+    if (typeof r?.name !== "string" || !r.name) throw new Error(`settings.yaml 有规则缺少 name`);
+    if (typeof r.source !== "string" || !r.source) throw new Error(`规则 ${r.name} 缺少 source`);
+    return { tag: r.name, source: r.source };
+  });
 }
 
 /** 产物文件名：tag 直接作产物名，只做一次字符净化（tag 可能来自 URL 文件名）。 */
@@ -344,23 +337,47 @@ function dnsOnlyLogical(node: Record<string, unknown>): boolean {
   return Object.keys(node).every((k) => (DNS_RULE_FIELDS as readonly string[]).includes(k));
 }
 
-export function emitClash(ast: RuleAST): string {
-  const payload: string[] = [];
-  for (const d of ast.domain_suffix ?? []) payload.push(`DOMAIN-SUFFIX,${d}`);
-  for (const d of ast.domain_keyword ?? []) payload.push(`DOMAIN-KEYWORD,${d}`);
-  for (const d of ast.domain ?? []) payload.push(`DOMAIN,${d}`);
-  for (const d of ast.domain_regex ?? []) payload.push(`DOMAIN-REGEX,${d}`);
-  for (const p of ast.process_name ?? []) payload.push(`PROCESS-NAME,${p}`);
-  for (const c of ast.ip_cidr ?? []) payload.push(`IP-CIDR,${c}`);
-  for (const c of ast.source_ip_cidr ?? []) payload.push(`SRC-IP-CIDR,${c}`);
-  for (const a of ast.ip_asn ?? []) payload.push(`IP-ASN,${a}`);
-  for (const p of ast.port ?? []) payload.push(`DST-PORT,${p}`);
-  for (const r of ast.port_range ?? []) payload.push(`DST-PORT,${r.replace(":", "-")}`);
-  for (const p of ast.source_port ?? []) payload.push(`SRC-PORT,${p}`);
-  for (const r of ast.source_port_range ?? []) payload.push(`SRC-PORT,${r.replace(":", "-")}`);
-  for (const n of ast.network ?? []) payload.push(`NETWORK,${n}`);
-  for (const l of ast.logical ?? []) payload.push(formatLogicalRule(l));
+type EmitLine = [field: keyof RuleAST, format: (v: string | number) => string];
 
+/** Mihomo / Loon 的字段展开表：同一套顺序，只是行的拼写不同。 */
+const CLASH_LINES: EmitLine[] = [
+  ["domain_suffix", (v) => `DOMAIN-SUFFIX,${v}`],
+  ["domain_keyword", (v) => `DOMAIN-KEYWORD,${v}`],
+  ["domain", (v) => `DOMAIN,${v}`],
+  ["domain_regex", (v) => `DOMAIN-REGEX,${v}`],
+  ["process_name", (v) => `PROCESS-NAME,${v}`],
+  ["ip_cidr", (v) => `IP-CIDR,${v}`],
+  ["source_ip_cidr", (v) => `SRC-IP-CIDR,${v}`],
+  ["ip_asn", (v) => `IP-ASN,${v}`],
+  ["port", (v) => `DST-PORT,${v}`],
+  ["port_range", (v) => `DST-PORT,${String(v).replace(":", "-")}`],
+  ["source_port", (v) => `SRC-PORT,${v}`],
+  ["source_port_range", (v) => `SRC-PORT,${String(v).replace(":", "-")}`],
+  ["network", (v) => `NETWORK,${v}`],
+];
+
+const PLAIN_LINES: EmitLine[] = CLASH_LINES.map(
+  ([field, format]): EmitLine =>
+    field === "ip_cidr"
+      ? [field, (v) => `${String(v).includes(":") ? "IP-CIDR6" : "IP-CIDR"},${v}`]
+      : field === "port" || field === "port_range"
+        ? [field, (v) => `DEST-PORT,${String(v).replace(":", "-")}`]
+        : field === "network"
+          ? [field, (v) => `PROTOCOL,${String(v).toUpperCase()}`]
+          : [field, format],
+);
+
+function emitLines(ast: RuleAST, table: EmitLine[]): string[] {
+  const out: string[] = [];
+  for (const [field, format] of table) {
+    for (const v of ast[field] ?? []) out.push(format(v as string | number));
+  }
+  for (const l of ast.logical ?? []) out.push(formatLogicalRule(l));
+  return out;
+}
+
+export function emitClash(ast: RuleAST): string {
+  const payload = emitLines(ast, CLASH_LINES);
   return payload.length > 0
     ? `payload:\n${payload.map((line) => `  - '${line}'`).join("\n")}\n`
     : "payload: []\n";
@@ -368,24 +385,7 @@ export function emitClash(ast: RuleAST): string {
 
 /** Loon / Surge 文本产物：DEST-PORT 拼写、连字符端口范围、IPv6 用 IP-CIDR6。 */
 export function emitPlain(ast: RuleAST): string {
-  const lines: string[] = [];
-  for (const d of ast.domain_suffix ?? []) lines.push(`DOMAIN-SUFFIX,${d}`);
-  for (const d of ast.domain_keyword ?? []) lines.push(`DOMAIN-KEYWORD,${d}`);
-  for (const d of ast.domain ?? []) lines.push(`DOMAIN,${d}`);
-  for (const d of ast.domain_regex ?? []) lines.push(`DOMAIN-REGEX,${d}`);
-  for (const p of ast.process_name ?? []) lines.push(`PROCESS-NAME,${p}`);
-  for (const c of ast.ip_cidr ?? []) {
-    lines.push(c.includes(":") ? `IP-CIDR6,${c}` : `IP-CIDR,${c}`);
-  }
-  for (const c of ast.source_ip_cidr ?? []) lines.push(`SRC-IP-CIDR,${c}`);
-  for (const a of ast.ip_asn ?? []) lines.push(`IP-ASN,${a}`);
-  for (const p of ast.port ?? []) lines.push(`DEST-PORT,${p}`);
-  for (const r of ast.port_range ?? []) lines.push(`DEST-PORT,${r.replace(":", "-")}`);
-  for (const p of ast.source_port ?? []) lines.push(`SRC-PORT,${p}`);
-  for (const r of ast.source_port_range ?? []) lines.push(`SRC-PORT,${r.replace(":", "-")}`);
-  for (const n of ast.network ?? []) lines.push(`PROTOCOL,${String(n).toUpperCase()}`);
-  for (const l of ast.logical ?? []) lines.push(formatLogicalRule(l));
-  return `${lines.join("\n")}\n`;
+  return `${emitLines(ast, PLAIN_LINES).join("\n")}\n`;
 }
 
 export const CLIENT_EMITTERS: Record<Client, (ast: RuleAST) => string> = {
@@ -394,126 +394,11 @@ export const CLIENT_EMITTERS: Record<Client, (ast: RuleAST) => string> = {
   plain: emitPlain,
 };
 
-// ---------------------------------------------------------------- 模板契约
-
-interface Template {
-  route?: {
-    rule_set?: { tag?: string }[];
-    rules?: { rule_set?: string | string[]; action?: string; outbound?: string }[];
-  };
-  dns?: { rules?: { rule_set?: string | string[] }[] };
-}
-
-export function loadTemplate(): Template {
-  return JSON.parse(readFileSync(TEMPLATE_PATH, "utf8")) as Template;
-}
+// ---------------------------------------------------------------- 构建
 
 export function dnsRulesetName(name: string): string {
   return name + DNS_SUFFIX;
 }
-
-/**
- * 需要额外产出一份「只含域名条目」副本的产物名。
- *
- * 底模 DNS 规则引用到的清单必须都有域名版。底模内联声明的（zone-internal）不需要。
- */
-export function dnsCompanionNames(template: Template, items: ManifestItem[]): string[] {
-  const manifestNames = new Set<string>();
-  for (const item of items) {
-    manifestNames.add(outputName(item.tag));
-    manifestNames.add(item.tag);
-  }
-
-  // 内联声明 = 底模里声明了、但不是清单产物的 tag（如 zone-internal）。
-  // 清单产物及其 DNS 伴生都不算内联，否则伴生会被自己排除掉。
-  const inline = new Set<string>([ZONE_RULESET_TAG]);
-  for (const entry of template.route?.rule_set ?? []) {
-    const tag = entry?.tag ? String(entry.tag) : "";
-    if (tag && !manifestNames.has(tag) && !tag.endsWith(DNS_SUFFIX)) inline.add(tag);
-  }
-
-  const byOutput = new Map<string, ManifestItem>();
-  for (const item of items) {
-    byOutput.set(outputName(item.tag), item);
-    if (!byOutput.has(item.tag)) byOutput.set(item.tag, item);
-  }
-
-  const names: string[] = [];
-  for (const rule of template.dns?.rules ?? []) {
-    const referenced = rule?.rule_set;
-    const tags = typeof referenced === "string" ? [referenced] : (referenced ?? []);
-    for (const raw of tags) {
-      const tag = String(raw);
-      const base = tag.endsWith(DNS_SUFFIX) ? tag.slice(0, -DNS_SUFFIX.length) : tag;
-      const companion = dnsRulesetName(base);
-      if (inline.has(tag) || names.includes(companion)) continue;
-      if (!byOutput.has(base)) {
-        throw new Error(
-          `底模 DNS 规则引用了既不在清单里、也不是内联声明的规则集：${tag}`,
-        );
-      }
-      names.push(companion);
-    }
-  }
-  return names;
-}
-
-/**
- * 校验底模与清单是否漂移。这是底模那侧唯一被生成器触碰的地方。
- *
- * 不变量：底模 route.rule_set 声明的 tag 集合 == 清单 tag 集合 + DNS 伴生，
- * 且清单里每个 tag 都出现在 route.rules 里。任一处不一致都说明有人改了单边：
- * 模板声明了没构建的 .srs，内核启动即 FATAL。
- *
- * 路由去向（outbound）由底模单方面决定，不再与清单交叉校验——底模的手写分组
- * （多 tag 合组、顺序即优先级）无法由清单派生，硬校验只会逼出无意义的重复字段。
- *
- * 底模是手写单一配置源，这里只报错不改写。静默回写会覆盖手写意图
- * （如 `apple` 从 direct 聚合里拆出来独立成组）。
- */
-export function validateTemplate(template: Template, items: ManifestItem[]): string[] {
-  const errors: string[] = [];
-  const manifestTags = new Set(items.map((i) => i.tag));
-  // 先算伴生：它自身会对「DNS 规则引用清单外规则集」直接抛错，这属于配置错误。
-  const companions = new Set(dnsCompanionNames(template, items));
-
-  const declared = new Set<string>();
-  for (const entry of template.route?.rule_set ?? []) {
-    if (entry?.tag) declared.add(String(entry.tag));
-  }
-
-  const routed = new Map<string, string>();
-  for (const rule of template.route?.rules ?? []) {
-    const referenced = rule?.rule_set;
-    if (!referenced) continue;
-    const tags = typeof referenced === "string" ? [referenced] : referenced;
-    const dest = rule.action === "reject" ? "reject" : String(rule.outbound ?? "");
-    for (const tag of tags) routed.set(String(tag), dest);
-  }
-
-  for (const tag of manifestTags) {
-    if (!declared.has(tag)) errors.push(`清单里的 ${tag} 未在底模 route.rule_set 声明`);
-    if (!routed.has(tag)) errors.push(`清单里的 ${tag} 未出现在底模 route.rules`);
-  }
-
-  for (const companion of companions) {
-    if (!declared.has(companion)) {
-      errors.push(`DNS 伴生规则集 ${companion} 未在底模 route.rule_set 声明`);
-    }
-    if (routed.has(companion)) {
-      errors.push(`DNS 伴生规则集 ${companion} 不应参与路由，却被 route.rules 引用`);
-    }
-  }
-
-  for (const tag of declared) {
-    if (!manifestTags.has(tag) && !companions.has(tag)) {
-      errors.push(`底模声明了 ${tag}，但它既不在清单里也不是 DNS 伴生`);
-    }
-  }
-  return errors;
-}
-
-// ---------------------------------------------------------------- 构建
 
 export function ensureSingBox(): string {
   const which = spawnSync("sh", ["-c", "command -v sing-box"], { encoding: "utf8" });
@@ -554,9 +439,11 @@ function writeText(path: string, content: string): void {
   writeFileSync(path, content, "utf8");
 }
 
+/** 本地来源相对 settings.yaml 解析，不依赖调用者 cwd。 */
 function readLocalSource(source: string): string {
+  const path = isAbsolute(source) ? source : resolve(dirname(SETTINGS_PATH), source);
   try {
-    return readFileSync(join(ROOT, source), "utf8");
+    return readFileSync(path, "utf8");
   } catch {
     throw new Error(`规则源不存在: ${source}`);
   }
@@ -564,7 +451,7 @@ function readLocalSource(source: string): string {
 
 /** 为单个 tag 产出全部客户端产物：外部镜像下载或内部 AST 发射。 */
 export function buildOne(
-  item: ManifestItem,
+  item: RuleSource,
   binary: string,
   dnsCompanion: boolean,
 ): BuildResult[] {
@@ -576,18 +463,18 @@ export function buildOne(
   if (ext) {
     const srsPath = join(GENERATED_DIR, "singbox", `${name}.srs`);
     writeBytes(srsPath, fetchBytes(ext.singbox));
-    results.push({ client: "singbox", path: srsPath, total: 0, skipped: 0 });
+    results.push({ client: "singbox", path: srsPath, total: 0 });
     for (const client of ["clash", "plain"] as const) {
       const path = join(GENERATED_DIR, client, `${name}${SUFFIXES[client]}`);
       writeBytes(path, fetchBytes(ext[client]));
-      results.push({ client, path, total: 0, skipped: 0 });
+      results.push({ client, path, total: 0 });
     }
     if (dnsCompanion && item.source.startsWith("geosite:")) {
       // geosite 上游本就只含域名条目，-dns 伴生直接复用同一份 .srs；
       // geoip 是 IP 集合，DNS 规则无法按查询名判定，不产 -dns 伴生
       const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.srs`);
       writeBytes(dnsPath, fetchBytes(ext.singbox));
-      results.push({ client: "singbox", path: dnsPath, total: 0, skipped: 0 });
+      results.push({ client: "singbox", path: dnsPath, total: 0 });
     }
     return results;
   }
@@ -605,7 +492,7 @@ export function buildOne(
     if (client === "singbox") {
       compileSrs(binary, path, path.replace(/\.json$/, ".srs"));
     }
-    results.push({ client, path, total: totalCount, skipped: 0 });
+    results.push({ client, path, total: totalCount });
   }
 
   if (dnsCompanion) {
@@ -614,7 +501,7 @@ export function buildOne(
     const dnsPath = join(GENERATED_DIR, "singbox", `${dnsRulesetName(name)}.json`);
     writeText(dnsPath, emitSingboxDns(ast));
     compileSrs(binary, dnsPath, dnsPath.replace(/\.json$/, ".srs"));
-    results.push({ client: "singbox", path: dnsPath, total: totalCount, skipped: 0 });
+    results.push({ client: "singbox", path: dnsPath, total: totalCount });
   }
   return results;
 }
@@ -625,29 +512,27 @@ export interface BuildOptions {
 }
 
 export function runBuild(options: BuildOptions): number {
-  const items = loadManifest();
-  const template = loadTemplate();
+  const items = loadRules();
 
   const orphans = orphanCustomLists(items);
   if (orphans.length > 0) {
     console.warn(
-      `WARN: 以下 custom/ 列表没有被 index.yaml 引用，不会产出任何规则：\n  ${orphans.join("\n  ")}`,
+      `WARN: 以下 custom/ 列表没有在 settings.yaml 引用，不会产出任何规则：\n  ${orphans.join("\n  ")}`,
     );
   }
 
-  const drift = validateTemplate(template, items);
-  if (drift.length > 0) {
-    for (const err of drift) console.error(`ERROR: ${err}`);
-    return 1;
-  }
-
-  const targets = options.all ? items : [findItem(items, options.tag ?? "")];
+  const targets = options.all ? items : [findRule(items, options.tag ?? "")];
 
   if (options.all) rmSync(GENERATED_DIR, { recursive: true, force: true });
   const binary = ensureSingBox();
 
   let built = 0;
   for (const item of targets) {
+    if (isExternalUrl(item.source)) {
+      console.log(`external ${item.tag} <- ${item.source}（底模直接引用，不本地构建）`);
+      built++;
+      continue;
+    }
     const results = buildOne(item, binary, true);
     if (externalUrls(item.source)) {
       console.log(`mirrored ${item.tag} <- ${item.source}`);
@@ -661,12 +546,12 @@ export function runBuild(options: BuildOptions): number {
   return 0;
 }
 
-export function findItem(items: ManifestItem[], target: string): ManifestItem {
+export function findRule(items: RuleSource[], target: string): RuleSource {
   const needle = target.toLowerCase();
   const hit = items.find(
     (i) => i.tag.toLowerCase() === needle || outputName(i.tag).toLowerCase() === needle,
   );
-  if (!hit) throw new Error(`清单里没有这个 tag: ${target}`);
+  if (!hit) throw new Error(`settings.yaml 里没有这个规则: ${target}`);
   return hit;
 }
 
@@ -674,12 +559,11 @@ export function findItem(items: ManifestItem[], target: string): ManifestItem {
 
 function usage(): string {
   return [
-    "rules-compile — 规则清单 → 各端产物",
+    "rules-compile — settings.yaml 的规则来源 → 各端产物",
     "",
     "用法:",
     "  bun scripts/rules-compile.ts build --all    全量构建",
-    "  bun scripts/rules-compile.ts build <tag>    只构建单个 tag",
-    "  bun scripts/rules-compile.ts check          只校验底模与清单有无漂移",
+    "  bun scripts/rules-compile.ts build <name>   只构建单条规则",
   ].join("\n");
 }
 
@@ -693,32 +577,11 @@ function cmdBuild(args: string[]): number {
   return runBuild({ tag });
 }
 
-function cmdCheck(): number {
-  const items = loadManifest();
-  const orphans = orphanCustomLists(items);
-  for (const rel of orphans) {
-    console.warn(`WARN: ${rel} 没有被 index.yaml 引用，不会产出任何规则`);
-  }
-  const errors = validateTemplate(loadTemplate(), items);
-  if (errors.length === 0) {
-    console.log(`清单与底模一致：${items.length} 个 tag`);
-    return 0;
-  }
-  for (const err of errors) console.error(`ERROR: ${err}`);
-  return 1;
-}
-
-function main(): number {
+if (import.meta.main) {
   const [command, ...rest] = process.argv.slice(2);
-  switch (command) {
-    case "build":
-      return cmdBuild(rest);
-    case "check":
-      return cmdCheck();
-    default:
-      console.error(usage());
-      return 2;
+  if (command !== "build") {
+    console.error(usage());
+    process.exit(2);
   }
+  process.exit(cmdBuild(rest));
 }
-
-if (import.meta.main) process.exit(main());

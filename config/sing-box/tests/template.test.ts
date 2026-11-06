@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
 import {
   asArray,
@@ -9,16 +10,19 @@ import {
   assertMyProxyQuicBeforeExempt,
   assertRejectBeforeClashMode,
 } from "./lib/contracts.ts";
-import {
-  MAC_ORDER,
-  assertNoOrphanEntries,
-  assertOrder,
-  assertRoleOrder,
-  roleKeys,
-} from "./lib/manifest.ts";
 
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
+const CONFIG_DIR = resolve(import.meta.dir, "..");
+const base = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "base.yaml"), "utf8")) as {
+  rule_set_url: string;
+  dns_rule_sets: string[];
+  resolve_exclude: string[];
+};
+const settings = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "settings.yaml"), "utf8")) as {
+  groups: Record<string, { options: string[]; default: string }>;
+  rules: Array<{ name: string; source: string; to: string }>;
+};
 
 // 内核 merge 的输出会省略默认值 `action: "route"`、
 // 把 default_domain_resolver 收成字符串，断言要对两种形态都成立。
@@ -367,33 +371,52 @@ describe("template.json structural verification", () => {
   });
 });
 
-// modules.yaml 是底模装配的真源：mac 的顺序即基准顺序，两个变体在其上打注册补丁。
-// 顺序不是排版（决定首匹配与出站展示顺序），所以按表重排必须留下一次测试改动。
-describe("modules.yaml 角色注册（ADR-0013）", () => {
-  test("roles.mac 与基准顺序逐条一致", () => {
-    assertRoleOrder("mac", MAC_ORDER);
+// settings.yaml 是底模的唯一登记处：规则声明、匹配引用、分组与 DNS 伴生都从它生成。
+// 这里守生成的产物与 settings/base 一致，以及固定机制（拦截/解析/QUIC）没有被改坏。
+describe("settings.yaml → template.json 生成契约", () => {
+  test("log 级别为 info", () => {
+    expect(template.log).toEqual({ level: "info" });
   });
 
-  test("表里没有孤儿条目（片段 / 服务 / 清单组）", () => {
-    assertNoOrphanEntries();
+  test("route.rule_set = DNS 伴生 + settings 规则，顺序一致", () => {
+    expect(template.route.rule_set.map((rs: { tag: string }) => rs.tag)).toEqual([
+      ...base.dns_rule_sets,
+      ...settings.rules.map((r) => r.name),
+    ]);
   });
 
-  // 产物不变量：catalog 把「声明」与「引用」拆成两个条目，删掉 `{ catalog: reject }` 而留下
-  // `base/reject.json`，产物里的规则仍然引用那四个 tag，而内核 check 与 merge 都退出码 0（实测）。
-  // 关掉能力的正确做法是同时删掉两者，这个断言要求两者同进同退。
+  test("每条声明的 URL：外部 .srs 原样，其余指向本仓库发布分支", () => {
+    const byTag = new Map<string, { url: string }>(
+      template.route.rule_set.map((rs: { tag: string; url: string }) => [rs.tag, rs]),
+    );
+    for (const tag of base.dns_rule_sets) {
+      expect(byTag.get(tag)?.url).toBe(base.rule_set_url.replace("{tag}", tag));
+    }
+    for (const rule of settings.rules) {
+      const expectUrl = /^https?:\/\//.test(rule.source)
+        ? rule.source
+        : base.rule_set_url.replace("{tag}", rule.name);
+      expect(byTag.get(rule.name)?.url).toBe(expectUrl);
+    }
+  });
+
+  test("每个分组都生成 selector，顺序与 settings 一致", () => {
+    const selectors = template.outbounds
+      .filter((o: { type: string }) => o.type === "selector")
+      .map((o: { tag: string }) => o.tag);
+    expect(selectors).toEqual(expect.arrayContaining(Object.keys(settings.groups)));
+    for (const [name, def] of Object.entries(settings.groups)) {
+      const selector = template.outbounds.find((o: { tag: string }) => o.tag === name);
+      expect(selector?.outbounds).toEqual(def.options);
+      expect(selector?.default).toBe(def.default);
+    }
+  });
+
   test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
     assertAllRuleSetsDeclared(template.route);
   });
 
-  // 变异验证：证明顺序断言不是恒真的。真按 roles 重排（把 clash-mode 挪到 reject 之前）
-  // 会让顺序断言变红；这也正是 ADR-0008 在语义层拦下的那个错误。
-  test("roles.mac 把 clash-mode 移到 reject 之前 → assertOrder 必须失败", () => {
-    const moved = roleKeys("mac").filter((key) => key !== "fragment:base/clash-mode.json");
-    moved.splice(moved.indexOf("fragment:base/reject.json"), 0, "fragment:base/clash-mode.json");
-    expect(() => assertOrder(moved, MAC_ORDER)).toThrow();
-  });
-
-  test("删掉 catalog:reject 的声明 → assertAllRuleSetsDeclared 必须失败", () => {
+  test("删掉一个规则声明 → assertAllRuleSetsDeclared 必须失败", () => {
     const route = JSON.parse(JSON.stringify(template.route));
     route.rule_set = route.rule_set.filter((rs: { tag: string }) => rs.tag !== "Advertising");
     expect(() => assertAllRuleSetsDeclared(route)).toThrow();

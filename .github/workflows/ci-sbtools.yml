@@ -10,12 +10,14 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "config/sing-box/template.json"
-      - "config/sing-box/modules.yaml"
-      - "config/sing-box/fragments/**"
+      - "config/sing-box/settings.yaml"
+      - "config/sing-box/base.yaml"
+      - "config/sing-box/platforms/**"
       - "config/sing-box/template-ios.json"
       - "config/sing-box/template-router.json"
       - "config/sing-box/tests/**"
-      - "scripts/modules-build.ts"
+      - "scripts/build-config.ts"
+      - "scripts/build-config.test.ts"
       - "scripts/merge-variant-fixture.sh"
       - ".mise.toml"
       - "Dockerfile"
@@ -81,11 +83,11 @@ jobs:
         with:
           bun-version: 1.4.4
 
-      # 校验三份底模与 modules.yaml + fragments/ 合并结果一致，口径与 just template-check 保持一致
-      - name: verify template modules consistency
+      # 校验三份底模与 settings.yaml + base.yaml + platforms/ 一致，口径与 just template-check 保持一致
+      - name: verify template build consistency
         env:
           SING_BOX: sing-box
-        run: bun scripts/modules-build.ts --check
+        run: bun scripts/build-config.ts --check
         working-directory: .
 
       # 结构测试：本地 just check-template 只跑这几个 .test.ts，CI 同语义。
