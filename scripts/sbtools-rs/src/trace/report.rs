@@ -118,13 +118,19 @@ fn dial_failure_code(raw: &str) -> String {
 /// 路由行与其中的出站。来源优先级：存续连接 > 内核路由日志 > route_exclude_address
 /// 说明 > 未捕获。
 fn route_row(f: &Facts) -> (String, Option<String>) {
+    // 路由规则几乎都是 rule_set，前缀只增噪音；其他条件（如 domain_suffix=）保留键名
+    let cond = |raw: &str| {
+        rule_condition(raw)
+            .trim_start_matches("rule_set=")
+            .to_string()
+    };
     if let Some(m) = &f.conn
         && let Some(outbound) = m.chains.first()
     {
         return (
             format!(
                 "路由   {} → {}   链路 {}",
-                rule_condition(&m.rule),
+                cond(&m.rule),
                 outbound,
                 m.chains.join(" → ")
             ),
@@ -135,7 +141,7 @@ fn route_row(f: &Facts) -> (String, Option<String>) {
         && let Some(target) = route_target(raw)
     {
         return (
-            format!("路由   {} → {target}", rule_condition(raw)),
+            format!("路由   {} → {target}", cond(raw)),
             Some(target.to_string()),
         );
     }
@@ -287,7 +293,7 @@ mod tests {
             "app.example.test  ✓ 经 proxy 出站，HTTPS 230ms\n\n\
 解析   198.18.0.13   fakeip，由内核接管\n\
 DNS    dns-fakeip   ← query_type=[A AAAA]\n\
-路由   rule_set=MyProxy → proxy   链路 proxy → selfhost → vps-hy2\n\
+路由   MyProxy → proxy   链路 proxy → selfhost → vps-hy2\n\
 连通   HTTPS 首字节 230ms\n",
         );
     }
@@ -311,7 +317,7 @@ DNS    dns-fakeip   ← query_type=[A AAAA]\n\
             "cn.example.test  ✓ 直连，HTTPS 35ms\n\n\
 解析   203.0.113.8   真实 IP\n\
 DNS    dns-direct-cn   ← rule_set=ChinaMax-dns\n\
-路由   rule_set=ChinaMax → direct   链路 direct\n\
+路由   ChinaMax → direct   链路 direct\n\
 连通   HTTPS 首字节 35ms\n",
         );
     }
