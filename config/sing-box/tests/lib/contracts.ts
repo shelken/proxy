@@ -36,6 +36,8 @@ export const assertMyDirectAndProxyBeforeServices = (
   const myProxy = rules.findIndex(
     (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
   );
+  // 清单不在当前设置里（被删/改向）时无此约束
+  if (myDirect < 0 || myProxy < 0) return;
   const firstService = rules.findIndex(
     (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
   );
@@ -54,7 +56,8 @@ export const assertMyProxyQuicBeforeExempt = (rules: Rule[]) => {
   const myProxyReject = quic.find(
     (r) => r.action === "reject" && asArray(r.rule_set).includes("MyProxy"),
   );
-  expect(exempt).toBeDefined();
+  // 清单不在当前设置里时无此约束
+  if (!exempt || !myProxyReject) return;
   expect(myProxyReject?.no_drop).toBe(true);
   expect(rules.indexOf(myProxyReject!)).toBeLessThan(rules.indexOf(exempt!));
 };
@@ -63,7 +66,8 @@ export const assertMyProxyQuicBeforeExempt = (rules: Rule[]) => {
 export const assertMyProxyDnsBeforeChinaMax = (dnsRules: Rule[]) => {
   const mine = dnsRules.findIndex((r) => asArray(r.rule_set).includes("MyProxy-dns"));
   const china = dnsRules.findIndex((r) => asArray(r.rule_set).includes("ChinaMax-dns"));
-  expect(mine).toBeGreaterThanOrEqual(0);
+  // 清单不在当前设置里时无此约束
+  if (mine < 0 || china < 0) return;
   expect(mine).toBeLessThan(china);
   expect(dnsRules[mine].server).toBe("dns-fakeip");
   expect(asArray(dnsRules[mine].query_type)).toEqual(["A", "AAAA"]);

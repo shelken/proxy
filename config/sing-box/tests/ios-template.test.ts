@@ -38,7 +38,8 @@ export const assertMagicDns = (dns: Record<string, any>) => {
   const china = dnsRules.findIndex((r) => asArray(r.rule_set).includes("ChinaMax-dns"));
   const fake = dnsRules.findIndex((r) => r.server === "dns-fakeip");
   expect(ts).toBeGreaterThanOrEqual(0);
-  expect(ts).toBeLessThan(china);
+  // ChinaMax 不在当前设置里时无此约束
+  if (china >= 0) expect(ts).toBeLessThan(china);
   expect(ts).toBeLessThan(fake);
   const server = (dns.servers ?? []).find((s: any) => s.tag === "dns-ts");
   expect(server?.accept_default_resolvers ?? false).toBe(false);

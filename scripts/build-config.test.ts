@@ -3,7 +3,7 @@
 // 默认基线的逐项归一化对比由 template.test.ts 与 just template-check 守。
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { makePolicy, mergeTo, type Platform, type Role } from "./build-config.ts";
@@ -60,6 +60,13 @@ async function merged(settings: Settings, role: Role = "mac") {
   return JSON.parse(readFileSync(target, "utf8"));
 }
 const policy = (settings: Settings, role: Role = "mac") => makePolicy(settings, base, role);
+
+/** 解析宿主 sing-box 可执行文件，供真实门禁子进程使用。 */
+function hostSingBox(): string {
+  if (process.env.SING_BOX && existsSync(process.env.SING_BOX)) return process.env.SING_BOX;
+  const p = Bun.spawnSync(["mise", "which", "sing-box"], { cwd: resolve(import.meta.dir, "..") });
+  return p.stdout.toString().trim();
+}
 
 describe("默认设置：生成结构", () => {
   test("outbounds = base 固定出站 + settings 分组 selector", async () => {
@@ -293,6 +300,43 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
       expect(cfg.route.rule_set.find((r: any) => r.tag === "A B").url.endsWith("/A_B.srs")).toBe(true);
     }
   });
+
+  test("真实 CLI 重建 + 完整模板测试文件（删/改向/追加空格名与中文名）", () => {
+    const sb = hostSingBox();
+    if (!sb) {
+      console.warn("SKIP: 宿主找不到 sing-box，无法跑真实门禁");
+      return;
+    }
+    const repo = resolve(import.meta.dir, "..");
+    const root = tempDir("gate-");
+    mkdirSync(join(root, "config"), { recursive: true });
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    for (const rel of ["config/sing-box", "config/rules"]) {
+      const r = Bun.spawnSync(["cp", "-R", join(repo, rel), join(root, rel)]);
+      if (r.exitCode !== 0) throw new Error(`复制 ${rel} 失败`);
+    }
+    for (const file of ["settings.ts", "build-config.ts"]) {
+      const r = Bun.spawnSync(["cp", join(repo, "scripts", file), join(root, "scripts", file)]);
+      if (r.exitCode !== 0) throw new Error(`复制 ${file} 失败`);
+    }
+    const env = { ...process.env, SING_BOX: sb };
+    const settingsPath = join(root, "config/sing-box/settings.yaml");
+    const original = readFileSync(join(repo, "config/sing-box/settings.yaml"), "utf8");
+    const lan = join(root, "config/rules/custom/Lan.yaml");
+    const cases: Array<[string, (s: string) => string]> = [
+      ["删除 MyReject", (s) => s.replace(/  - name: MyReject\n    source: \.\.\/rules\/custom\/MyReject\.yaml\n    to: reject\n/, "")],
+      ["MyReject 改 proxy", (s) => s.replace(/(  - name: MyReject\n    source: \.\.\/rules\/custom\/MyReject\.yaml\n    to: )reject/, "$1proxy")],
+      ["追加本地 A B", (s) => `${s}  - { name: A B, source: ${lan}, to: reject }\n`],
+      ["追加中文名", (s) => `${s}  - { name: 小米追踪, source: ${lan}, to: proxy }\n`],
+    ];
+    for (const [name, mutate] of cases) {
+      writeFileSync(settingsPath, mutate(original));
+      const build = Bun.spawnSync([process.execPath, "run", "scripts/build-config.ts"], { cwd: root, env });
+      expect(build.exitCode, `${name} build:\n${build.stdout}${build.stderr}`).toBe(0);
+      const gate = Bun.spawnSync([process.execPath, "test", "config/sing-box/tests/template.test.ts"], { cwd: root, env });
+      expect(gate.exitCode, `${name} gate:\n${gate.stdout}${gate.stderr}`).toBe(0);
+    }
+  }, 60000);
 });
 
 describe("变异验证：真实语义契约必须拒绝坏产物", () => {

@@ -13,7 +13,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { artifactName, RULES_URL } from "./settings.ts";
+import { RULES_URL } from "./settings.ts";
 
 const VM = "proxy-test";
 const ARTIFACT = "sbtools-aarch64-unknown-linux-musl";
@@ -228,21 +228,28 @@ function relevantDiff(from: string, to: string): string {
 interface RuleSetPlan {
   tag: string;
   url: string;
-  local: string;
   external: boolean;
+  /** 相对 WORK 的落位：仓库产物进 rules/，外部 .srs 进 external/ 且按序号唯一。 */
+  path: string;
+}
+
+/** URL 路径的真实文件名：先解百分号编码再取 basename，中文/空格名不被编码破坏。 */
+function urlBasename(url: string): string {
+  return basename(decodeURIComponent(new URL(url).pathname));
 }
 
 /**
  * 底模声明的远程规则集 → VM 内本地文件。
  *
- * 本仓库产物用统一 artifact 名；外部 .srs（如小米）不编译、不反编译，原样下载后
- * 按同一 tag 映射喂给内核，启动时零外网。
+ * 本仓库产物用 URL 路径里的真实产物名（兼容别名引用与中文名）；外部 .srs（如小米）
+ * 不编译、不反编译，放进独立目录按序号命名，避免不同来源共享 basename 互相覆盖。
  */
 export function planRuleSets(
   template: { route?: { rule_set?: Array<Record<string, unknown>> } } = JSON.parse(
     readFileSync(resolve(import.meta.dir, "../config/sing-box/template.json"), "utf-8"),
   ),
 ): RuleSetPlan[] {
+  let next = 0;
   return (template.route?.rule_set ?? [])
     .filter((rs) => rs?.type === "remote" && typeof rs.url === "string")
     .map((rs) => {
@@ -251,8 +258,8 @@ export function planRuleSets(
       return {
         tag: String(rs.tag),
         url,
-        local: external ? `${artifactName(String(rs.tag))}.srs` : basename(new URL(url).pathname),
         external,
+        path: external ? `external/${next++}.srs` : `rules/${urlBasename(url)}`,
       };
     });
 }
@@ -266,32 +273,58 @@ export function planRuleSets(
  */
 function verifyLocalArtifacts(plan: RuleSetPlan[]): void {
   const genDir = resolve(import.meta.dir, "../config/rules/generated/singbox");
-  const missing = plan.filter((p) => !p.external && !existsSync(join(genDir, p.local)));
+  const missing = plan.filter((p) => !p.external && !existsSync(join(genDir, basename(p.path))));
   if (missing.length > 0) {
     fail(
       "检查本地规则产物",
       `底模声明了 ${plan.length} 个远程规则集，本地 generated/singbox/ 缺 ${missing.length} 个：\n` +
-        `  ${missing.map((p) => p.local).join(", ")}\n` +
+        `  ${missing.map((p) => basename(p.path)).join(", ")}\n` +
         `  先执行 just rules-build 生成全量产物再引导`,
     );
   }
 }
 
-/** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
-function pushToGuest(plan: RuleSetPlan[]): void {
-  // 外部 .srs 先下到宿主 staging，再与仓库产物一起按映射拷进 VM：内核启动时零外网
-  rmSync(STAGING, { recursive: true, force: true });
-  mkdirSync(STAGING, { recursive: true });
+/** 下载外部 .srs 到宿主 staging，返回 tag→guest 内路径映射；仓库产物直接复用生成的 .srs。 */
+export function stageRuleSets(
+  plan: RuleSetPlan[],
+  stagingDir = STAGING,
+  guestDir = WORK,
+): Record<string, string> {
+  rmSync(stagingDir, { recursive: true, force: true });
+  mkdirSync(stagingDir, { recursive: true });
   const map: Record<string, string> = {};
   for (const item of plan) {
     if (item.external) {
-      const dl = Bun.spawnSync(["curl", "-fsSL", "--max-time", "60", item.url, "-o", join(STAGING, item.local)]);
+      const dest = join(stagingDir, item.path);
+      mkdirSync(dirname(dest), { recursive: true });
+      const dl = Bun.spawnSync(["curl", "-fsSL", "--max-time", "60", item.url, "-o", dest]);
       if (dl.exitCode !== 0) fail("下载外部规则集", item.url);
     }
-    map[item.tag] = `${WORK}/rules/${item.local}`;
+    map[item.tag] = `${guestDir}/${item.path}`;
   }
-  writeFileSync(join(STAGING, "rules-map.json"), JSON.stringify(map, null, 2));
+  writeFileSync(join(stagingDir, "rules-map.json"), JSON.stringify(map, null, 2));
+  return map;
+}
 
+/** 把配置里的远程规则集按映射换成 VM 内本地文件，并去掉会联网的 clash_api。 */
+export function localizeRuleSets(config: any, map: Record<string, string>) {
+  const next = structuredClone(config);
+  next.route = next.route ?? {};
+  next.route.rule_set = (next.route.rule_set ?? []).map((rs: Record<string, any>) => {
+    if (rs?.type !== "remote") return rs;
+    const path = map[rs.tag];
+    if (!path) throw new Error(`规则集 ${rs.tag} 没有本地映射`);
+    return { type: "local", tag: rs.tag, format: "binary", path };
+  });
+  const experimental = { ...(next.experimental ?? {}) };
+  delete experimental.clash_api;
+  if (Object.keys(experimental).length > 0) next.experimental = experimental;
+  else delete next.experimental;
+  return next;
+}
+
+/** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
+function pushToGuest(): void {
   // 崩溃可能留下服务端；替换 inode 避免原地覆写触发 ETXTBSY。
   const r = guest(`
     set -e
@@ -303,9 +336,10 @@ function pushToGuest(plan: RuleSetPlan[]): void {
     chmod +x ${GUEST_BINARY}.new
     mv -f ${GUEST_BINARY}.new ${GUEST_BINARY}
     rm -rf ${WORK}
-    mkdir -p ${WORK}/rules ${WORK}/tests
+    mkdir -p ${WORK}/rules ${WORK}/external ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
-    cp -r ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/. ${WORK}/rules/
+    cp -r ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/external/. ${WORK}/external/ 2>/dev/null || true
+    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/rules-map.json ${WORK}/rules-map.json
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
     cp ${REPO_IN_GUEST}/config/sing-box/base.yaml ${WORK}/base.yaml
     cp ${REPO_IN_GUEST}/config/sing-box/settings.yaml ${WORK}/settings.yaml
@@ -403,7 +437,7 @@ function loadRealInput(): { nodes: string[]; subs: string[] } | null {
 }
 
 /** 经客户端 encode + 服务端 /sub 取回真实产物，并后处理为可在 VM 内运行的配置。 */
-function fetchAndPrepare(options: LoopOptions): void {
+function fetchAndPrepare(options: LoopOptions, map: Record<string, string>): void {
   const real = options.nodes || options.subs ? null : loadRealInput();
   const nodes = options.nodes ?? real?.nodes ?? DEFAULT_NODES;
   const subs = options.subs ?? real?.subs ?? [];
@@ -443,60 +477,28 @@ function fetchAndPrepare(options: LoopOptions): void {
     URL=$(${GUEST_BINARY} encode -s http://127.0.0.1:${PORT} \\
       -c ${WORK}/client.yaml 2>/dev/null | grep '^http')
     [ -n "$URL" ] || { echo "encode 未产出 URL" >&2; exit 1; }
-    curl -sS --noproxy '*' "$URL" -o /work/sing-box/raw.json
-    python3 /work/sandbox-prepare.py /work/sing-box/raw.json ${WORK}/config.json
-    ${SB} check -c ${WORK}/config.json
+    curl -sS --noproxy '*' "$URL" -o ${WORK}/raw.json
+    cat ${WORK}/raw.json
     # 服务端已完成使命：留着会占端口，挡住下一次引导
     sudo -n pkill -9 -x sbtools 2>/dev/null || true
   `,
     yaml,
   );
-  if (r.code !== 0) fail("取回并准备配置", (r.err + r.out).trim());
+  if (r.code !== 0) fail("取回服务端配置", (r.err + r.out).trim());
+
+  // 规则集本地化在宿主完成：与 pushToGuest 共用同一张 tag→路径映射
+  let localized: unknown;
+  try {
+    localized = localizeRuleSets(JSON.parse(r.out), map);
+  } catch (e) {
+    fail("本地化规则集", e instanceof Error ? e.message : String(e));
+  }
+  const put = guest(`cat > ${WORK}/config.json`, JSON.stringify(localized, null, 2));
+  if (put.code !== 0) fail("写入 VM 配置", put.err.trim());
+  const chk = guest(`${SB} check -c ${WORK}/config.json`);
+  if (chk.code !== 0) fail("校验配置", chk.err.trim());
   console.log(`[引导] 闭环就绪：${WORK}/config.json`);
 }
-
-/** 后处理脚本：随引导推入 VM，与引导逻辑同源维护。 */
-const PREPARE_SCRIPT = `#!/usr/bin/env python3
-"""服务端产物 → VM 内可直接驱动内核的配置。
-
-只改「沙箱要零网络」带来的差异，不动任何被断言的语义：
-- rule_set 远程 URL 改本地编译产物路径（否则启动时联网拉取规则集）
-- 去掉 clash_api：external_ui 会在启动时从 GitHub 下载，断网时阻塞内核就绪
-
-inbounds 原样保留（TUN + mixed 2080）：TUN 断言与路由排除段是既有测试的一部分，
-且沙箱本就是特权环境，建 TUN 不耦合宿主网络。
-"""
-import json
-import os
-import sys
-
-src, dst = sys.argv[1], sys.argv[2]
-d = json.load(open(src))
-
-RULES = "${WORK}/rules"
-MAP = json.load(open(f"{RULES}/rules-map.json")) if os.path.exists(f"{RULES}/rules-map.json") else {}
-
-def localize(r):
-    if r.get("type") != "remote":
-        return r
-    path = MAP.get(r["tag"])
-    if not path:
-        raise SystemExit(f"规则集 {r['tag']} 没有本地映射")
-    return {"type": "local", "tag": r["tag"], "format": "binary", "path": path}
-
-d["route"]["rule_set"] = [localize(r) for r in d["route"]["rule_set"]]
-
-exp = d.get("experimental") or {}
-exp.pop("clash_api", None)
-if exp:
-    d["experimental"] = exp
-else:
-    d.pop("experimental", None)
-
-json.dump(d, open(dst, "w"), ensure_ascii=False)
-print(f"outbounds={len(d['outbounds'])} rule_set={len(d['route']['rule_set'])} "
-      f"inbounds={[i['tag'] for i in d['inbounds']]}")
-`;
 
 /**
  * VM 内核必须与 `.mise.toml` 声明的版本一致，否则沙箱测的不是生产内核。
@@ -543,12 +545,10 @@ export function bootstrap(options: LoopOptions = {}): void {
   ensureBinary();
   verifyLocalArtifacts(plan);
   ensureGuestKernel();
-  pushToGuest(plan);
-  // 后处理脚本本身也要在 VM 内可读
-  const put = guest("cat > /work/sandbox-prepare.py", PREPARE_SCRIPT);
-  if (put.code !== 0) fail("推送后处理脚本", put.err.trim());
+  const map = stageRuleSets(plan);
+  pushToGuest();
   startServer();
-  fetchAndPrepare(options);
+  fetchAndPrepare(options, map);
 }
 
 if (import.meta.main) {

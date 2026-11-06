@@ -324,18 +324,23 @@ describe("template.json structural verification", () => {
     assertMyDirectAndProxyBeforeServices(template.route?.rules ?? [], template.outbounds ?? []);
   });
 
-  test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
+  test("DNS 层拦截只引用去向为 reject 的清单，且排在 FakeIP 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
-    const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>
-      asArray(r.rule_set).includes("MyReject-dns"),
-    );
-    expect(rejectDnsRule).toBeDefined();
-    expect(rejectDnsRule?.action).toBe("reject");
-
+    const rejects = dnsRules.filter((r: { action?: string }) => r.action === "reject");
+    // 拦截清单必须仍在设置里且去向为 reject；删掉或改向时这里也应随之无拦截规则
+    for (const rule of rejects) {
+      for (const tag of asArray((rule as { rule_set?: string | string[] }).rule_set)) {
+        const source = settings.rules.find((r) => r.name === tag.replace(/-dns$/, ""));
+        expect(source?.to).toBe("reject");
+      }
+    }
     const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
     expect(fakeipIndex).toBeGreaterThan(-1);
-    const rejectIndex = dnsRules.indexOf(rejectDnsRule);
-    expect(rejectIndex).toBeLessThan(fakeipIndex);
+    for (const rule of rejects) expect(dnsRules.indexOf(rule)).toBeLessThan(fakeipIndex);
+    // 历史行为守卫：默认设置里 MyReject 是拒绝清单，DNS 层必须拦住它
+    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject")) {
+      expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
+    }
   });
 
   test("BT 仅按协议嗅探分流，默认直连而非固定出站", () => {
@@ -387,16 +392,20 @@ describe("settings.yaml → template.json 生成契约", () => {
     }
   });
 
-  test("声明的 URL：外部 .srs 原样，其余指向本仓库发布前缀", () => {
-    const byTag = new Map<string, { url: string }>(
-      template.route.rule_set.map((rs: { tag: string; url: string }) => [rs.tag, rs]),
-    );
+  test("声明的 URL：外部 .srs 原样，其余指向发布前缀且文件名已归一化", () => {
     const external = new Map(
       settings.rules.filter((r) => /^https?:\/\//.test(r.source)).map((r) => [r.name, r.source]),
     );
     for (const rs of template.route.rule_set as Array<{ tag: string; url: string }>) {
-      const expected = external.get(rs.tag) ?? `${PUBLISH_PREFIX}/${rs.tag}.srs`;
-      expect(byTag.get(rs.tag)?.url).toBe(expected);
+      expect(rs.url).toMatch(/^https:\/\/.+\.srs$/);
+      if (external.has(rs.tag)) {
+        expect(rs.url).toBe(external.get(rs.tag));
+        continue;
+      }
+      expect(rs.url.startsWith(`${PUBLISH_PREFIX}/`)).toBe(true);
+      // 产物名必须已归一化（无空白/路径分隔），不能是原始 tag 直接拼文件名
+      const file = decodeURIComponent(new URL(rs.url).pathname).split("/").pop() ?? "";
+      expect(file).toMatch(/^[\p{L}\p{N}._-]+\.srs$/u);
     }
   });
 
