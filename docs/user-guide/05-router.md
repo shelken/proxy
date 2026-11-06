@@ -9,15 +9,15 @@
 | tun               | `auto_route`                                                     | `auto_route` + `auto_redirect`（nftables 接管转发流量，白名单的 `bypass` 依赖它）   |
 | tun 的 `dns_mode` | `hijack`                                                         | `native`，53 端口改由路由规则接管，见下文的规则次序                                 |
 | DNS 入口          | 只靠 tun 劫持                                                    | 另有 `dns-in`，监听 53 端口，供把 DNS 指向旁路由的设备使用                          |
-| 本网解析器        | `dns-lan`（`type: local`，来自 `fragments/base/dns-lan-resolver.json`） | 角色列表里没有这份能力，定义与地址由 overlay 提供                                   |
-| 部署域静态应答    | `fragments/base/dns-deployment.json` 给 `ooooo.space` 固定应答   | 角色列表里没有这份能力，答案由主路由 dnsmasq 给                                     |
-| clash API         | `127.0.0.1:9090`                                                 | `0.0.0.0:9090`（`fragments/router/experimental.json`），面板可从局域网连接；`secret` 由 overlay 设置 |
+| 本网解析器        | `dns-lan`（`type: local`，来自 `platforms/mac.yaml`） | 平台层没有这份能力，定义与地址由 overlay 提供                                   |
+| 部署域静态应答    | `platforms/mac.yaml` 给 `ooooo.space` 固定应答   | 平台层没有这份能力，答案由主路由 dnsmasq 给                                     |
+| clash API         | `127.0.0.1:9090`                                                 | `0.0.0.0:9090`（`platforms/router.yaml`），面板可从局域网连接；`secret` 由 overlay 设置 |
 | `mixed-in`        | `127.0.0.1:2080`                                                 | 不变                                                                                |
 
 ## 前置
 
 - Linux，nftables 可用，sing-box 1.14 及以上（`.mise.toml` 锁 1.14.3，`dns_mode: native` 与 `action: bypass` 都在这个版本上验过）
-- 旁路由自身的系统 DNS 指向主路由。本网解析器的 tag 在三份底模里统一是 `dns-lan`：mac / iOS 由底模的 `type: local` 定义，路由角色不列它——`type: local` 对 `*.local.` 与链路本地反查固定走内置 mDNS，mDNS 没有否定应答，旁路由上没有应答者时只有超时。所以地址改由 overlay 的 `dns-lan` 提供，填主路由地址；指回本机会绕成环
+- 旁路由自身的系统 DNS 指向主路由。本网解析器的 tag 在三份底模里统一是 `dns-lan`：mac / iOS 由底模的 `type: local` 定义，路由角色不定义它：`type: local` 对 `*.local.` 与链路本地反查固定走内置 mDNS，mDNS 没有否定应答，旁路由上没有应答者时只有超时。所以地址改由 overlay 的 `dns-lan` 提供，填主路由地址；指回本机会绕成环
 - 内核开启转发，单网口时关闭 ICMP 重定向（否则内核会让客户端改走主路由，绕过旁路由）
 - 要走代理的设备：网关与 DNS 都指向旁路由。DNS 指向主路由时查询在同网段直达，fakeip 用不上
 

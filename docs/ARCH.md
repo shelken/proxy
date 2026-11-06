@@ -10,8 +10,8 @@ proxy/
 ├── scripts/
 │   └── sbtools-rs/       # sbtools 客户端编码与服务端装配
 ├── config/
-│   ├── rules/            # 分流规则源 (自定义 *.yaml 与 geosite:/geoip: 外部引用 index.yaml)
-│   ├── sing-box/         # 底模装配源 (modules.yaml + fragments/) 及其产物 (template.json、iOS 用 template-ios.json、路由器用 template-router.json)、沙箱测试套件
+│   ├── rules/            # 自定义规则列表 (custom/*.yaml)，由 settings.yaml 登记
+│   ├── sing-box/         # 底模输入 (settings.yaml + base.yaml + platforms/) 及其产物 (template.json、iOS 用 template-ios.json、路由器用 template-router.json)、沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sbtools) 与用户指南
 ├── .github/workflows/    # CI：ci-sbtools 门禁；release-plz 开版本 PR；release-sbtools 发布二进制与镜像
@@ -24,7 +24,7 @@ proxy/
 ```mermaid
 flowchart TD
     subgraph S1 ["1. 规则编译 (CI)"]
-        R_SRC["规则清单 (config/rules/index.yaml + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
+        R_SRC["规则登记 (config/sing-box/settings.yaml + custom/)"] --> GHA["build-rule-sets.yml\nbun scripts/rules-compile.ts build --all"]
         GHA --> R_BIN["各端产物\n(按客户端分目录, 见 config/rules/README.md)\n发布到 sing-box-rules 分支"]
     end
 
@@ -48,8 +48,8 @@ flowchart TD
 
 要点：
 
-- **规则产物自动重建**：改 `index.yaml` / `custom/**` / `template.json` 触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
-- **清单与底模引用一致**：CI 校验清单 tag 集合与底模声明的规则集相互吻合，缺一即失败
+- **规则产物自动重建**：改 `settings.yaml` / `custom/**` / 编译器与生成器触发 CI 编译并发布，无需手工往 `sing-box-rules` 分支提交
+- **登记与底模一致**：底模由 `settings.yaml` 生成，CI 重算三份产物并逐字节比对，手改或漏生成即失败
 - **凭据零外泄**：订阅与节点只经服务端公钥加密后传输，私钥不出服务端，公钥可公开
 - **合并交给官方 CLI**：服务端不实现合并算法，输入文件按 `00-direct`、`01-overlay`、`02-base` 命名，字典序决定优先级
 - **不耦合仓库目录**：底模用编译期内嵌版，或由客户端 `template_url` 指定；服务端无状态

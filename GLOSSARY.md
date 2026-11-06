@@ -16,14 +16,14 @@
 **底模**
 sing-box 配置的公共骨架，包含双入站、内网穿透、分流策略组与 route_exclude_address；服务端默认使用编译期内嵌版；客户端在 YAML 配 `template_url` 时改用下载的远端底模
 
-**模块表与片段**
-底模的装配源：`config/sing-box/modules.yaml` 一张表声明服务、清单组与每个平台的条目列表（`roles`），`config/sing-box/fragments/` 下的文件是纯配置片段。合并顺序就是角色列表的条目顺序，能力开关由「条目不在列表里」表达，见 `docs/adr/0013`
+**设置与平台层**
+底模的输入：`config/sing-box/settings.yaml` 登记规则与出站分组，`base.yaml` 放三端共享的原生字段，`platforms/<角色>.yaml` 放平台差异；与设置相关的路由、DNS 规则由 `scripts/build-config.ts` 的 `makePolicy` 生成，再交给 `sing-box merge`。产物是三份底模，见 `docs/adr/0015`
 
 **iOS 底模**
-同一份模块表的 `roles.ios` 用 `fragments/ios/` 顶替共享入站片段、并追加 Tailscale 片段后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
+`platforms/ios.yaml` 换用 iOS 入站、并追加 Tailscale 的 DNS、入站拒绝与路由后合并出的底模，内嵌 Tailscale endpoint，使 iOS 单个 VPN 同时承载代理与内网访问
 
 **路由器底模**
-同一份模块表的 `roles.router` 用 `fragments/router/` 顶替共享的入站与 experimental 片段、并追加 DNS 入口片段后合并出的底模：tun 开启 `auto_redirect` 作网关、`dns_mode` 为 `native`（53 端口由路由规则接管而非内核）、另有 53 端口的 DNS 入口、clash API 对局域网监听。本网解析器的 tag 与 mac / iOS 统一为 `dns-lan`，但路由角色既不定义本网解析器也不做部署域的静态应答；`dns-lan` 的地址、放行解析器清单、设备白名单与 clash API 的 secret 都由设备 overlay 提供，见 `docs/adr/0014`
+`platforms/router.yaml` 换用网关入站、追加 DNS 入口后合并出的底模：tun 开启 `auto_redirect` 作网关、`dns_mode` 为 `native`（53 端口由路由规则接管而非内核）、另有 53 端口的 DNS 入口、clash API 对局域网监听。本网解析器的 tag 与 mac / iOS 统一为 `dns-lan`，但路由角色既不定义本网解析器也不做部署域的静态应答；`dns-lan` 的地址、放行解析器清单、设备白名单与 clash API 的 secret 都由设备 overlay 提供，见 `docs/adr/0014`
 
 **DNS 出口**
 访问真实 DNS 上游所使用的网络路径，可独立于应用的业务出口选择
