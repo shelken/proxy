@@ -305,7 +305,7 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
     outbounds.extend(selectors);
     template["outbounds"] = Value::Array(outbounds);
 
-    // 地区组可能因订阅无匹配节点被整组跳过；DNS detour 悬空会让内核 FATAL。
+    // 组可能因订阅无匹配节点被整组跳过；DNS detour 与路由规则直指它时悬空，内核会 FATAL。
     // 回退链：proxy → direct（direct 由装配必插入，兜底恒存在）。
     let available: std::collections::HashSet<String> = template["outbounds"]
         .as_array()
@@ -335,6 +335,21 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
                 "[sbtools] dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
             );
             *detour = Value::from(fallback);
+        }
+    }
+    for rule in template["route"]["rules"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(outbound) = rule.get_mut("outbound")
+            && outbound.as_str().is_some_and(|t| !available.contains(t))
+        {
+            let orig = outbound.as_str().unwrap_or_default().to_string();
+            eprintln!(
+                "[sbtools] 路由规则的出站 '{orig}' 无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
+            );
+            *outbound = Value::from(fallback);
         }
     }
     Ok(())
@@ -533,6 +548,37 @@ mod tests {
             rule["domain"],
             json!(["node.invalid"]),
             "域名 server 进 domain"
+        );
+    }
+
+    /// 路由规则直指的组（如 MySelfhost→selfhost）在订阅无匹配节点时会被整组跳过，
+    /// 规则里的 outbound 必须仍然存在，否则内核 FATAL。
+    #[test]
+    fn route_rules_never_point_to_skipped_groups() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.2:8388#hk-01|hy2://pass@192.0.2.3:8388#jp-01",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let tags: std::collections::HashSet<&str> = tpl["outbounds"]
+            .as_array()
+            .expect("outbounds")
+            .iter()
+            .filter_map(|o| o["tag"].as_str())
+            .collect();
+        let dangling: Vec<&str> = tpl["route"]["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .filter_map(|r| r["outbound"].as_str())
+            .filter(|t| !tags.contains(t))
+            .collect();
+        assert!(
+            dangling.is_empty(),
+            "路由规则指向不存在的出站: {dangling:?}"
         );
     }
 
