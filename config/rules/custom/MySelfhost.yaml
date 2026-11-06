@@ -1,0 +1,5 @@
+rules:
+  - domain:
+      # 机场对邮件端口的连接可能失败，固定使用自建节点
+      - imap.gmail.com
+      - smtp.gmail.com

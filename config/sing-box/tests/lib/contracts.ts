@@ -28,13 +28,16 @@ export const assertMyDirectAndProxyBeforeServices = (
       .filter((o) => o.type === "selector" || o.type === "urltest")
       .map((o) => o.tag),
   );
-  for (const generic of ["direct", "proxy", "torrent", "download", "ts-ep"])
+  for (const generic of ["direct", "proxy", "selfhost", "torrent", "download", "ts-ep"])
     serviceOutbounds.delete(generic);
   const myDirect = rules.findIndex(
     (r) => r.outbound === "direct" && asArray(r.rule_set).includes("MyDirect"),
   );
   const myProxy = rules.findIndex(
     (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
+  );
+  const mySelfhost = rules.findIndex(
+    (r) => r.outbound === "selfhost" && asArray(r.rule_set).includes("MySelfhost"),
   );
   const firstService = rules.findIndex(
     (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
@@ -43,6 +46,9 @@ export const assertMyDirectAndProxyBeforeServices = (
   // 各自独立判定：删掉一个自有清单不应放过另一个的顺序约束
   if (myDirect >= 0) expect(myDirect).toBeLessThan(firstService);
   if (myProxy >= 0) expect(myProxy).toBeLessThan(firstService);
+  if (mySelfhost >= 0) expect(mySelfhost).toBeLessThan(firstService);
+  // 固定走自建的清单必须先于 MyProxy，否则重叠域名会被 MyProxy 抢走
+  if (mySelfhost >= 0 && myProxy >= 0) expect(mySelfhost).toBeLessThan(myProxy);
 };
 
 // ADR-0011：MyProxy 与 ChinaMax 重叠的域名（如 minimax.io）不能被国内 QUIC 豁免直连，
