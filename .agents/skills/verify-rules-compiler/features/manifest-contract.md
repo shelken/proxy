@@ -6,7 +6,7 @@
 
 - `contract-generate`：`scripts/build-config.ts --check` 重算三份产物并与磁盘逐字节比对，不一致时报出首个差异字节
 - `contract-settings`：`settings.yaml` 的校验覆盖规则名重复、去向无效、来源不存在、分组默认值不在候选里、`tag` 与产物名冲突
-- `contract-anchor`：DNS 与 QUIC 规则按名字引用的 7 个锚点改名或改去向时，生成器打印 `WARN` 并省略依赖它的规则（`inactiveAnchors`）
+- `contract-policy`：规则的 `dns` 取值须在 `reject / lan / fakeip / direct-cn` 内且来源有域名版，`quic: allow` 要求 `to: direct`，同策略的规则合并为一条 DNS 或 QUIC 规则
 - `contract-publish`：发布分支只包含 `settings.yaml` 产出的产物，底模引用的 URL 必然存在
 
 ## How to get to it (user POV)

@@ -14,7 +14,7 @@
 
 - `settings.yaml` 的 `rules` 每条 `{ name, source, to }`，书写顺序即首匹配顺序，`groups` 定义出站分组。规则声明、路由引用与 `-dns` 伴生出自同一次生成，清单与底模无从漂移，`rules-check` 与 `index.yaml` 随之删除
 - 生成器固定两段顺序：`to: reject` 在前，`to: download` 在 BT 之后。其余顺序就是书写顺序，顺序契约由 `config/sing-box/tests/lib/contracts.ts` 守
-- DNS 与 QUIC 规则按名字引用 7 个锚点规则，要求固定去向。改名或改去向时省略依赖它的规则并在构建时打印 `WARN`，不报错，以保留「故意删除」的可能
+- DNS 与 QUIC 策略写在规则自己身上：`dns`（reject / lan / fakeip / direct-cn）与 `quic`（allow / reject）。生成器按策略分组，不认识任何具体规则名，改名、改去向、删除都只影响这一条规则
 - 平台差异留在 `platforms/*.yaml` 的原生字段里。路由器的 `dns-in` 入口与 iOS 的 `ts-ep` 入口两条路由规则必须夹在 sniff 与 DNS 劫持之间，而 `merge` 对数组只追加，所以这两条仍由生成器按角色写入
 - 路由规则直指的分组在订阅无匹配节点时被 sbtools 整组跳过，装配时让这类规则回退 `proxy` 再回退 `direct`，与 DNS detour 同一条回退链
 
