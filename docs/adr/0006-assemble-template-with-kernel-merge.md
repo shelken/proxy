@@ -1,5 +1,7 @@
 # 底模装配交给官方内核 merge，模块按服务切分
 
+> 状态：模块文件的切分方式已被 [0015](0015-settings-yaml-single-entry.md) 取代，交给内核 `merge` 装配的决策仍成立
+
 底模（`config/sing-box/template.json`）的拼装从仓库自带的 TypeScript 装配器改为内核自带的 `sing-box merge -C config/sing-box/modules`，同时把按内容类型切分的 8 个模块文件重排为「每个服务一个文件」：一个服务的路由规则、规则集声明与出站组放在一起
 
 ## Context

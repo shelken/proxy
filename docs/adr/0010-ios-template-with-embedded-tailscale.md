@@ -1,5 +1,7 @@
 # iOS 使用独立底模，内嵌 Tailscale 承载内网访问
 
+> 状态：`modules.yaml` 与 `fragments/` 的布局已被 [0015](0015-settings-yaml-single-entry.md) 取代，iOS 独立底模内嵌 Tailscale 的决策仍成立；现由 `platforms/ios.yaml` 表达
+
 **日期**：2026-10-17
 
 iOS 同一时间只能有一个 VPN，sing-box 与独立 Tailscale App 无法并存。iOS 底模与 Mac 共用 `fragments/base/` 的片段，另在 `config/sing-box/modules.yaml` 里有一份 `roles.ios`：`fragments/ios/inbounds.json` 顶替共享的入站片段，并追加 Tailscale 的 DNS、endpoint、入站拒绝与路由四个片段，合并出 `template-ios.json`，由 sing-box 内嵌的 `tailscale` endpoint 同时承载代理与内网访问。Mac 的 `template.json` 不变（布局在 2026-11-05 收敛为一张表加一层片段，见 `docs/adr/0013`）

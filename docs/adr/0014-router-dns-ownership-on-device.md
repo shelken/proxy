@@ -1,5 +1,7 @@
 # 路由角色的 DNS 归属归设备侧
 
+> 状态：文中的 `fragments/` 与 `roles` 是 0013 时期的布局，现为 `platforms/router.yaml`，决策不变
+
 **日期**：2026-11-05
 
 路由器底模不再自带本网解析器的定义，也不做部署域的静态应答；tun 的 `dns_mode` 由 `hijack` 改 `native`，53 端口的接管交回路由规则。三件事同属一个决定：路由角色的 DNS 由设备与路由规则决定，底模不预设答案。片段的增删方式见 [0013](0013-module-manifest-with-semantic-fragments.md)，取舍背景见 [0012](0012-router-template-for-side-router.md)

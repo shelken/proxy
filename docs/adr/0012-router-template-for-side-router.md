@@ -1,5 +1,7 @@
 # 路由器使用独立底模，设备白名单放在 overlay
 
+> 状态：`modules.yaml` 与 `fragments/` 的布局已被 [0015](0015-settings-yaml-single-entry.md) 取代，路由器独立底模的决策仍成立；现由 `platforms/router.yaml` 表达
+
 **日期**：2026-11-03
 
 家里的单臂旁路由（Linux，sing-box 1.14）要和 Mac / iOS 走同一条订阅链路：sbtools 加密 yaml，服务端按 `template_url` 装配。Mac 底模是给单机用的，作为网关缺三样东西，而这三样都在 overlay 改不动的位置。路由器底模与 Mac 共用 `fragments/base/` 的片段，另在 `config/sing-box/modules.yaml` 里有一份 `roles.router`：`fragments/router/inbounds.json` 与 `fragments/router/experimental.json` 顶替共享的同名能力，并追加一个 DNS 入口片段，合并出 `template-router.json`；哪些设备走代理由各自的 overlay 决定，底模不含任何设备数据（布局在 2026-11-05 收敛为一张表加一层片段，见 `docs/adr/0013`）
