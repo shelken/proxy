@@ -443,7 +443,6 @@ export function ensureGuestKernel(): void {
 }
 
 export function bootstrap(options: LoopOptions = {}): void {
-  // 二进制/仓库产物先行：底模声明的产物缺失时先报，不必碰 VM
   ensureBinary();
   ensureGuestKernel();
   pushToGuest();
