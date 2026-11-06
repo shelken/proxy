@@ -1,4 +1,4 @@
-// Mac、iOS 与路由器底模共用同一份模块表与片段，各端都必须满足的顺序契约集中在这里，
+// Mac、iOS 与路由器底模共用同一份 settings.yaml 与 base.yaml，各端都必须满足的顺序契约集中在这里，
 // 由三份结构测试复用，变异验证也直接打这些函数，避免三处各写一份后口径漂移。
 import { expect } from "bun:test";
 
@@ -76,9 +76,8 @@ export const assertMyProxyDnsBeforeChinaMax = (dnsRules: Rule[]) => {
   expect(asArray(dnsRules[mine].query_type)).toEqual(["A", "AAAA"]);
 };
 
-// 规则引用的 rule_set tag 必须已声明。catalog 把「声明」与「引用」拆成两个条目之后，
-// 从角色列表里删掉 `{ catalog: X }` 而留下用它的规则片段，产物就长成「规则引用未声明的 tag」。
-// 内核对此只在运行期静默不命中，check 与 merge 都退出码 0（实测）。产物侧由这里拦，
+// 规则引用的 rule_set tag 必须已声明。内核对未声明的 tag 只在运行期静默不命中，
+// check 与 merge 都退出码 0（实测）。产物侧由这里拦，
 // 生成侧的 settings↔底模契约由 scripts/build-config.test.ts 与 template.test.ts 守。
 export const assertAllRuleSetsDeclared = (route: {
   rules?: Rule[];

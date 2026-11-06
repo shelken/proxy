@@ -47,7 +47,7 @@ export const assertMagicDns = (dns: Record<string, any>) => {
   expect(server?.endpoint).toBe("ts-ep");
 };
 
-// iOS 的差异面：inbounds 换成 iOS 版，另加 Tailscale 片段（入站拒绝、endpoint、DNS、路由）。
+// iOS 的差异面：inbounds 换成 iOS 版，另加 Tailscale（入站拒绝、endpoint、DNS、路由）。
 // 顺序约束就是产物里的位置：入站拒绝早于 sniff 与 DNS 劫持，Tailscale 路由晚于 sniff、早于私网直连。
 
 // 内核 merge 会省略取默认值的布尔字段（false），断言按默认值对待。
@@ -111,7 +111,7 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
 });
 
 // 共享片段的顺序约束在 iOS 侧同样成立（CODING_STANDARDS：拦截 > 模式开关 > 服务分流，
-// MyDirect/MyProxy 排在所有服务规则之前）。模块表与片段更新只跑 Mac 测试时，
+// MyDirect/MyProxy 排在所有服务规则之前）。设置更新只跑 Mac 测试时，
 // 违反顺序的改动对 iOS 不可见，这里补上同口径断言。
 describe("共享顺序契约（iOS 侧）", () => {
   test("全部 reject 规则排在首个 clash_mode 之前（ADR-0008）", () => {
