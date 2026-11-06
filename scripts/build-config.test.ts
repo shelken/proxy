@@ -18,15 +18,17 @@ import {
 } from "../config/sing-box/tests/lib/contracts.ts";
 
 const CONFIG = resolve(import.meta.dir, "../config/sing-box");
+const FIXTURES = resolve(import.meta.dir, "fixtures");
+const fixtureSettings = join(FIXTURES, "settings.yaml");
 const base = loadBase();
-const settingsFile = readFileSync(join(CONFIG, "settings.yaml"), "utf8");
+const settingsFile = readFileSync(fixtureSettings, "utf8");
 const platforms = Object.fromEntries(
   (["mac", "ios", "router"] as const).map((role) => [
     role,
     Bun.YAML.parse(readFileSync(join(CONFIG, "platforms", `${role}.yaml`), "utf8")) as Platform,
   ]),
 ) as Record<Role, Platform>;
-const defaults = loadSettings(base);
+const defaults = loadSettings(base, fixtureSettings);
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -38,18 +40,18 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
-/** 以真实默认设置为基础改一份临时 settings.yaml；本地来源改写为绝对路径。 */
+/** 固定场景来自独立夹具，避免用户删规则后回归输入也消失。 */
 function tempSettings(mutate: (doc: any) => void = () => {}): string {
   const doc = Bun.YAML.parse(settingsFile) as any;
   for (const rule of doc.rules) {
-    if (rule.source.startsWith("..")) rule.source = resolve(CONFIG, rule.source);
+    if (rule.source.startsWith(".")) rule.source = resolve(FIXTURES, rule.source);
   }
   mutate(doc);
   const path = join(tempDir("settings-"), "settings.yaml");
   writeFileSync(path, JSON.stringify(doc, null, 2));
   return path;
 }
-const localSource = resolve(CONFIG, "../rules/custom/Lan.yaml");
+const localSource = join(FIXTURES, "domains.yaml");
 const ruleSet = (cfg: any, tag: string) => cfg.route.rule_set.find((rs: any) => rs.tag === tag);
 const withRule = (cfg: any, tag: string) => cfg.route.rules.filter((r: any) => [r.rule_set].flat().includes(tag));
 
@@ -301,7 +303,7 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
     }
   });
 
-  test("真实 CLI 重建 + 完整模板测试文件（删/改向/追加空格名与中文名）", () => {
+  test("真实 CLI 重建 + 完整三平台门禁（增删改不依赖 YAML 排版）", () => {
     const sb = hostSingBox();
     if (!sb) {
       console.warn("SKIP: 宿主找不到 sing-box，无法跑真实门禁");
@@ -321,19 +323,39 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
     }
     const env = { ...process.env, SING_BOX: sb };
     const settingsPath = join(root, "config/sing-box/settings.yaml");
-    const original = readFileSync(join(repo, "config/sing-box/settings.yaml"), "utf8");
-    const lan = join(root, "config/rules/custom/Lan.yaml");
-    const cases: Array<[string, (s: string) => string]> = [
-      ["删除 MyReject", (s) => s.replace(/  - name: MyReject\n    source: \.\.\/rules\/custom\/MyReject\.yaml\n    to: reject\n/, "")],
-      ["MyReject 改 proxy", (s) => s.replace(/(  - name: MyReject\n    source: \.\.\/rules\/custom\/MyReject\.yaml\n    to: )reject/, "$1proxy")],
-      ["追加本地 A B", (s) => `${s}  - { name: A B, source: ${lan}, to: reject }\n`],
-      ["追加中文名", (s) => `${s}  - { name: 小米追踪, source: ${lan}, to: proxy }\n`],
+    const original = Bun.YAML.parse(settingsFile) as any;
+    for (const rule of original.rules) {
+      if (rule.source.startsWith(".")) rule.source = resolve(FIXTURES, rule.source);
+    }
+    const cases: Array<[string, (doc: any) => void]> = [
+      ...["MyReject", "MyDirect", "MyProxy", "Lan", "ChinaMax"].map((tag): [string, (doc: any) => void] => [
+        `删除 ${tag}`, (doc) => { doc.rules = doc.rules.filter((rule: any) => rule.name !== tag); },
+      ]),
+      ["MyReject 改 proxy", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").to = "proxy"; }],
+      ["Lan 改 proxy", (doc) => { doc.rules.find((rule: any) => rule.name === "Lan").to = "proxy"; }],
+      ["Facebook 改 hk", (doc) => { doc.rules.find((rule: any) => rule.name === "Facebook").to = "hk"; }],
+      ["MyReject 改远程", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").source = "https://example.com/tracking.srs"; }],
+      ["Lan 改远程", (doc) => { doc.rules.find((rule: any) => rule.name === "Lan").source = "https://example.com/tracking.srs"; }],
+      ...["Lan", "MyDirect", "MyReject"].map((tag): [string, (doc: any) => void] => [
+        `${tag} 改 IP 清单`, (doc) => { doc.rules.find((rule: any) => rule.name === tag).source = "geoip:cn"; },
+      ]),
+      ["远程来源带查询参数", (doc) => { doc.rules.find((rule: any) => rule.name === "MyReject").source = "http://example.com/tracking.srs?revision=1"; }],
+      ["追加本地 A B", (doc) => { doc.rules.push({ name: "A B", source: localSource, to: "reject" }); }],
+      ["追加中文名", (doc) => { doc.rules.push({ name: "小米追踪", source: localSource, to: "proxy" }); }],
     ];
     for (const [name, mutate] of cases) {
-      writeFileSync(settingsPath, mutate(original));
+      const doc = structuredClone(original);
+      mutate(doc);
+      expect(doc, `${name} 必须实际改变设置`).not.toEqual(original);
+      writeFileSync(settingsPath, Bun.YAML.stringify(doc));
       const build = Bun.spawnSync([process.execPath, "run", "scripts/build-config.ts"], { cwd: root, env });
       expect(build.exitCode, `${name} build:\n${build.stdout}${build.stderr}`).toBe(0);
-      const gate = Bun.spawnSync([process.execPath, "test", "config/sing-box/tests/template.test.ts"], { cwd: root, env });
+      const gate = Bun.spawnSync([
+        process.execPath, "test",
+        "config/sing-box/tests/template.test.ts",
+        "config/sing-box/tests/ios-template.test.ts",
+        "config/sing-box/tests/router-template.test.ts",
+      ], { cwd: root, env });
       expect(gate.exitCode, `${name} gate:\n${gate.stdout}${gate.stderr}`).toBe(0);
     }
   }, 60000);

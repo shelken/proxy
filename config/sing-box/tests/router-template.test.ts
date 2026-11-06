@@ -14,6 +14,7 @@ import {
 
 const templatePath = resolve(import.meta.dir, "../template-router.json");
 const router = JSON.parse(await Bun.file(templatePath).text());
+const settings = Bun.YAML.parse(await Bun.file(resolve(import.meta.dir, "../settings.yaml")).text());
 const rules = router.route.rules as Array<Record<string, any>>;
 
 // --- 契约断言（供正向测试与变异验证复用）---
@@ -151,7 +152,13 @@ describe("DNS 归属契约：底模与 overlay 的分界", () => {
     const lan = router.dns.rules.find((r: any) =>
       asArray(r.rule_set).includes("Lan-dns"),
     );
-    expect(lan.server).toBe("dns-lan");
+    const source = settings.rules.find((r: any) => r.name === "Lan");
+    const active = source?.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
+    if (active) {
+      expect(lan?.server).toBe("dns-lan");
+    } else {
+      expect(lan).toBeUndefined();
+    }
   });
 
   test("默认解析器与 PTR 也交给 overlay 的 dns-lan", () => {

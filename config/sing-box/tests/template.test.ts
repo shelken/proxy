@@ -127,8 +127,13 @@ describe("template.json structural verification", () => {
   test("routes Lan, local domain suffixes, and PTR queries to local system DNS", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
-    expect(lanRule).toBeDefined();
-    expect(lanRule.server).toBe("dns-lan");
+    const source = settings.rules.find((r) => r.name === "Lan");
+    const active = source?.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
+    if (active) {
+      expect(lanRule?.server).toBe("dns-lan");
+    } else {
+      expect(lanRule).toBeUndefined();
+    }
 
     const suffixRule = rules.find((r) => r.domain_suffix?.includes("local"));
     expect(suffixRule).toBeDefined();
@@ -144,7 +149,7 @@ describe("template.json structural verification", () => {
   test("个人域规则集走系统 DNS 且排在 FakeIP 之前（存在且为直连时）", () => {
     const rules = template.dns?.rules ?? [];
     const source = settings.rules.find((r) => r.name === "MyDirect");
-    const active = source && source.to === "direct" && !/^https?:\/\//.test(source.source);
+    const active = source && source.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
     if (!active) {
       // 删除/改向/外部来源（无伴生）时不得残留 DNS 引用
@@ -342,7 +347,7 @@ describe("template.json structural verification", () => {
     expect(fakeipIndex).toBeGreaterThan(-1);
     for (const rule of rejects) expect(dnsRules.indexOf(rule)).toBeLessThan(fakeipIndex);
     // 历史行为守卫：默认设置里 MyReject 是本地拒绝清单（有伴生），DNS 层必须拦住它
-    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject" && !/^https?:\/\//.test(r.source))) {
+    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject" && !/^(https?:\/\/|geoip:)/.test(r.source))) {
       expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
     }
   });
@@ -401,7 +406,9 @@ describe("settings.yaml → template.json 生成契约", () => {
       settings.rules.filter((r) => /^https?:\/\//.test(r.source)).map((r) => [r.name, r.source]),
     );
     for (const rs of template.route.rule_set as Array<{ tag: string; url: string }>) {
-      expect(rs.url).toMatch(/^https:\/\/.+\.srs$/);
+      const url = new URL(rs.url);
+      expect(["http:", "https:"]).toContain(url.protocol);
+      expect(url.pathname.endsWith(".srs")).toBe(true);
       if (external.has(rs.tag)) {
         expect(rs.url).toBe(external.get(rs.tag));
         continue;

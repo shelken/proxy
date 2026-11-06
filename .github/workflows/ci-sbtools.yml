@@ -18,6 +18,7 @@ on:
       - "config/sing-box/tests/**"
       - "scripts/build-config.ts"
       - "scripts/build-config.test.ts"
+      - "scripts/fixtures/**"
       - "scripts/settings.ts"
       - "scripts/merge-variant-fixture.sh"
       - ".mise.toml"
@@ -95,6 +96,10 @@ jobs:
       # kernel-routing.test.js 需要真实 tun0 设备，只能在 Lima 跑。
       - name: run template structural tests
         run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
+        working-directory: .
+
+      - name: run config and rule compiler tests
+        run: SING_BOX=$(which sing-box) bun test scripts/build-config.test.ts scripts/rules-compile.test.ts scripts/sandbox-loop.test.ts
         working-directory: .
 
       - name: cargo test
