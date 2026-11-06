@@ -39,11 +39,10 @@ export const assertMyDirectAndProxyBeforeServices = (
   const firstService = rules.findIndex(
     (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
   );
-  expect(myDirect).toBeGreaterThanOrEqual(0);
-  expect(myProxy).toBeGreaterThanOrEqual(0);
   expect(firstService).toBeGreaterThan(-1);
-  expect(myDirect).toBeLessThan(firstService);
-  expect(myProxy).toBeLessThan(firstService);
+  // 各自独立判定：删掉一个自有清单不应放过另一个的顺序约束
+  if (myDirect >= 0) expect(myDirect).toBeLessThan(firstService);
+  if (myProxy >= 0) expect(myProxy).toBeLessThan(firstService);
 };
 
 // ADR-0011：MyProxy 与 ChinaMax 重叠的域名（如 minimax.io）不能被国内 QUIC 豁免直连，
@@ -54,7 +53,8 @@ export const assertMyProxyQuicBeforeExempt = (rules: Rule[]) => {
   const myProxyReject = quic.find(
     (r) => r.action === "reject" && asArray(r.rule_set).includes("MyProxy"),
   );
-  expect(exempt).toBeDefined();
+  // 清单不在当前设置里时无此约束
+  if (!exempt || !myProxyReject) return;
   expect(myProxyReject?.no_drop).toBe(true);
   expect(rules.indexOf(myProxyReject!)).toBeLessThan(rules.indexOf(exempt!));
 };
@@ -63,7 +63,8 @@ export const assertMyProxyQuicBeforeExempt = (rules: Rule[]) => {
 export const assertMyProxyDnsBeforeChinaMax = (dnsRules: Rule[]) => {
   const mine = dnsRules.findIndex((r) => asArray(r.rule_set).includes("MyProxy-dns"));
   const china = dnsRules.findIndex((r) => asArray(r.rule_set).includes("ChinaMax-dns"));
-  expect(mine).toBeGreaterThanOrEqual(0);
+  // 清单不在当前设置里时无此约束
+  if (mine < 0 || china < 0) return;
   expect(mine).toBeLessThan(china);
   expect(dnsRules[mine].server).toBe("dns-fakeip");
   expect(asArray(dnsRules[mine].query_type)).toEqual(["A", "AAAA"]);
@@ -71,8 +72,8 @@ export const assertMyProxyDnsBeforeChinaMax = (dnsRules: Rule[]) => {
 
 // 规则引用的 rule_set tag 必须已声明。catalog 把「声明」与「引用」拆成两个条目之后，
 // 从角色列表里删掉 `{ catalog: X }` 而留下用它的规则片段，产物就长成「规则引用未声明的 tag」。
-// 内核对此只在运行期静默不命中，check 与 merge 都退出码 0（实测）。底模那份由 just rules-check 报出，
-// 两个变体产物没有别的门禁，只能在这里拦。
+// 内核对此只在运行期静默不命中，check 与 merge 都退出码 0（实测）。产物侧由这里拦，
+// 生成侧的 settings↔底模契约由 scripts/build-config.test.ts 与 template.test.ts 守。
 export const assertAllRuleSetsDeclared = (route: {
   rules?: Rule[];
   rule_set?: Array<{ tag: string }>;

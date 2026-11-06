@@ -7,21 +7,17 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  dnsCompanionNames,
   emitClash,
   emitPlain,
   emitSingbox,
   emitSingboxDns,
   externalUrls,
-  loadManifest,
   orphanCustomLists,
-  outputName,
   parseYamlAst,
-  validateTemplate,
-  type ManifestItem,
   type RuleAST,
   type SingBoxRule,
 } from "./rules-compile.ts";
+import { artifactName, type Rule } from "./settings.ts";
 
 /** 取出某个字段的全部值，跨 rule 合并。 */
 function fieldValues(rules: SingBoxRule[], field: string): unknown[] {
@@ -30,13 +26,6 @@ function fieldValues(rules: SingBoxRule[], field: string): unknown[] {
 
 function singboxRules(ast: RuleAST): SingBoxRule[] {
   return JSON.parse(emitSingbox(ast)).rules;
-}
-
-/** 把清单内容写到临时文件，返回路径。测试只读不写仓库目录。 */
-function writeManifest(content: string): string {
-  const path = `/tmp/rules-manifest-${Math.random().toString(36).slice(2)}.yaml`;
-  Bun.write(path, content);
-  return path;
 }
 
 describe("外部原生引用", () => {
@@ -294,124 +283,28 @@ describe("emitPlain（Loon / Surge）", () => {
 });
 
 
-describe("清单解析", () => {
-  test("输出名净化，去掉路径分隔符等非法字符", () => {
-    expect(outputName("My/Weird Tag")).toBe("My_Weird_Tag");
-    expect(outputName("***")).toBe("rule");
+describe("产物命名与孤儿检测", () => {
+  test("产物名保留 CJK，折叠非法字符", () => {
+    expect(artifactName("小米追踪")).toBe("小米追踪");
+    expect(artifactName("My/Weird Tag")).toBe("My_Weird_Tag");
+    expect(artifactName("***")).toBe("rule");
   });
 
-  test("解析 tag: source 映射，注释与空行被忽略", () => {
-    const path = writeManifest(
-      [
-        "# 注释",
-        "OpenAI: config/rules/custom/OpenAI.list",
-        "",
-        "Twitter: https://example.com/Twitter.list",
-      ].join("\n"),
-    );
-    expect(loadManifest(path)).toEqual([
-      { tag: "OpenAI", source: "config/rules/custom/OpenAI.list" },
-      { tag: "Twitter", source: "https://example.com/Twitter.list" },
-    ]);
-  });
-
-  test("数字键带引号时仍是字符串 tag", () => {
-    const path = writeManifest('"867": config/rules/custom/x.list');
-    expect(loadManifest(path)).toEqual([{ tag: "867", source: "config/rules/custom/x.list" }]);
-  });
-
-  test("source 非字符串或为空时直接报错", () => {
-    expect(() => loadManifest(writeManifest("OpenAI:\n"))).toThrow(/必须是非空字符串/);
-    expect(() => loadManifest(writeManifest("OpenAI: ''\n"))).toThrow(/必须是非空字符串/);
-  });
-
-  test("顶层不是映射时报错", () => {
-    expect(() => loadManifest(writeManifest("- a\n- b\n"))).toThrow(/必须是 tag: source 映射/);
-  });
-
-  test("只在 custom/ 放文件、不写进清单时能被识别为孤儿", () => {
+  test("只在 custom/ 放文件、不写进 settings 时能被识别为孤儿", () => {
     // 真实踩过的坑：把新列表丢进 custom/ 就以为 CI 会发现它。
-    // 清单是唯一入口，孤儿文件不产出任何规则，所以必须显式提醒。
-    const orphans = orphanCustomLists([
-      { tag: "Known", source: "config/rules/custom/MyReject.yaml" },
-    ]);
+    // settings.yaml 的 rules 是唯一入口，孤儿文件不产出任何规则，所以必须显式提醒。
+    const referenced = {
+      name: "Known",
+      source: "../rules/custom/MyReject.yaml",
+      to: "reject",
+      kind: "local",
+      artifact: "Known",
+      companion: true,
+      path: "config/rules/custom/MyReject.yaml",
+    } as Rule;
+    const orphans = orphanCustomLists([referenced]);
     expect(orphans).toContain("config/rules/custom/OpenAI.yaml");
     expect(orphans).not.toContain("config/rules/custom/MyReject.yaml");
-  });
-});
-
-describe("底模契约校验", () => {
-  const items: ManifestItem[] = [
-    { tag: "MyReject", source: "config/rules/custom/MyReject.yaml" },
-    { tag: "OpenAI", source: "config/rules/custom/OpenAI.yaml" },
-  ];
-  const template = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    route: {
-      rule_set: [{ tag: "MyReject" }, { tag: "OpenAI" }],
-      rules: [
-        { rule_set: ["MyReject"], action: "reject" },
-        { rule_set: ["OpenAI"], action: "route", outbound: "openai" },
-      ],
-    },
-    dns: { rules: [] },
-    ...over,
-  });
-
-  test("清单与底模一致时不报错", () => {
-    expect(validateTemplate(template(), items)).toEqual([]);
-  });
-
-  test("清单里的 tag 未出现在 route.rules 时报错", () => {
-    // 模板声明了 rule_set 却没写路由规则：规则集不会生效，属于配置漏写。
-    const drift = validateTemplate(
-      template({
-        route: {
-          rule_set: [{ tag: "MyReject" }, { tag: "OpenAI" }],
-          rules: [{ rule_set: ["MyReject"], action: "reject" }],
-        },
-      }),
-      items,
-    );
-    expect(drift.some((e) => e.includes("OpenAI") && e.includes("未出现在底模 route.rules"))).toBe(
-      true,
-    );
-  });
-
-  test("底模漏声明清单里的 tag 时报错", () => {
-    const drift = validateTemplate(
-      { route: { rule_set: [{ tag: "MyReject" }], rules: [{ rule_set: ["MyReject"], action: "reject" }] }, dns: {} },
-      items,
-    );
-    expect(drift.some((e) => e.includes("OpenAI") && e.includes("未在底模"))).toBe(true);
-  });
-
-  test("底模声明了清单外的 tag 时报错", () => {
-    const drift = validateTemplate(
-      template({ route: { rule_set: [{ tag: "MyReject" }, { tag: "OpenAI" }, { tag: "Ghost" }], rules: [] } }),
-      items,
-    );
-    expect(drift.some((e) => e.includes("Ghost") && e.includes("既不在清单里"))).toBe(true);
-  });
-
-  test("DNS 伴生被路由引用时报错", () => {
-    const t = {
-      route: {
-        rule_set: [{ tag: "MyReject" }, { tag: "OpenAI" }, { tag: "OpenAI-dns" }],
-        rules: [
-          { rule_set: ["MyReject"], action: "reject" },
-          { rule_set: ["OpenAI"], action: "route", outbound: "openai" },
-          { rule_set: ["OpenAI-dns"], action: "route", outbound: "proxy" },
-        ],
-      },
-      dns: { rules: [{ rule_set: ["OpenAI-dns"], server: "dns-direct-cn" }] },
-    };
-    const drift = validateTemplate(t, items);
-    expect(drift.some((e) => e.includes("OpenAI-dns") && e.includes("不应参与路由"))).toBe(true);
-  });
-
-  test("DNS 规则引用了清单外的规则集时报错", () => {
-    const t = template({ dns: { rules: [{ rule_set: ["DoesNotExist"], server: "dns-direct-cn" }] } });
-    expect(() => dnsCompanionNames(t, items)).toThrow(/既不在清单里/);
   });
 });
 

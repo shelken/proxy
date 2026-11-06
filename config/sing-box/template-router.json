@@ -1,4 +1,7 @@
 {
+  "log": {
+    "level": "info"
+  },
   "dns": {
     "servers": [
       {
@@ -455,12 +458,19 @@
         "outbound": "direct"
       },
       {
-        "rule_set": [
-          "Advertising",
-          "Hijacking",
-          "MyReject",
-          "Privacy"
-        ],
+        "rule_set": "Advertising",
+        "action": "reject"
+      },
+      {
+        "rule_set": "Hijacking",
+        "action": "reject"
+      },
+      {
+        "rule_set": "MyReject",
+        "action": "reject"
+      },
+      {
+        "rule_set": "Privacy",
         "action": "reject"
       },
       {
@@ -514,14 +524,14 @@
       },
       {
         "rule_set": [
-          "ChinaMax",
-          "Lan",
           "MyDirect",
-          "cftunnel",
-          "geoip-cn",
           "Microsoft",
           "PayPal",
-          "Apple"
+          "Apple",
+          "ChinaMax",
+          "Lan",
+          "cftunnel",
+          "geoip-cn"
         ],
         "invert": true,
         "action": "resolve",
@@ -597,28 +607,57 @@
         "outbound": "apple"
       },
       {
-        "rule_set": [
-          "ChinaMax",
-          "Lan",
-          "cftunnel",
-          "geoip-cn"
-        ],
+        "rule_set": "ChinaMax",
         "outbound": "direct"
       },
       {
-        "rule_set": [
-          "Facebook",
-          "Instagram",
-          "Spotify",
-          "Telegram",
-          "TikTok",
-          "Twitter",
-          "YouTube"
-        ],
+        "rule_set": "Lan",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "cftunnel",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "geoip-cn",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "Facebook",
+        "outbound": "proxy"
+      },
+      {
+        "rule_set": "Instagram",
+        "outbound": "proxy"
+      },
+      {
+        "rule_set": "Spotify",
+        "outbound": "proxy"
+      },
+      {
+        "rule_set": "Telegram",
+        "outbound": "proxy"
+      },
+      {
+        "rule_set": "TikTok",
+        "outbound": "proxy"
+      },
+      {
+        "rule_set": "Twitter",
+        "outbound": "proxy"
+      },
+      {
+        "rule_set": "YouTube",
         "outbound": "proxy"
       }
     ],
     "rule_set": [
+      {
+        "type": "remote",
+        "tag": "MyReject-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
+        "update_interval": "24h0m0s"
+      },
       {
         "type": "remote",
         "tag": "Lan-dns",
@@ -629,12 +668,6 @@
         "type": "remote",
         "tag": "MyDirect-dns",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyDirect-dns.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
-        "tag": "MyReject-dns",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/MyReject-dns.srs",
         "update_interval": "24h0m0s"
       },
       {

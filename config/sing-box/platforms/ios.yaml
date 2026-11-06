@@ -1,0 +1,36 @@
+# platforms/ios.yaml — iOS 平台层：TUN 入站、内嵌 Tailscale、本网解析器与部署域应答（原生字段）。
+
+inbounds:
+  - type: tun
+    tag: tun-in
+    address: [198.51.100.1/30, "fdfe:dcba:9876::1/126"]
+    auto_route: true
+    dns_mode: hijack
+    route_exclude_address:
+      - 224.0.0.0/4
+      - 255.255.255.255/32
+      - fe80::/10
+  - { type: mixed, tag: mixed-in, listen: 127.0.0.1, listen_port: 2080 }
+
+endpoints:
+  - type: tailscale
+    tag: ts-ep
+    state_directory: tailscale-ios
+    hostname: singbox-ios
+    accept_routes: true
+    system_interface: false
+
+dns:
+  servers:
+    - type: tailscale
+      tag: dns-ts
+      endpoint: ts-ep
+      accept_default_resolvers: false
+      accept_search_domain: true
+    - { type: local, tag: dns-lan }
+  rules:
+    # Peer 的 DNS 查询绕过 route.rules 直接进 dnsRouter，路由层入站拒绝覆盖不到
+    - { inbound: [ts-ep], action: reject }
+    - { preferred_by: dns-ts, server: dns-ts, disable_optimistic_cache: true }
+    - { domain_suffix: [.int.ooooo.space], query_type: [A], action: predefined, answer: ["*. IN A 192.168.69.46"] }
+    - { domain_suffix: [int.ooooo.space], action: predefined }

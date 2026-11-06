@@ -1,8 +1,0 @@
-{
-  "http_clients": [
-    {
-      "tag": "rule-set-dl",
-      "detour": "rule-set-dl-group"
-    }
-  ]
-}

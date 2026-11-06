@@ -24,6 +24,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { localizeRuleSets, planRuleSets, stageRuleSets } from "../../../../scripts/sandbox-loop.ts";
 
 const REPO = resolve(import.meta.dir, "../../../..");
 const ARTIFACTS_ROOT = join(REPO, ".sandbox-artifacts/verification");
@@ -105,7 +106,7 @@ export function launch(outDir) {
     phase: "ready",
     commit: host("git", ["rev-parse", "HEAD"]).out.trim(),
     dirty: host("git", ["status", "--porcelain"]).out.trim(),
-    indexSha: sha256(join(REPO, "config/rules/index.yaml")),
+    settingsSha: sha256(join(REPO, "config/sing-box/settings.yaml")),
     templateSha: sha256(join(REPO, "config/sing-box/template.json")),
     builtTags: Number(built[1]),
     generatedAt: new Date().toISOString(),
@@ -135,8 +136,8 @@ export function doctor(outDir) {
     }
   }
 
-  const check = host("bun", ["scripts/rules-compile.ts", "check"]);
-  if (check.code !== 0) problems.push(`清单-底模契约校验失败：\n${check.out}${check.err}`);
+  const check = host("bun", ["scripts/build-config.ts", "--check"]);
+  if (check.code !== 0) problems.push(`底模与 settings/base/platforms 不一致：\n${check.out}${check.err}`);
 
   const vm = guest("echo ok");
   if (vm.code !== 0) problems.push(`VM ${VM} 不可达：${vm.err.trim()}（just vm-start）`);
@@ -244,6 +245,66 @@ sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo 
 }
 
 /**
+ * D5 外部 .srs 完整消费：走 sandbox-loop 的同一准备链（planRuleSets → stageRuleSets →
+ * localizeRuleSets），再由 VM 内核加载命中。默认底模不启用小米，不反编译、不伪造其他客户端。
+ */
+export function driveXiaomi(outDir) {
+  const results = [];
+  const add = (id, ok, detail) => {
+    results.push({ id, ok, detail });
+    log(`${ok ? "PASS" : "FAIL"}  ${id}  ${detail}`);
+  };
+  const url = "https://cdn.jsdelivr.net/gh/razaxq/dns-blocklists-sing-box@rule-set/hagezi-tracker-xiaomi.srs";
+  const template = {
+    route: { rule_set: [{ type: "remote", tag: "小米追踪", format: "binary", url, update_interval: "1d" }] },
+  };
+  const staging = join(resolve(outDir), "xiaomi-staging");
+  const guestStaging = `${GUEST_REPO}/${relative(REPO, staging)}`;
+  let map;
+  try {
+    map = stageRuleSets(planRuleSets(template), staging, guestStaging);
+  } catch (e) {
+    add("D5/stage", false, String(e));
+    return results;
+  }
+  const srs = join(staging, "external/0.srs");
+  add("D5/stage", existsSync(srs) && statSync(srs).size > 0, `经 plan+staging 得到 ${existsSync(srs) ? statSync(srs).size : 0}B`);
+
+  const cfg = localizeRuleSets(
+    {
+      log: { level: "debug" },
+      inbounds: [{ type: "mixed", tag: "in", listen: "127.0.0.1", listen_port: 18182 }],
+      outbounds: [{ type: "direct", tag: "direct" }, { type: "block", tag: "block" }],
+      route: {
+        rule_set: template.route.rule_set,
+        rules: [{ action: "sniff" }, { rule_set: "小米追踪", action: "route", outbound: "block" }],
+        final: "direct",
+      },
+    },
+    map,
+  );
+  const script = `
+D=${GUEST_WORKDIR}-xiaomi; rm -rf $D; mkdir -p $D
+cat > $D/config.json <<'JSON'
+${JSON.stringify(cfg, null, 2)}
+JSON
+sudo -n ${GUEST_SB} check -c $D/config.json || { echo CHECK_FAILED; exit 1; }
+echo CHECK_OK
+sudo -n ${GUEST_SB} run -D $D -c $D/config.json > $D/sb.log 2>&1 &
+for i in $(seq 1 60); do grep -q "sing-box started" $D/sb.log && break; sleep 0.2; done
+grep -q "sing-box started" $D/sb.log && echo READY || { echo NOT_READY; tail -8 $D/sb.log; }
+curl -s -m 6 --proxy http://127.0.0.1:18182 https://api.xmpush.xiaomi.com/ -o /dev/null -w "HIT_HTTP=%{http_code}\\n"; echo HIT_EXIT=$?
+grep -oE "match\\[[0-9]+\\] rule_set=[^ ]+" $D/sb.log | head -4
+sudo -n pkill -f "rule-verif[y]-xiaomi/config.json" 2>/dev/null && echo KILLED || echo NO_PROC
+`;
+  const r = guest(script);
+  writeFileSync(join(outDir, "xiaomi-kernel.log"), r.out + r.err);
+  add("D5/check", /CHECK_OK/.test(r.out), "经准备链本地化的配置通过 sing-box check");
+  add("D5/hit", /match\[\d+\] rule_set=小米追踪/.test(r.out), "api.xmpush.xiaomi.com 命中小米规则集");
+  return results;
+}
+
+/**
  * D4 DNS 伴生产物：internal 先发射域名版 JSON 再编译；geosite 直接复用主产物字节；
  * geoip 不产伴生；域名版只含 domain 类字段（Lan 作对照，主产物确含 ip_cidr）。
  */
@@ -298,7 +359,7 @@ export function driveDns(outDir) {
 }
 
 export function drive(outDir) {
-  const results = [...driveArtifacts(outDir), ...driveDns(outDir), ...driveKernel(outDir)];
+  const results = [...driveArtifacts(outDir), ...driveDns(outDir), ...driveKernel(outDir), ...driveXiaomi(outDir)];
   writeFileSync(join(outDir, "results.json"), JSON.stringify({ results }, null, 2));
   const failed = results.filter((r) => !r.ok);
   log(`[drive] ${results.length - failed.length}/${results.length} 通过`);

@@ -1,0 +1,22 @@
+# platforms/router.yaml — 路由器平台层：网关 TUN、53 端口 DNS 入口、对局域网监听的面板（原生字段）。
+# 本网解析器（dns-lan）与部署域应答由设备 overlay 提供，本层不塞回（ADR-0014）。
+
+inbounds:
+  - type: tun
+    tag: tun-in
+    address: [198.51.100.1/30, "fdfe:dcba:9876::1/126"]
+    auto_route: true
+    auto_redirect: true
+    dns_mode: native
+    route_exclude_address:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 224.0.0.0/4
+      - 255.255.255.255/32
+      - fe80::/10
+  - { type: mixed, tag: mixed-in, listen: 127.0.0.1, listen_port: 2080 }
+  - { type: direct, tag: dns-in, listen: "::", listen_port: 53 }
+
+experimental:
+  clash_api: { external_controller: 0.0.0.0:9090 }

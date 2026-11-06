@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
 import {
   asArray,
@@ -9,16 +10,16 @@ import {
   assertMyProxyQuicBeforeExempt,
   assertRejectBeforeClashMode,
 } from "./lib/contracts.ts";
-import {
-  MAC_ORDER,
-  assertNoOrphanEntries,
-  assertOrder,
-  assertRoleOrder,
-  roleKeys,
-} from "./lib/manifest.ts";
 
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
+const CONFIG_DIR = resolve(import.meta.dir, "..");
+/** 本仓库发布规则产物的前缀（与 scripts/build-config.ts 的 RULES_URL 一致）。 */
+const PUBLISH_PREFIX = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox";
+const settings = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "settings.yaml"), "utf8")) as {
+  groups: Record<string, { options: string[]; default: string }>;
+  rules: Array<{ name: string; source: string; to: string }>;
+};
 
 // 内核 merge 的输出会省略默认值 `action: "route"`、
 // 把 default_domain_resolver 收成字符串，断言要对两种形态都成立。
@@ -126,8 +127,13 @@ describe("template.json structural verification", () => {
   test("routes Lan, local domain suffixes, and PTR queries to local system DNS", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
-    expect(lanRule).toBeDefined();
-    expect(lanRule.server).toBe("dns-lan");
+    const source = settings.rules.find((r) => r.name === "Lan");
+    const active = source?.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
+    if (active) {
+      expect(lanRule?.server).toBe("dns-lan");
+    } else {
+      expect(lanRule).toBeUndefined();
+    }
 
     const suffixRule = rules.find((r) => r.domain_suffix?.includes("local"));
     expect(suffixRule).toBeDefined();
@@ -140,9 +146,16 @@ describe("template.json structural verification", () => {
     expect(ptrRule.server).toBe("dns-lan");
   });
 
-  test("个人域规则集走系统 DNS 且排在 FakeIP 之前", () => {
+  test("个人域规则集走系统 DNS 且排在 FakeIP 之前（存在且为直连时）", () => {
     const rules = template.dns?.rules ?? [];
+    const source = settings.rules.find((r) => r.name === "MyDirect");
+    const active = source && source.to === "direct" && !/^(https?:\/\/|geoip:)/.test(source.source);
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
+    if (!active) {
+      // 删除/改向/外部来源（无伴生）时不得残留 DNS 引用
+      expect(zoneRule).toBeUndefined();
+      return;
+    }
     expect(zoneRule).toBeDefined();
     const zoneIndex = rules.indexOf(zoneRule);
     // 必须是 dns-lan：局域网内由路由器应答真实内网 IP，
@@ -229,23 +242,20 @@ describe("template.json structural verification", () => {
 
 
 
-  test("每个非 direct 的路由目标都有对应 selector 策略组", () => {
-    // 契约：route.rules 里 route 到的出站，必须是在 outbounds 里声明的 selector。
-    // 故意不手抄组名清单：加一个策略组就要改测试，且漏改时断言的子集照旧通过，
-    // 新组实际没有任何覆盖（anthropic 加进来时就踩过）。
-    const selectors = new Set(
-      (template.outbounds ?? [])
-        .filter((o) => o.type === "selector")
-        .map((s) => s.tag),
-    );
+  test("每个路由目标的出站都在 outbounds / endpoints 里声明", () => {
+    // 契约：route.rules 里 route 到的出站必须是已声明的出站（selector/urltest/endpoint）。
+    // 不手抄组名清单：加一个出站就要改测试，且漏改时子集断言照旧通过（anthropic 踩过）。
+    const declared = new Set<string>([
+      ...(template.outbounds ?? []).map((o: { tag: string }) => o.tag),
+      ...(template.endpoints ?? []).map((e: { tag: string }) => e.tag),
+    ]);
     const targets = new Set(
       (template.route?.rules ?? [])
-        .map((r) => r.outbound)
-        .filter((o) => typeof o === "string" && o !== "direct"),
+        .map((r: { outbound?: unknown }) => r.outbound)
+        .filter((o): o is string => typeof o === "string"),
     );
     expect(targets.size).toBeGreaterThan(0);
-    const missing = [...targets].filter((tag) => !selectors.has(tag));
-    expect(missing).toEqual([]);
+    expect([...targets].filter((tag) => !declared.has(tag))).toEqual([]);
   });
 
   test("enables interrupt_exist_connections on all selector and urltest groups", () => {
@@ -323,18 +333,23 @@ describe("template.json structural verification", () => {
     assertMyDirectAndProxyBeforeServices(template.route?.rules ?? [], template.outbounds ?? []);
   });
 
-  test("DNS 规则拦截 MyReject-dns 且排在 FakeIP 与 final 之前", () => {
+  test("DNS 层拦截只引用去向为 reject 的清单，且排在 FakeIP 之前", () => {
     const dnsRules = template.dns?.rules ?? [];
-    const rejectDnsRule = dnsRules.find((r: { rule_set?: string | string[] }) =>
-      asArray(r.rule_set).includes("MyReject-dns"),
-    );
-    expect(rejectDnsRule).toBeDefined();
-    expect(rejectDnsRule?.action).toBe("reject");
-
+    const rejects = dnsRules.filter((r: { action?: string }) => r.action === "reject");
+    // 拦截清单必须仍在设置里且去向为 reject；删掉或改向时这里也应随之无拦截规则
+    for (const rule of rejects) {
+      for (const tag of asArray((rule as { rule_set?: string | string[] }).rule_set)) {
+        const source = settings.rules.find((r) => r.name === tag.replace(/-dns$/, ""));
+        expect(source?.to).toBe("reject");
+      }
+    }
     const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
     expect(fakeipIndex).toBeGreaterThan(-1);
-    const rejectIndex = dnsRules.indexOf(rejectDnsRule);
-    expect(rejectIndex).toBeLessThan(fakeipIndex);
+    for (const rule of rejects) expect(dnsRules.indexOf(rule)).toBeLessThan(fakeipIndex);
+    // 历史行为守卫：默认设置里 MyReject 是本地拒绝清单（有伴生），DNS 层必须拦住它
+    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject" && !/^(https?:\/\/|geoip:)/.test(r.source))) {
+      expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
+    }
   });
 
   test("BT 仅按协议嗅探分流，默认直连而非固定出站", () => {
@@ -367,33 +382,61 @@ describe("template.json structural verification", () => {
   });
 });
 
-// modules.yaml 是底模装配的真源：mac 的顺序即基准顺序，两个变体在其上打注册补丁。
-// 顺序不是排版（决定首匹配与出站展示顺序），所以按表重排必须留下一次测试改动。
-describe("modules.yaml 角色注册（ADR-0013）", () => {
-  test("roles.mac 与基准顺序逐条一致", () => {
-    assertRoleOrder("mac", MAC_ORDER);
+// settings.yaml 是底模的唯一登记处：规则声明、匹配引用、分组与 DNS 伴生都从它生成。
+// 这里守生成的产物与 settings/base 一致，以及固定机制（拦截/解析/QUIC）没有被改坏。
+describe("settings.yaml → template.json 生成契约", () => {
+  test("log 级别为 info", () => {
+    expect(template.log).toEqual({ level: "info" });
   });
 
-  test("表里没有孤儿条目（片段 / 服务 / 清单组）", () => {
-    assertNoOrphanEntries();
+  test("声明唯一，且每个设置规则都有声明；非规则声明都是 -dns 伴生", () => {
+    const declared = template.route.rule_set.map((rs: { tag: string }) => rs.tag);
+    expect(new Set(declared).size).toBe(declared.length);
+    const names = new Set(settings.rules.map((r) => r.name));
+    for (const rule of settings.rules) expect(declared).toContain(rule.name);
+    for (const tag of declared) {
+      if (names.has(tag)) continue;
+      expect(tag.endsWith("-dns")).toBe(true);
+      expect(names.has(tag.slice(0, -"-dns".length))).toBe(true);
+    }
   });
 
-  // 产物不变量：catalog 把「声明」与「引用」拆成两个条目，删掉 `{ catalog: reject }` 而留下
-  // `base/reject.json`，产物里的规则仍然引用那四个 tag，而内核 check 与 merge 都退出码 0（实测）。
-  // 关掉能力的正确做法是同时删掉两者，这个断言要求两者同进同退。
+  test("声明的 URL：外部 .srs 原样，其余指向发布前缀且文件名已归一化", () => {
+    const external = new Map(
+      settings.rules.filter((r) => /^https?:\/\//.test(r.source)).map((r) => [r.name, r.source]),
+    );
+    for (const rs of template.route.rule_set as Array<{ tag: string; url: string }>) {
+      const url = new URL(rs.url);
+      expect(["http:", "https:"]).toContain(url.protocol);
+      expect(url.pathname.endsWith(".srs")).toBe(true);
+      if (external.has(rs.tag)) {
+        expect(rs.url).toBe(external.get(rs.tag));
+        continue;
+      }
+      expect(rs.url.startsWith(`${PUBLISH_PREFIX}/`)).toBe(true);
+      // 产物名必须已归一化（无空白/路径分隔），不能是原始 tag 直接拼文件名
+      const file = decodeURIComponent(new URL(rs.url).pathname).split("/").pop() ?? "";
+      expect(file).toMatch(/^[\p{L}\p{N}._-]+\.srs$/u);
+    }
+  });
+
+  test("每个分组都生成 selector，顺序与 settings 一致", () => {
+    const selectors = template.outbounds
+      .filter((o: { type: string }) => o.type === "selector")
+      .map((o: { tag: string }) => o.tag);
+    expect(selectors).toEqual(expect.arrayContaining(Object.keys(settings.groups)));
+    for (const [name, def] of Object.entries(settings.groups)) {
+      const selector = template.outbounds.find((o: { tag: string }) => o.tag === name);
+      expect(selector?.outbounds).toEqual(def.options);
+      expect(selector?.default).toBe(def.default);
+    }
+  });
+
   test("route.rules 引用的 rule_set 全部已在 route.rule_set 里声明", () => {
     assertAllRuleSetsDeclared(template.route);
   });
 
-  // 变异验证：证明顺序断言不是恒真的。真按 roles 重排（把 clash-mode 挪到 reject 之前）
-  // 会让顺序断言变红；这也正是 ADR-0008 在语义层拦下的那个错误。
-  test("roles.mac 把 clash-mode 移到 reject 之前 → assertOrder 必须失败", () => {
-    const moved = roleKeys("mac").filter((key) => key !== "fragment:base/clash-mode.json");
-    moved.splice(moved.indexOf("fragment:base/reject.json"), 0, "fragment:base/clash-mode.json");
-    expect(() => assertOrder(moved, MAC_ORDER)).toThrow();
-  });
-
-  test("删掉 catalog:reject 的声明 → assertAllRuleSetsDeclared 必须失败", () => {
+  test("删掉一个规则声明 → assertAllRuleSetsDeclared 必须失败", () => {
     const route = JSON.parse(JSON.stringify(template.route));
     route.rule_set = route.rule_set.filter((rs: { tag: string }) => rs.tag !== "Advertising");
     expect(() => assertAllRuleSetsDeclared(route)).toThrow();
