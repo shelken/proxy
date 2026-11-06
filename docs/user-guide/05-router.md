@@ -9,8 +9,8 @@
 | tun               | `auto_route`                                                     | `auto_route` + `auto_redirect`（nftables 接管转发流量，白名单的 `bypass` 依赖它）   |
 | tun 的 `dns_mode` | `hijack`                                                         | `native`，53 端口改由路由规则接管，见下文的规则次序                                 |
 | DNS 入口          | 只靠 tun 劫持                                                    | 另有 `dns-in`，监听 53 端口，供把 DNS 指向旁路由的设备使用                          |
-| 本网解析器        | `dns-lan`（`type: local`，来自 `platforms/mac.yaml`） | 平台层没有这份能力，定义与地址由 overlay 提供                                   |
-| 部署域静态应答    | `platforms/mac.yaml` 给 `ooooo.space` 固定应答   | 平台层没有这份能力，答案由主路由 dnsmasq 给                                     |
+| 本网解析器        | `dns-lan`（`type: local`，来自 `platforms/mac.yaml`） | 路由器模板没有这份能力，定义与地址由 overlay 提供                                   |
+| 部署域静态应答    | `platforms/mac.yaml` 给 `ooooo.space` 固定应答   | 路由器模板没有这份能力，答案由主路由 dnsmasq 给                                     |
 | clash API         | `127.0.0.1:9090`                                                 | `0.0.0.0:9090`（`platforms/router.yaml`），面板可从局域网连接；`secret` 由 overlay 设置 |
 | `mixed-in`        | `127.0.0.1:2080`                                                 | 不变                                                                                |
 

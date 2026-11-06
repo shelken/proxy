@@ -1,6 +1,6 @@
 # DNS 伴生产物
 
-底模 DNS 规则只能按查询名判定，所以要有一份「只含域名条目」的 `-dns` 副本。产出范围是**全部 internal 与 geosite tag**（与是否被底模引用无关），geoip 不产。用户看到的是 `config/rules/generated/singbox/<tag>-dns.srs` 的存在与内容符合规则，底模按 `config/sing-box/fragments/base/dns-policy.json` 引用其中四个。
+底模 DNS 规则只能按查询名判定，所以要有一份「只含域名条目」的 `-dns` 副本。产出范围是**全部 internal 与 geosite tag**（与是否被底模引用无关），geoip 不产。用户看到的是 `config/rules/generated/singbox/<tag>-dns.srs` 的存在与内容符合规则，底模按 `config/sing-box/shared.yaml` 的 `dns-rules` 引用其中五个。
 
 ## Sub-features
 
@@ -11,7 +11,7 @@
 
 ## How to get to it (user POV)
 
-- 凡是 internal 或 geosite 的 tag 都会自动获得伴生；被底模实际消费的是 `settings.yaml` 里声明了 `dns` 字段的规则的伴生，当前是 `Lan-dns` / `MyDirect-dns` / `MyReject-dns` / `MyProxy-dns` / `ChinaMax-dns`。`torrent` 为 internal 却只剩进程名与端口条目，其 `-dns` 伴生为空规则集，底模不再引用
+- 凡是 internal 或 geosite 的 tag 都会自动获得伴生；被底模实际消费的是 `shared.yaml` 的 `dns-rules` 引用的 `Lan-dns` / `MyDirect-dns` / `MyReject-dns` / `MyProxy-dns` / `ChinaMax-dns`。`torrent` 为 internal 却只剩进程名与端口条目，其 `-dns` 伴生为空规则集，底模不再引用
 - 产物：`config/rules/generated/singbox/<tag>-dns.srs`（internal 另有 `-dns.json` 中间产物）。
 - 发布：`https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/<tag>-dns.srs`。
 

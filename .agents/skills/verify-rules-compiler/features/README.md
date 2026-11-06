@@ -39,6 +39,6 @@
 
 - [外部规则镜像](./external-mirror.md)：`geosite:x` / `geoip:x` 直接镜像 meta-rules-dat 三端原生资产。
 - [内部 YAML AST 编译](./custom-yaml.md)：`custom/*.yaml` → AST → 三端产物（含 logical 树、端口范围、no-resolve）。
-- [设置-底模契约](./manifest-contract.md)：`settings.yaml` 生成的三份底模与磁盘一致，规则自带的 `dns` / `quic` 策略在生成时校验。
+- [设置-底模契约](./manifest-contract.md)：平台模板、`shared.yaml` 与 `settings.yaml` 生成的三份底模与磁盘一致，引用的规则名必须存在。
 - [DNS 伴生产物](./dns-companion.md)：`-dns` 规则集的产出与省略规则。
 - [沙箱内核命中](./sandbox-kernel.md)：VM 内 sing-box 加载 `.srs` 并按规则路由。
