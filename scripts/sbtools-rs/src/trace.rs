@@ -79,25 +79,6 @@ pub fn system_resolve(domain: &str) -> Option<(String, u128)> {
     Some((ip, start.elapsed().as_millis()))
 }
 
-/// route get 判定目标 IP 实际出口接口名（macOS）；非 macOS 返回 None。
-pub fn egress_interface(ip: &str) -> Option<String> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let out = std::process::Command::new("route")
-        .args(["-n", "get", ip])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if let Some(i) = trimmed.strip_prefix("interface:") {
-            return Some(i.trim().to_string());
-        }
-    }
-    None
-}
-
 /// 内核决策捕获结果
 #[derive(Default, Clone, Debug)]
 struct KernelDecisions {
@@ -290,7 +271,7 @@ pub fn clash_api_chain(domain: &str, controller: &str) -> Option<String> {
     conn_match(domain, controller).map(|m| m.chains.join(" → "))
 }
 
-// ===== PR4 增强：live 路由归属 / 静态规则 / dns 本地推演 =====
+// ===== live 路由归属 =====
 
 /// /connections 中目标域名的匹配条目：rule 串与出站链。
 #[derive(Debug, Clone)]
@@ -351,154 +332,6 @@ fn conn_match(domain: &str, controller: &str) -> Option<ConnMatch> {
 fn effective_config() -> Option<Value> {
     let eff = crate::config::load_effective(None).ok()?;
     Some(eff.overlay.unwrap_or(eff.root))
-}
-
-/// dns.rules 按序推演的结论。
-#[derive(Debug)]
-enum DnsVerdict {
-    /// 条件可本地判定且命中：(条件展示串, server 标签)
-    Hit(String, String),
-    /// rule_set 条件无法本地判内容，只报候选标签；final 标签一并注明
-    Candidate(String, String, Option<String>),
-    /// 无规则命中，落 dns.final
-    Final(String),
-    /// 无命中且未配置 dns.final
-    Unresolved,
-}
-
-/// domain 类条件的本地判定。后缀按点边界命中（与内核 1.9+ 语义一致）：
-/// `demo.test` 命中自身与子域，不命中 `notdemo.test`。
-fn domain_key_match(key: &str, cond: &Value, domain: &str) -> bool {
-    let values: Vec<String> = match cond {
-        Value::String(s) => vec![s.clone()],
-        Value::Array(a) => a
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-        _ => return false,
-    };
-    let d = domain.to_ascii_lowercase();
-    values.iter().any(|v| {
-        let v = v.trim_start_matches('.').to_ascii_lowercase();
-        match key {
-            "domain" => d == v,
-            "domain_suffix" => d == v || d.ends_with(&format!(".{v}")),
-            "domain_keyword" => d.contains(&v),
-            _ => false,
-        }
-    })
-}
-
-/// 条件的展示串，对齐内核日志形态：单值 `domain_suffix=demo.test`，多值 `rule_set=[A B]`。
-fn cond_display(key: &str, cond: &Value) -> String {
-    match cond {
-        Value::String(s) => format!("{key}={s}"),
-        Value::Array(a) if a.len() == 1 => {
-            format!("{key}={}", a[0].as_str().unwrap_or("?"))
-        }
-        Value::Array(a) => format!(
-            "{key}=[{}]",
-            a.iter()
-                .filter_map(|x| x.as_str())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        other => format!("{key}={other}"),
-    }
-}
-
-/// 按配置序推演 domain 的 dns 归属，输出首个命中规则与目标 server 标签。
-///
-/// 只认 domain 类条件；rule_set 无法本地判内容，记第一个候选后继续找确定性命中；
-/// 其余条件（query_type、clash_mode 等）不属于域名归属，按未命中跳过。规则内多条件
-/// 是 AND，数组内是 OR。
-fn dns_verdict_for(domain: &str, rules: &[Value], final_server: Option<&str>) -> DnsVerdict {
-    let mut candidate: Option<(String, String)> = None;
-    for rule in rules {
-        // 反转规则的真实命中面是「其余全部域名」，本地推演不覆盖，按未命中跳过
-        if rule["invert"].as_bool().unwrap_or(false) {
-            continue;
-        }
-        let Some(obj) = rule.as_object() else {
-            continue;
-        };
-        let mut known_match = true;
-        let mut has_known = false;
-        let mut unknown = false;
-        let mut rule_set: Option<&Value> = None;
-        for (k, v) in obj {
-            match k.as_str() {
-                // 非条件键
-                "server" | "action" | "disable_cache" | "rewrite_ttl" | "client_subnet" => {}
-                "domain" | "domain_suffix" | "domain_keyword" => {
-                    has_known = true;
-                    known_match &= domain_key_match(k, v, domain);
-                }
-                "rule_set" => rule_set = Some(v),
-                // 本推演不认的条件：AND 语义下整条规则不可判定，按未命中跳过
-                _ => unknown = true,
-            }
-        }
-        if let Some(rs) = rule_set {
-            if let Some(server) = rule["server"].as_str().filter(|s| !s.is_empty())
-                && candidate.is_none()
-            {
-                candidate = Some((cond_display("rule_set", rs), server.to_string()));
-            }
-            continue;
-        }
-        if unknown || !has_known || !known_match {
-            continue;
-        }
-        if let Some(server) = rule["server"].as_str().filter(|s| !s.is_empty()) {
-            let conds = obj
-                .iter()
-                .filter(|(k, _)| {
-                    matches!(k.as_str(), "domain" | "domain_suffix" | "domain_keyword")
-                })
-                .map(|(k, v)| cond_display(k, v))
-                .collect::<Vec<_>>()
-                .join(" && ");
-            return DnsVerdict::Hit(conds, server.to_string());
-        }
-        // 命中但无 server（如 action: reject）：本段只回答 server 归属，按未命中继续
-    }
-    match candidate {
-        Some((cond, server)) => DnsVerdict::Candidate(
-            cond,
-            server,
-            final_server.map(String::from).filter(|s| !s.is_empty()),
-        ),
-        None => final_server
-            .filter(|s| !s.is_empty())
-            .map_or(DnsVerdict::Unresolved, |s| DnsVerdict::Final(s.to_string())),
-    }
-}
-
-/// dns 归属段：本地按配置序推演，不依赖 clash api。配置取不到（SFM 等磁盘不可达）
-/// 明示跳过并继续其余段。
-fn report_dns_attribution(domain: &str) {
-    let Some(cfg) = effective_config() else {
-        println!("· dns 归属        dns 配置不可得，段跳过（SFM 等磁盘不可达场景）");
-        return;
-    };
-    let rules = cfg["dns"]["rules"].as_array().cloned().unwrap_or_default();
-    let final_server = cfg["dns"]["final"].as_str().map(String::from);
-    match dns_verdict_for(domain, &rules, final_server.as_deref()) {
-        DnsVerdict::Hit(cond, server) => {
-            println!("✓ dns 归属        {domain} => {cond} => {server}");
-        }
-        DnsVerdict::Candidate(cond, server, fallback) => match fallback {
-            Some(fb) => println!(
-                "· dns 归属        {domain} => {cond} => {server}  (rule_set 候选，内容未匹配；未命中落 final => {fb})"
-            ),
-            None => println!(
-                "· dns 归属        {domain} => {cond} => {server}  (rule_set 候选，内容未匹配)"
-            ),
-        },
-        DnsVerdict::Final(server) => println!("✓ dns 归属        {domain} => final => {server}"),
-        DnsVerdict::Unresolved => println!("· dns 归属        无命中且未配置 dns.final"),
-    }
 }
 
 /// 生效配置里 mixed 入站的显式回环监听端口。与 controller 守卫同一纪律：非回环不用。
@@ -589,24 +422,6 @@ fn report_live_attribution(ec: &str, domain: &str) {
             m.chains.join(" → ")
         ),
         None => println!("· live 路由归属   未捕获到存续连接（连接已关闭或探针未进入内核）"),
-    }
-}
-
-/// 静态规则段：GET /rules 列表原样呈现，内核视角即真相。
-fn report_rules(ec: &str) {
-    match crate::clashapi::get_rules(ec) {
-        Ok(v) => {
-            let rules = v["rules"].as_array().cloned().unwrap_or_default();
-            println!("✓ 静态规则       GET /rules 共 {} 条", rules.len());
-            for r in &rules {
-                println!(
-                    "  {} => {}",
-                    r["payload"].as_str().unwrap_or("?"),
-                    r["proxy"].as_str().unwrap_or("?")
-                );
-            }
-        }
-        Err(e) => println!("· 静态规则       读取失败: {e}"),
     }
 }
 
@@ -822,30 +637,23 @@ pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
     let mut resolved_ip: Option<String> = None;
     if let Some((ip, ms)) = system_resolve(domain) {
         resolved_ip = Some(ip.clone());
-        let egress = egress_interface(&ip).unwrap_or_else(|| "?".into());
         if is_fakeip(&ip) {
             resolved_fakeip = true;
-            println!(
-                "✗ 系统 resolver   A {ip}  ({ms}ms)  出口 {egress}  ← fakeip 假 IP, 非真实解析"
-            );
+            println!("✗ 系统 resolver   A {ip}  ({ms}ms)  ← fakeip 假 IP, 非真实解析");
             fails += 1;
         } else {
-            println!("✓ 系统 resolver   A {ip}  ({ms}ms)  出口 {egress}");
+            println!("✓ 系统 resolver   A {ip}  ({ms}ms)");
         }
     } else {
         println!("✗ 系统 resolver   解析失败/超时");
         fails += 1;
     }
 
-    // 阶段 2: dns 归属（本地按配置序推演，不依赖 clash api；SFM 等磁盘不可达时明示跳过）
-    report_dns_attribution(domain);
-
     // 阶段 3 & 4: 监听内核决策流（DNS 规则 + 路由规则）
     match controller {
         Some(ec) if controller_reachable(ec) => {
             fails += report_kernel_decisions(ec, domain, resolved_ip.as_deref());
             report_live_attribution(ec, domain);
-            report_rules(ec);
         }
         Some(ec) => {
             // 控制面不通时后面每个阶段都会「无数据」，与其打一串 ⚠ 不如直说
@@ -1319,93 +1127,6 @@ mod tests {
         let m = parse_conn_match(&v, "demo.test").expect("sniffHost 应命中");
         assert_eq!(m.rule, "domain_suffix=demo.test => route(proxy)");
         assert_eq!(m.chains, vec!["proxy".to_string(), "selfhost".to_string()]);
-    }
-
-    /// 合成配置的 dns 段（附录 A）：两台 UDP 上游 dns-alt / dns-direct，final 落 dns-direct。
-    fn dns_fixture() -> (Vec<Value>, Option<String>) {
-        (
-            serde_json::json!([
-                {"domain_suffix": ["example.org"], "server": "dns-alt"}
-            ])
-            .as_array()
-            .unwrap()
-            .clone(),
-            Some("dns-direct".to_string()),
-        )
-    }
-
-    /// rule_set 条件夹具：本地 json 规则集引用，内容不可判定。
-    fn dns_ruleset_fixture() -> (Vec<Value>, Option<String>) {
-        (
-            serde_json::json!([
-                {"rule_set": ["GeositeCN"], "server": "dns-cn"}
-            ])
-            .as_array()
-            .unwrap()
-            .clone(),
-            Some("dns-direct".to_string()),
-        )
-    }
-
-    #[test]
-    fn dns_verdict_hits_suffix_then_final_fallback() {
-        let (rules, final_server) = dns_fixture();
-        match dns_verdict_for("www.example.org", &rules, final_server.as_deref()) {
-            DnsVerdict::Hit(cond, server) => {
-                assert_eq!(cond, "domain_suffix=example.org");
-                assert_eq!(server, "dns-alt");
-            }
-            other => panic!("应确定性命中: {other:?}"),
-        }
-        // final 兜底
-        match dns_verdict_for("example.com", &rules, final_server.as_deref()) {
-            DnsVerdict::Final(server) => assert_eq!(server, "dns-direct"),
-            other => panic!("应落 final: {other:?}"),
-        }
-    }
-
-    /// rule_set 无法本地判内容：记候选标签并注明 final 兜底，不误报命中；
-    /// 确定性命中仍按配置序优先于候选。
-    #[test]
-    fn dns_verdict_marks_rule_set_as_candidate() {
-        let (rules, final_server) = dns_ruleset_fixture();
-        match dns_verdict_for("site.example", &rules, final_server.as_deref()) {
-            DnsVerdict::Candidate(cond, server, fb) => {
-                assert_eq!(cond, "rule_set=GeositeCN");
-                assert_eq!(server, "dns-cn");
-                assert_eq!(fb.as_deref(), Some("dns-direct"));
-            }
-            other => panic!("应报 rule_set 候选: {other:?}"),
-        }
-        // 候选存在时确定性命中仍优先（按配置序）
-        let mut both = rules.clone();
-        both.insert(
-            0,
-            serde_json::json!({"domain_suffix": ["site.example"], "server": "dns-alt"}),
-        );
-        assert!(matches!(
-            dns_verdict_for("site.example", &both, final_server.as_deref()),
-            DnsVerdict::Hit(..)
-        ));
-        // 无 final 时候选不凭空造兜底
-        match dns_verdict_for("site.example", &rules, None) {
-            DnsVerdict::Candidate(_, _, fb) => assert_eq!(fb, None),
-            other => panic!("应报候选: {other:?}"),
-        }
-        let empty: Vec<Value> = Vec::new();
-        assert!(matches!(
-            dns_verdict_for("a.test", &empty, None),
-            DnsVerdict::Unresolved
-        ));
-    }
-
-    /// 后缀按点边界命中：自身与子域命中，前缀粘连不命中。
-    #[test]
-    fn domain_suffix_respects_dot_boundary() {
-        let cond = serde_json::json!("demo.test");
-        assert!(domain_key_match("domain_suffix", &cond, "demo.test"));
-        assert!(domain_key_match("domain_suffix", &cond, "a.b.demo.test"));
-        assert!(!domain_key_match("domain_suffix", &cond, "notdemo.test"));
     }
 
     /// 探针只走显式回环的 mixed 入站，与 controller 守卫同一纪律。

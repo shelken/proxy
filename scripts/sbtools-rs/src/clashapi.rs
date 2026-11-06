@@ -119,11 +119,6 @@ pub fn get_connections(controller: &str) -> Result<Value, String> {
     get_json(controller, "/connections")
 }
 
-/// GET /rules 端点读取。
-pub fn get_rules(controller: &str) -> Result<Value, String> {
-    get_json(controller, "/rules")
-}
-
 /// /logs 流式读取（连接建立后只吐新行，无回放）。返回逐行 `BufRead`。
 ///
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
