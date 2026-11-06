@@ -16,6 +16,7 @@ import { basename, dirname, join } from "node:path";
 import {
   artifactName,
   CUSTOM_DIR,
+  geoTarget,
   loadBase,
   loadSettings,
   singBoxCommand,
@@ -106,13 +107,12 @@ export function orphanCustomLists(rules: Rule[]): string[] {
 
 /** 外部原生引用：geosite:x / geoip:x → meta-rules-dat 三端同源 URL。 */
 export function externalUrls(source: string): Record<Client, string> | null {
-  const m = source.match(/^(geosite|geoip):([a-z0-9_-]+)$/);
-  if (!m) return null;
-  const [, kind, name] = m;
+  const geo = geoTarget(source);
+  if (!geo) return null;
   return {
-    singbox: `${META_RULES_SING}/${kind}/${name}.srs`,
-    clash: `${META_RULES_MIHOMO}/${kind}/${name}.yaml`,
-    plain: `${META_RULES_MIHOMO}/${kind}/${name}.list`,
+    singbox: `${META_RULES_SING}/${geo.kind}/${geo.name}.srs`,
+    clash: `${META_RULES_MIHOMO}/${geo.kind}/${geo.name}.yaml`,
+    plain: `${META_RULES_MIHOMO}/${geo.kind}/${geo.name}.list`,
   };
 }
 
@@ -329,8 +329,8 @@ export function buildOne(rule: Rule, binary: string[], outDir = GENERATED_DIR): 
       write(path, fetchBytes(mirrored[client]));
       results.push({ client, path, total: 0 });
     }
-    // geosite 上游本就只含域名条目，-dns 伴生复用同一份 .srs；geoip 不产伴生
-    if (rule.source.startsWith("geosite:")) {
+    // geosite 上游本就只含域名条目，-dns 伴生复用同一份 .srs；geoip 不产伴生（companion=false）
+    if (rule.companion) {
       write(join(outDir, "singbox", `${name}-dns.srs`), fetchBytes(mirrored.singbox));
     }
     return results;

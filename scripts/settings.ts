@@ -58,14 +58,35 @@ export const repoUrl = (base: Base, artifact: string) =>
 export const singBoxCommand = (env = process.env.SING_BOX) =>
   (env ?? "mise exec -- sing-box").split(/\s+/);
 
-const kindOf = (source: string): RuleKind =>
-  /^https?:\/\//.test(source)
-    ? "url"
-    : source.startsWith("geosite:")
-      ? "geosite"
-      : source.startsWith("geoip:")
-        ? "geoip"
-        : "local";
+const GEO_SOURCE = /^(geosite|geoip):([a-z0-9_-]+)$/;
+
+/** geosite:x / geoip:x → { kind, name }；不完整或不合法返回 null。 */
+export function geoTarget(source: string): { kind: "geosite" | "geoip"; name: string } | null {
+  const m = source.match(GEO_SOURCE);
+  return m ? { kind: m[1] as "geosite" | "geoip", name: m[2] } : null;
+}
+
+/** 分类来源：本地路径 / geosite:x / geoip:x / 远程 .srs（pathname 以 .srs 结尾，允许 query）。 */
+function classify(source: string, at: string): RuleKind {
+  if (/^https?:\/\//.test(source)) {
+    let url: URL;
+    try {
+      url = new URL(source);
+    } catch {
+      throw new Error(`settings.yaml: ${at} 的来源不是合法 URL: ${source}`);
+    }
+    if (!url.pathname.endsWith(".srs")) {
+      throw new Error(`settings.yaml: ${at} 的远程来源必须是 .srs: ${source}`);
+    }
+    return "url";
+  }
+  if (source.startsWith("geosite:") || source.startsWith("geoip:")) {
+    const geo = geoTarget(source);
+    if (!geo) throw new Error(`settings.yaml: ${at} 的来源格式无效（geosite:x / geoip:x）: ${source}`);
+    return geo.kind;
+  }
+  return "local";
+}
 
 /** 解析并校验 settings.yaml；本地来源在此解析为绝对路径。 */
 export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml")): Settings {
@@ -104,7 +125,7 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
     if (!destinations.has(rule.to)) {
       throw new Error(`settings.yaml: ${at} 的去向 ${rule.to} 无效（可用: ${[...destinations].join(", ")}）`);
     }
-    const kind = kindOf(rule.source);
+    const kind = classify(rule.source, at);
     const localPath =
       kind === "local" ? (isAbsolute(rule.source) ? rule.source : resolve(dirname(path), rule.source)) : undefined;
     if (localPath && !existsSync(localPath)) {
@@ -126,15 +147,20 @@ export function loadSettings(base: Base, path = join(CONFIG_DIR, "settings.yaml"
   return { groups, rules, byName: new Map(rules.map((r) => [r.name, r])) };
 }
 
-/** 构建前拒绝真实产物名碰撞，含 `-dns` 伴生命名空间。 */
+/** 构建前拒绝重名：tag 命名空间含所有来源（含 `-dns` 伴生），文件命名空间只看真会写盘的产物。 */
 function detectCollisions(rules: Rule[]) {
-  const owner = new Map<string, string>();
+  const claim = (owner: Map<string, string>, key: string, rule: string, label: string) => {
+    const prev = owner.get(key);
+    if (prev) throw new Error(`settings.yaml: 规则 ${prev} 与规则 ${rule} 的${label}冲突: ${key}`);
+    owner.set(key, rule);
+  };
+  const tags = new Map<string, string>();
+  const files = new Map<string, string>();
   for (const rule of rules) {
+    claim(tags, rule.name, rule.name, " tag ");
+    if (rule.companion) claim(tags, `${rule.name}-dns`, rule.name, " tag ");
     if (rule.kind === "url") continue;
-    for (const file of [rule.artifact, ...(rule.companion ? [`${rule.artifact}-dns`] : [])]) {
-      const prev = owner.get(file);
-      if (prev) throw new Error(`settings.yaml: 规则 ${prev} 与 ${rule.name} 的产物名冲突: ${file}`);
-      owner.set(file, rule.name);
-    }
+    claim(files, rule.artifact, rule.name, "产物名");
+    if (rule.companion) claim(files, `${rule.artifact}-dns`, rule.name, "产物名");
   }
 }

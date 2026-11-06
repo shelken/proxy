@@ -3,8 +3,7 @@
 # 用户日常只改 settings.yaml；本文件描述内部机制，除非明确知道后果否则不要动。
 # `slot:` / `platform:` 标记由 scripts/build-config.ts 展开，展开位置就是首匹配顺序：
 #   reject 段在一切分流之前，download 段在 BT 之后、resolve 之前，rest 段尊重 settings 顺序。
-# 本文件引用的清单名（rule_set、DNS 伴生、resolve 排除）必须在 settings.yaml 里声明，
-# 否则构建报错，避免产物引用未声明的 tag。
+# 本文件里的 link 引用按 settings 当前去向解析：条目被删或去向改变时自动撤销，不会引用未声明的 tag。
 
 # 本仓库发布规则产物的地址：settings 里以本地路径 / geosite: / geoip: 声明的规则从这里取 .srs，
 # {artifact} 是归一化后的产物名（scripts/settings.ts 的 artifactName）

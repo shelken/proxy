@@ -197,7 +197,38 @@ describe("名称与 URL", () => {
     const path = tempSettings((d) => {
       d.rules.push({ name: "MyDirect-dns", source: resolve(CONFIG, "../rules/custom/Lan.yaml"), to: "proxy" });
     });
-    expect(() => loadSettings(base, path)).toThrow(/产物名冲突: MyDirect-dns/);
+    expect(() => loadSettings(base, path)).toThrow(/tag 冲突: MyDirect-dns/);
+  });
+
+  test("远程规则名撞已有伴生 tag 被拒绝（tag 命名空间含所有来源）", () => {
+    const path = tempSettings((d) => {
+      d.rules.push({ name: "MyDirect-dns", source: "https://example.com/x.srs", to: "proxy" });
+    });
+    expect(() => loadSettings(base, path)).toThrow(/MyDirect-dns/);
+  });
+
+  test("独立的 tracking-dns 远程名允许，且模板只声明一次", () => {
+    const path = tempSettings((d) => {
+      d.rules.push({ name: "tracking-dns", source: "https://example.com/tracking.srs", to: "reject" });
+    });
+    const cfg = buildConfig(base, platforms.mac, loadSettings(base, path));
+    expect(ruleSetNames(cfg).filter((n) => n === "tracking-dns")).toHaveLength(1);
+    expect(ruleSet(cfg, "tracking-dns").url).toBe("https://example.com/tracking.srs");
+  });
+
+  test("来源格式在唯一入口校验，错误定位到条目", () => {
+    const bad = (source: string) => {
+      const path = tempSettings((d) => { d.rules = [{ name: "X", source, to: "proxy" }]; });
+      return () => loadSettings(base, path);
+    };
+    expect(bad("geosite:bad/name")).toThrow(/规则 X/);
+    expect(bad("geoip:bad/name")).toThrow(/规则 X/);
+    expect(bad("https://example.com/rules.txt")).toThrow(/规则 X/);
+    expect(bad("https://example.com/rules.json")).toThrow(/规则 X/);
+    const ok = tempSettings((d) => {
+      d.rules = [{ name: "X", source: "https://example.com/x.srs?foo=1", to: "proxy" }];
+    });
+    expect(loadSettings(base, ok).byName.get("X")!.kind).toBe("url");
   });
 });
 
