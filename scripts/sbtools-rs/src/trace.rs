@@ -299,6 +299,14 @@ struct ConnMatch {
     chains: Vec<String>,
 }
 
+/// /connections 的 host/sniffHost 是否归属目标域名：自身或点边界的子域，
+/// 与 dns 后缀语义一致，`notdemo.test` 不得命中 `demo.test`。
+fn conn_host_matches(host: &str, domain: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let domain = domain.to_ascii_lowercase();
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
 /// 解析 /connections 响应，取 metadata.host/sniffHost/destinationIP 匹配目标域名的条目。
 /// 纯函数，/connections 响应解析的单测落在这里。
 fn parse_conn_match(v: &Value, domain: &str) -> Option<ConnMatch> {
@@ -307,11 +315,8 @@ fn parse_conn_match(v: &Value, domain: &str) -> Option<ConnMatch> {
         let host = c["metadata"]["host"].as_str().unwrap_or("");
         let sniff = c["metadata"]["sniffHost"].as_str().unwrap_or("");
         let dst = c["metadata"]["destinationIP"].as_str().unwrap_or("");
-        let hit = host.eq_ignore_ascii_case(domain)
-            || sniff.eq_ignore_ascii_case(domain)
-            || dst == domain
-            || host.ends_with(domain)
-            || sniff.ends_with(domain);
+        let hit =
+            conn_host_matches(host, domain) || conn_host_matches(sniff, domain) || dst == domain;
         if !hit {
             continue;
         }
@@ -1277,6 +1282,28 @@ mod tests {
         assert!(parse_conn_match(&conn_fixture(), "other.test").is_none());
         // 空 connections 不命中
         assert!(parse_conn_match(&serde_json::json!({}), "demo.test").is_none());
+    }
+
+    /// /connections 的后缀命中必须带点边界，与 dns 后缀语义一致：
+    /// 自身与子域命中，`notdemo.test` 对 `demo.test` 不命中。
+    #[test]
+    fn parse_conn_match_requires_dot_boundary() {
+        let sub = serde_json::json!({"connections": [{
+            "chains": ["direct"],
+            "metadata": {"host": "a.demo.test"},
+            "rule": "domain_suffix=demo.test => route(direct)"
+        }]});
+        assert!(parse_conn_match(&sub, "demo.test").is_some(), "子域应命中");
+
+        let glued = serde_json::json!({"connections": [{
+            "chains": ["direct"],
+            "metadata": {"host": "notdemo.test"},
+            "rule": "domain_suffix=demo.test => route(direct)"
+        }]});
+        assert!(
+            parse_conn_match(&glued, "demo.test").is_none(),
+            "前缀粘连不应命中"
+        );
     }
 
     /// host 为空时按 sniffHost 后缀回退命中；chains 全量保留。
