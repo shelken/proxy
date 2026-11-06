@@ -14,8 +14,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { localizeRuleSets, planRuleSets, stageRuleSets, verifyLocalArtifacts } from "./rule-set-local.ts";
+import { guest, host } from "./vm.ts";
 
-const VM = "proxy-test";
 const ARTIFACT = "sbtools-aarch64-unknown-linux-musl";
 const PORT = 18080;
 const SB = "/opt/proxy-test/bin/sing-box";
@@ -29,30 +29,6 @@ const REPO_IN_GUEST = resolve(import.meta.dir, "..").replace(
   process.env.HOME ?? "",
   "/host-home",
 );
-
-interface ShellResult {
-  code: number | null;
-  out: string;
-  err: string;
-}
-
-function host(cmd: string[]): ShellResult {
-  const p = Bun.spawnSync(cmd);
-  return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
-}
-
-/** 在 VM 内执行命令；给了 stdin 就同时写入其标准输入。 */
-function guest(cmd: string, stdin?: string): ShellResult {
-  const p = Bun.spawnSync(
-    ["limactl", "shell", "--workdir", "/work", VM, "sh", "-c", cmd],
-    stdin === undefined ? {} : { stdin: Buffer.from(stdin) },
-  );
-  return {
-    code: p.exitCode,
-    out: p.stdout.toString(),
-    err: p.stderr.toString(),
-  };
-}
 
 function fail(stage: string, detail: string): never {
   throw new Error(`[沙箱引导] ${stage} 失败：${detail}`);

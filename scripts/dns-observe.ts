@@ -14,8 +14,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { bootstrap } from "./sandbox-loop.ts";
+import { guest, parseEnv, VM_NAME } from "./vm.ts";
 
-const VM_NAME = "proxy-test";
 const SB = "/opt/proxy-test/bin/sing-box";
 const ROUNDS = 5;
 
@@ -24,26 +24,6 @@ const DOMAINS: Record<string, string[]> = {
   cn: ["baidu.com", "qq.com", "bilibili.com", "taobao.com", "jd.com"],
   lan: ["router.lan", "nas.local", "printer.home.arpa"],
 };
-
-interface ShellResult { code: number; out: string; err: string }
-
-function sh(cmd: string): ShellResult {
-  const p = Bun.spawnSync(
-    ["limactl", "shell", "--workdir", "/work", VM_NAME, "sh", "-c", cmd],
-  );
-  return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
-}
-
-function parseEnv(content: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const line of content.split("\n")) {
-    const t = line.trim();
-    const eq = t.indexOf("=");
-    if (!t || t.startsWith("#") || eq === -1) continue;
-    env[t.slice(0, eq).trim()] = t.slice(eq + 1).trim().replace(/^['"]|['"]$/g, "");
-  }
-  return env;
-}
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return NaN;
@@ -60,10 +40,10 @@ async function main(): Promise<void> {
   console.log(`[OBS] 真实数据装配（订阅 ${subs.length}，私有节点 ${nodes.length}）...`);
   bootstrap({ nodes, subs });
 
-  const check = sh(`${SB} check -c /work/sing-box/config.json`);
+  const check = guest(`${SB} check -c /work/sing-box/config.json`);
   if (check.code !== 0) throw new Error(`配置校验失败: ${check.err || check.out}`);
 
-  sh("sudo -n pkill -9 -x sing-box || true; sleep 0.3");
+  guest("sudo -n pkill -9 -x sing-box || true; sleep 0.3");
   const sbProc = Bun.spawn(
     ["limactl", "shell", "--workdir", "/work/sing-box", VM_NAME,
       "sudo", "-n", SB, "run", "-D", "/work/sing-box", "-c", "/work/sing-box/config.json"],
@@ -79,7 +59,7 @@ async function main(): Promise<void> {
     }
   };
   void pump(sbProc.stdout); void pump(sbProc.stderr);
-  const cleanup = () => { sh("sudo -n pkill -9 -x sing-box || true"); sbProc.kill(); };
+  const cleanup = () => { guest("sudo -n pkill -9 -x sing-box || true"); sbProc.kill(); };
   process.on("exit", cleanup);
 
   const t0 = Date.now();
@@ -90,7 +70,7 @@ async function main(): Promise<void> {
   }
   console.log("[OBS] 内核就绪，开始采样");
 
-  const tunIn = JSON.parse(sh("cat /work/sing-box/config.json").out)
+  const tunIn = JSON.parse(guest("cat /work/sing-box/config.json").out)
     .inbounds.find((i: { type: string }) => i.type === "tun");
   const tunAddrs: string[] = Array.isArray(tunIn?.address)
     ? tunIn.address : tunIn?.address ? [tunIn.address] : [];
@@ -103,7 +83,7 @@ async function main(): Promise<void> {
   for (let round = 1; round <= ROUNDS; round++) {
     for (const [group, domains] of Object.entries(DOMAINS)) {
       for (const domain of domains) {
-        const r = sh(
+        const r = guest(
           `/usr/bin/dig +time=2 +tries=1 +noall +answer +stats ${domain} @${dnsAddr} 2>&1`,
         );
         const ms = Number(/Query time:\s*(\d+)/.exec(r.out)?.[1] ?? -1);
@@ -129,7 +109,7 @@ async function main(): Promise<void> {
   // 真实出口区域：经 mixed 2080 走完整路由链（cloudflare trace 的 loc 字段）
   const exits: string[] = [];
   for (let i = 0; i < 3; i++) {
-    const r = sh(
+    const r = guest(
       `/opt/proxy-test/bin/bun -e 'try{const r=await fetch("https://www.cloudflare.com/cdn-cgi/trace",{proxy:"http://127.0.0.1:2080",signal:AbortSignal.timeout(15000)});console.log(/loc=(\\w+)/.exec(await r.text())?.[1]??"?")}catch(e){console.log("ERR")}'`,
     );
     exits.push(r.out.trim());

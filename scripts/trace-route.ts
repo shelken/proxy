@@ -20,9 +20,9 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { bootstrap } from "./sandbox-loop.ts";
+import { guest, parseEnv, VM_NAME } from "./vm.ts";
 
 const domain: string = process.argv[2] || "google.com";
-const VM_NAME = "proxy-test";
 
 interface SingBoxRuleSet {
   type: string;
@@ -49,50 +49,6 @@ interface SingBoxConfig {
   http_clients?: unknown;
   [key: string]: unknown;
 }
-interface ShellResult {
-  code: number | null;
-  out: string;
-  err: string;
-}
-
-function sh(cmd: string): ShellResult {
-  const p = Bun.spawnSync([
-    "limactl",
-    "shell",
-    "--workdir",
-    "/work",
-    VM_NAME,
-    "sh",
-    "-c",
-    cmd,
-  ]);
-  return {
-    code: p.exitCode,
-    out: p.stdout.toString(),
-    err: p.stderr.toString(),
-  };
-}
-
-function parseEnv(content: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    const k = trimmed.slice(0, eq).trim();
-    let v = trimmed.slice(eq + 1).trim();
-    if (
-      (v.startsWith('"') && v.endsWith('"')) ||
-      (v.startsWith("'") && v.endsWith("'"))
-    ) {
-      v = v.slice(1, -1);
-    }
-    env[k] = v;
-  }
-  return env;
-}
-
 async function main(): Promise<void> {
   console.log(`\n🔍 [TRACE] 开始全链路探测: ${domain}`);
 
@@ -114,7 +70,7 @@ async function main(): Promise<void> {
   bootstrap({ nodes, subs });
 
   // 2. 取回引导产出的配置（引导已完成 rule_set → 本地路径重写与 check）
-  const configSync = sh("cat /work/sing-box/config.json");
+  const configSync = guest("cat /work/sing-box/config.json");
   if (configSync.code !== 0) {
     throw new Error(`读取沙箱配置失败: ${configSync.err}`);
   }
@@ -151,7 +107,7 @@ async function main(): Promise<void> {
   if (push.exitCode !== 0) {
     throw new Error(`同步 config.json 失败: ${push.stderr.toString()}`);
   }
-  const check = sh("/opt/proxy-test/bin/sing-box check -c /work/sing-box/config.json");
+  const check = guest("/opt/proxy-test/bin/sing-box check -c /work/sing-box/config.json");
   if (check.code !== 0) {
     console.error(`❌ [TRACE] 配置校验失败:\n${check.err || check.out}`);
     process.exit(1);
@@ -159,7 +115,7 @@ async function main(): Promise<void> {
   const ruleSetCount = config.route.rule_set.length;
   console.log(`[TRACE] 配置校验通过 (单文件自包含，${ruleSetCount} 份规则集均为纯本地秒级加载)`);
   // 5. 启动内核进程（先清理旧残留，再后台捕获输出）
-  sh("sudo -n pkill -9 -x sing-box || true; sleep 0.3");
+  guest("sudo -n pkill -9 -x sing-box || true; sleep 0.3");
   console.log(`[TRACE] 启动沙箱 sing-box 内核...`);
   const sbProc = Bun.spawn(
     [
@@ -206,7 +162,7 @@ async function main(): Promise<void> {
   })();
 
   const cleanup = () => {
-    sh("sudo -n pkill -9 -x sing-box || true");
+    guest("sudo -n pkill -9 -x sing-box || true");
     sbProc.kill();
   };
 
@@ -239,12 +195,12 @@ async function main(): Promise<void> {
     : undefined;
   if (tunAddr) {
     const dnsAddr = tunAddr.split("/")[0].replace(/\.1$/, ".2");
-    sh(`/usr/bin/dig +short +time=3 +tries=1 ${domain} @${dnsAddr} > /dev/null 2>&1 || true`);
+    guest(`/usr/bin/dig +short +time=3 +tries=1 ${domain} @${dnsAddr} > /dev/null 2>&1 || true`);
   }
 
   // 6b. HTTP 探测:经 mixed 入站走完整路由链
   const probeStart = Date.now();
-  const probe = sh(`
+  const probe = guest(`
     /opt/proxy-test/bin/bun -e '
       try {
         const res = await fetch("https://${domain}/", {

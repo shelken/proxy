@@ -68,6 +68,7 @@ test("沙箱引导拒绝无法核对的二进制输入", () => {
     mkdirSync(join(root, "config/sing-box"), { recursive: true });
     copyFileSync(join(import.meta.dir, "sandbox-loop.ts"), join(root, "scripts/sandbox-loop.ts"));
     copyFileSync(join(import.meta.dir, "rule-set-local.ts"), join(root, "scripts/rule-set-local.ts"));
+    copyFileSync(join(import.meta.dir, "vm.ts"), join(root, "scripts/vm.ts"));
     copyFileSync(join(import.meta.dir, "settings.ts"), join(root, "scripts/settings.ts"));
     writeFileSync(join(root, "scripts/sbtools-rs/src/main.rs"), "fn main() {}\n");
     writeFileSync(join(root, "config/sing-box/template.json"), JSON.stringify({
