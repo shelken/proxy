@@ -444,6 +444,12 @@ export function ensureGuestKernel(): void {
 
 export function bootstrap(options: LoopOptions = {}): void {
   ensureBinary();
+  // 必须在碰 VM 之前报缺产物：pushToGuest 会先清空 VM 工作目录，之后 cp 失败只剩笼统错误。
+  verifyLocalArtifacts(
+    planRuleSets(
+      JSON.parse(readFileSync(resolve(import.meta.dir, "../config/sing-box/template.json"), "utf8")),
+    ),
+  );
   ensureGuestKernel();
   pushToGuest();
   startServer();

@@ -90,13 +90,13 @@ test("沙箱引导拒绝无法核对的二进制输入", () => {
     writeFileSync(join(root, "scripts/sbtools-rs/tests/check.rs"), "#[test]\nfn check() {}\n");
     const docs = run();
     expect(docs.exitCode).toBe(1);
-    expect(docs.stderr.toString()).toContain("读取内核版本");
+    expect(docs.stderr.toString()).toContain("检查本地规则产物");
 
     git("add", "scripts/sbtools-rs/README.md", "scripts/sbtools-rs/CHANGELOG.md", "scripts/sbtools-rs/tests");
     git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "docs and tests");
     const committedDocs = run();
     expect(committedDocs.exitCode).toBe(1);
-    expect(committedDocs.stderr.toString()).toContain("读取内核版本");
+    expect(committedDocs.stderr.toString()).toContain("检查本地规则产物");
 
     const source = join(root, "scripts/sbtools-rs/src/extra.rs");
     writeFileSync(source, "pub const EXTRA: bool = true;\n");
