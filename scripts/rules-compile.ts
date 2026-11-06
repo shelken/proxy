@@ -33,39 +33,61 @@ export type Client = "singbox" | "clash" | "plain";
 const SUFFIXES: Record<Client, string> = { singbox: ".json", clash: ".yaml", plain: ".list" };
 const MIRROR_SUFFIXES: Record<Client, string> = { singbox: ".srs", clash: ".yaml", plain: ".list" };
 
-const DNS_RULE_FIELDS = ["domain", "domain_suffix", "domain_keyword", "domain_regex"] as const;
-/** 产物内规则字段排序：域名类在前，过程/网络类在后，逻辑规则恒排最后。 */
-const FIELD_ORDER = [
-  "domain",
-  "domain_suffix",
-  "domain_keyword",
-  "domain_regex",
-  "process_name",
-  "ip_cidr",
-  "source_ip_cidr",
-  "port",
-  "port_range",
-  "source_port",
-  "source_port_range",
-  "network",
-];
+type Value = string | number;
 
-export interface RuleAST {
-  domain?: string[];
-  domain_suffix?: string[];
-  domain_keyword?: string[];
-  domain_regex?: string[];
-  ip_cidr?: string[];
-  source_ip_cidr?: string[];
-  ip_asn?: string[];
-  port?: number[];
-  port_range?: string[];
-  source_port?: number[];
-  source_port_range?: string[];
-  process_name?: string[];
-  network?: string[];
-  logical?: Array<Record<string, unknown>>;
+/**
+ * 规则字段表：一个字段的解析、三端发射与 DNS 可判定性都写在这一行。
+ * 数组顺序即 mihomo / Loon 行顺序；sing-box 端 `domain` 提到最前，其余按表顺序。
+ */
+interface FieldSpec {
+  name: string;
+  /** sing-box 规则字段名；缺省表示 sing-box 无法表达，只告警并忽略（ip_asn） */
+  singbox?: string;
+  /** sing-box 规则里恒排最前 */
+  singboxFirst?: boolean;
+  /** sing-box 端剥离 mihomo / Loon 专用的 ,no-resolve */
+  stripNoResolve?: boolean;
+  /** DNS 规则只能按查询名判定，仅这类字段进 -dns 伴生 */
+  dnsOnly?: boolean;
+  /** 值解析为数字（端口） */
+  numeric?: boolean;
+  /** mihomo classical 行 */
+  clash: (v: Value) => string;
+  /** Loon / Surge 行；缺省与 clash 相同 */
+  plain?: (v: Value) => string;
 }
+
+const line = (prefix: string) => (v: Value) => `${prefix},${v}`;
+
+const FIELDS = [
+  { name: "domain_suffix", singbox: "domain_suffix", dnsOnly: true, clash: line("DOMAIN-SUFFIX") },
+  { name: "domain_keyword", singbox: "domain_keyword", dnsOnly: true, clash: line("DOMAIN-KEYWORD") },
+  { name: "domain", singbox: "domain", singboxFirst: true, dnsOnly: true, clash: line("DOMAIN") },
+  { name: "process_name", singbox: "process_name", clash: line("PROCESS-NAME") },
+  {
+    name: "ip_cidr",
+    singbox: "ip_cidr",
+    stripNoResolve: true,
+    clash: line("IP-CIDR"),
+    plain: (v) => `${String(v).includes(":") ? "IP-CIDR6" : "IP-CIDR"},${v}`,
+  },
+  { name: "ip_asn", clash: line("IP-ASN") },
+  { name: "port", singbox: "port", numeric: true, clash: line("DST-PORT"), plain: line("DEST-PORT") },
+] as const satisfies readonly FieldSpec[];
+
+/** sing-box 规则顺序：标了 singboxFirst 的排最前，其余按字段表顺序。 */
+const SINGBOX_FIELDS = [...FIELDS]
+  .filter((f) => f.singbox)
+  .sort((a, b) => Number(b.singboxFirst ?? false) - Number(a.singboxFirst ?? false));
+const DNS_FIELDS = SINGBOX_FIELDS.filter((f) => f.dnsOnly);
+const FIELD_NAMES: readonly string[] = FIELDS.map((f) => f.name);
+const DNS_FIELD_NAMES: readonly string[] = DNS_FIELDS.map((f) => f.name);
+
+type FieldName = (typeof FIELDS)[number]["name"];
+
+export type RuleAST = Partial<Record<FieldName, Value[]>> & {
+  logical?: Array<Record<string, unknown>>;
+};
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 export type SingBoxRule = Record<string, JsonValue>;
@@ -138,7 +160,7 @@ function normalizeLogical(node: Record<string, unknown>): Record<string, unknown
     const keys = Object.keys(child);
     if (keys.length !== 1) throw new Error(`logical 叶节点必须恰好一个字段: ${JSON.stringify(child)}`);
     const k = keys[0].replace(/-/g, "_");
-    if (!FIELD_ORDER.includes(k) && k !== "ip_asn") throw new Error(`logical 未知字段: ${keys[0]}`);
+    if (!FIELD_NAMES.includes(k)) throw new Error(`logical 未知字段: ${keys[0]}`);
     const vals = scalarList(keys[0], child[keys[0]]);
     if (vals.length !== 1) throw new Error(`logical 叶节点值必须是单个标量: ${JSON.stringify(child)}`);
     return { [k]: vals[0] };
@@ -156,8 +178,8 @@ export function parseYamlAst(content: string): RuleAST {
   if (!Array.isArray(rules)) throw new Error("rules YAML 缺少 rules: 列表（或形态不是数组）");
 
   const ast: RuleAST = {};
-  const add = (key: keyof RuleAST, val: unknown) => {
-    const target = (ast[key] ??= [] as unknown[]) as unknown[];
+  const add = (key: FieldName, val: Value) => {
+    const target = (ast[key] ??= []);
     if (!target.includes(val)) target.push(val);
   };
   for (const item of rules) {
@@ -176,17 +198,16 @@ export function parseYamlAst(content: string): RuleAST {
         }
         continue;
       }
-      if (!FIELD_ORDER.includes(key) && key !== "ip_asn") {
-        throw new Error(`未知的规则字段: ${rawKey}（可用: ${[...FIELD_ORDER, "ip_asn", "logical"].join(", ")}）`);
+      const field = FIELDS.find((f) => f.name === key);
+      if (!field) {
+        throw new Error(`未知的规则字段: ${rawKey}（可用: ${[...FIELD_NAMES, "logical"].join(", ")}）`);
       }
       for (const val of scalarList(rawKey, rawValues)) {
-        if (key === "port" || key === "source_port") {
+        if (field.numeric) {
           const num = Number(val);
           if (!Number.isFinite(num)) throw new Error(`字段 ${rawKey} 必须是数字: ${JSON.stringify(val)}`);
-          add(key, num);
-        } else if (key === "port_range" || key === "source_port_range") {
-          add(key, String(val).replace("-", ":"));
-        } else add(key, String(val));
+          add(field.name, num);
+        } else add(field.name, String(val));
       }
     }
   }
@@ -225,16 +246,15 @@ function singboxLogical(node: Record<string, unknown>): SingBoxRule {
 }
 
 /** 按字段表发射 sing-box 规则；ip_cidr 剥离 mihomo/Loon 专用的 no-resolve。 */
-function singboxRules(ast: RuleAST, fields: readonly string[], dnsOnly: boolean): SingBoxRule[] {
+function singboxRules(ast: RuleAST, fields: readonly FieldSpec[], dnsOnly: boolean): SingBoxRule[] {
   const rules: SingBoxRule[] = [];
   for (const field of fields) {
-    const vals = ast[field as keyof RuleAST];
+    const vals = ast[field.name as FieldName];
     if (!vals || vals.length === 0) continue;
-    rules.push(
-      field === "ip_cidr"
-        ? { ip_cidr: (vals as string[]).map((v) => v.split(",")[0].trim()) }
-        : { [field]: vals as JsonValue },
-    );
+    const value = field.stripNoResolve
+      ? (vals as string[]).map((v) => v.split(",")[0].trim())
+      : (vals as JsonValue);
+    rules.push({ [field.singbox!]: value });
   }
   for (const l of ast.logical ?? []) {
     if (!dnsOnly || dnsOnlyLogical(l)) rules.push(singboxLogical(l));
@@ -244,59 +264,34 @@ function singboxRules(ast: RuleAST, fields: readonly string[], dnsOnly: boolean)
 
 export const emitSingbox = (ast: RuleAST): string => {
   if (ast.ip_asn?.length) console.warn(`WARN: IP-ASN 无法在 sing-box 规则集中表达，已忽略 ${ast.ip_asn.length} 条`);
-  return `${JSON.stringify({ version: 3, rules: singboxRules(ast, FIELD_ORDER, false) }, null, 2)}\n`;
+  return `${JSON.stringify({ version: 3, rules: singboxRules(ast, SINGBOX_FIELDS, false) }, null, 2)}\n`;
 };
 
 /** DNS 规则在拿到响应前只能按查询名判定，只保留域名字段。 */
 export const emitSingboxDns = (ast: RuleAST): string =>
-  `${JSON.stringify({ version: 3, rules: singboxRules(ast, DNS_RULE_FIELDS, true) }, null, 2)}\n`;
+  `${JSON.stringify({ version: 3, rules: singboxRules(ast, DNS_FIELDS, true) }, null, 2)}\n`;
 
 /** 逻辑树所有叶字段都属于 DNS 可判定字段（域名类）时为真。 */
 function dnsOnlyLogical(node: Record<string, unknown>): boolean {
   if (Array.isArray(node.rules)) return (node.rules as Record<string, unknown>[]).every(dnsOnlyLogical);
-  return Object.keys(node).every((k) => (DNS_RULE_FIELDS as readonly string[]).includes(k));
+  return Object.keys(node).every((k) => DNS_FIELD_NAMES.includes(k));
 }
 
-type EmitLine = [field: keyof RuleAST, format: (v: string | number) => string];
-const CLASH_LINES: EmitLine[] = [
-  ["domain_suffix", (v) => `DOMAIN-SUFFIX,${v}`],
-  ["domain_keyword", (v) => `DOMAIN-KEYWORD,${v}`],
-  ["domain", (v) => `DOMAIN,${v}`],
-  ["domain_regex", (v) => `DOMAIN-REGEX,${v}`],
-  ["process_name", (v) => `PROCESS-NAME,${v}`],
-  ["ip_cidr", (v) => `IP-CIDR,${v}`],
-  ["source_ip_cidr", (v) => `SRC-IP-CIDR,${v}`],
-  ["ip_asn", (v) => `IP-ASN,${v}`],
-  ["port", (v) => `DST-PORT,${v}`],
-  ["port_range", (v) => `DST-PORT,${String(v).replace(":", "-")}`],
-  ["source_port", (v) => `SRC-PORT,${v}`],
-  ["source_port_range", (v) => `SRC-PORT,${String(v).replace(":", "-")}`],
-  ["network", (v) => `NETWORK,${v}`],
-];
-/** Loon / Surge：DEST-PORT 拼写、连字符范围、IPv6 用 IP-CIDR6、协议大写。 */
-const PLAIN_LINES: EmitLine[] = CLASH_LINES.map(([field, format]) =>
-  field === "ip_cidr"
-    ? [field, (v: string | number) => `${String(v).includes(":") ? "IP-CIDR6" : "IP-CIDR"},${v}`]
-    : field === "port" || field === "port_range"
-      ? [field, (v: string | number) => `DEST-PORT,${String(v).replace(":", "-")}`]
-      : field === "network"
-        ? [field, (v: string | number) => `PROTOCOL,${String(v).toUpperCase()}`]
-        : [field, format],
-);
-
 export function emitClash(ast: RuleAST): string {
-  const payload = emitLines(ast, CLASH_LINES);
+  const payload = emitLines(ast, false);
   return payload.length > 0 ? `payload:\n${payload.map((line) => `  - '${line}'`).join("\n")}\n` : "payload: []\n";
 }
 
 export function emitPlain(ast: RuleAST): string {
-  return `${emitLines(ast, PLAIN_LINES).join("\n")}\n`;
+  return `${emitLines(ast, true).join("\n")}\n`;
 }
 
-function emitLines(ast: RuleAST, table: EmitLine[]): string[] {
+/** 按字段表发射 mihomo / Loon 行；plain 用表里的 Loon 方言，缺省复用 clash。 */
+function emitLines(ast: RuleAST, plain: boolean): string[] {
   const out: string[] = [];
-  for (const [field, format] of table) {
-    for (const v of ast[field] ?? []) out.push(format(v as string | number));
+  for (const field of FIELDS) {
+    const format = plain ? (field.plain ?? field.clash) : field.clash;
+    for (const v of ast[field.name as FieldName] ?? []) out.push(format(v));
   }
   for (const l of ast.logical ?? []) out.push(formatLogicalRule(l));
   return out;

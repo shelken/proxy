@@ -62,14 +62,14 @@ rules:
   - domain-keyword:
       - ads
   - port: 8080
-  - port_range:
-      - 6881:6889
+  - ip-asn:
+      - 396982
 `;
     const ast = parseYamlAst(yaml);
     expect(ast.domain_suffix).toEqual(["example.com"]);
     expect(ast.domain_keyword).toEqual(["ads"]);
     expect(ast.port).toEqual([8080]);
-    expect(ast.port_range).toEqual(["6881:6889"]);
+    expect(ast.ip_asn).toEqual(["396982"]);
   });
 
   test("同字段跨条目去重合并", () => {
@@ -113,6 +113,19 @@ rules:
     );
   });
 
+  test("已删除的零使用字段按未知字段报错", () => {
+    for (const f of [
+      "domain_regex",
+      "source_ip_cidr",
+      "port_range",
+      "source_port",
+      "source_port_range",
+      "network",
+    ]) {
+      expect(() => parseYamlAst(`rules:\n  - ${f}: x\n`)).toThrow(/未知的规则字段/);
+    }
+  });
+
   test("非标量字段值（null/映射对象/嵌套数组）构建期报错，不字符串化", () => {
     expect(() => parseYamlAst("rules:\n  - domain_suffix:\n      domains:\n        - example.com\n")).toThrow(
       /必须是字符串或数字/,
@@ -147,23 +160,17 @@ describe("emitSingbox", () => {
       domain: ["a.test"],
       domain_suffix: ["b.test", "c.test"],
       domain_keyword: ["keyword"],
-      domain_regex: ["^regex\\..+"],
       ip_cidr: ["10.0.0.0/8,no-resolve", "2001:db8::/32"],
-      source_ip_cidr: ["10.1.0.0/16"],
       port: [443],
-      source_port: [1234],
       process_name: ["curl"],
     });
 
     expect(fieldValues(rules, "domain")).toEqual(["a.test"]);
     expect(fieldValues(rules, "domain_suffix")).toEqual(["b.test", "c.test"]);
     expect(fieldValues(rules, "domain_keyword")).toEqual(["keyword"]);
-    expect(fieldValues(rules, "domain_regex")).toEqual(["^regex\\..+"]);
     // no-resolve 是 mihomo/Loon 专用选项，sing-box 规则集剥离
     expect(fieldValues(rules, "ip_cidr")).toEqual(["10.0.0.0/8", "2001:db8::/32"]);
-    expect(fieldValues(rules, "source_ip_cidr")).toEqual(["10.1.0.0/16"]);
     expect(fieldValues(rules, "port")).toEqual([443]);
-    expect(fieldValues(rules, "source_port")).toEqual([1234]);
     expect(fieldValues(rules, "process_name")).toEqual(["curl"]);
   });
 
@@ -241,21 +248,17 @@ describe("emitSingboxDns", () => {
 });
 
 describe("emitClash（mihomo classical）", () => {
-  test("字段展开为 classical 行，端口范围转连字符，no-resolve 保留", () => {
+  test("字段展开为 classical 行，no-resolve 保留", () => {
     const text = emitClash({
       domain: ["a.test"],
       ip_cidr: ["1.1.1.1/32,no-resolve"],
       ip_asn: ["396982,no-resolve"],
       port: [22],
-      port_range: ["6881:6889"],
-      source_port_range: ["1000:2000"],
     });
     expect(text).toContain("- 'DOMAIN,a.test'");
     expect(text).toContain("- 'IP-CIDR,1.1.1.1/32,no-resolve'");
     expect(text).toContain("- 'IP-ASN,396982,no-resolve'");
     expect(text).toContain("- 'DST-PORT,22'");
-    expect(text).toContain("- 'DST-PORT,6881-6889'");
-    expect(text).toContain("- 'SRC-PORT,1000-2000'");
   });
 
   test("空 AST 产出空 payload", () => {
@@ -264,21 +267,14 @@ describe("emitClash（mihomo classical）", () => {
 });
 
 describe("emitPlain（Loon / Surge）", () => {
-  test("DEST-PORT 拼写、连字符范围、IPv6 用 IP-CIDR6", () => {
+  test("DEST-PORT 拼写、IPv6 用 IP-CIDR6", () => {
     const text = emitPlain({
       port: [22],
-      port_range: ["6881:6889"],
       ip_cidr: ["240e::/18,no-resolve", "1.1.1.1/32,no-resolve"],
     });
     expect(text).toContain("DEST-PORT,22");
-    expect(text).toContain("DEST-PORT,6881-6889");
     expect(text).toContain("IP-CIDR6,240e::/18,no-resolve");
     expect(text).toContain("IP-CIDR,1.1.1.1/32,no-resolve");
-  });
-
-  test("network 映射为 Loon / Surge 的 PROTOCOL 并大写", () => {
-    expect(emitPlain({ network: ["udp"] })).toContain("PROTOCOL,UDP");
-    expect(emitClash({ network: ["udp"] })).toContain("- 'NETWORK,udp'");
   });
 });
 

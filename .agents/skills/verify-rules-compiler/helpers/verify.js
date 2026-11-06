@@ -325,7 +325,7 @@ export function driveDns(outDir) {
   add("D4/geosite-no-json", !existsSync(dnsJson("ChinaMax")), "geosite 无中间 JSON");
   add("D4/geoip-skip", !existsSync(srs("geoip-cn")), "geoip 不产伴生（IP 集合无 DNS 判定语义）");
 
-  const DNS_KEYS = new Set(["type", "mode", "rules", "invert", "domain", "domain_suffix", "domain_keyword", "domain_regex"]);
+  const DNS_KEYS = new Set(["type", "mode", "rules", "invert", "domain", "domain_suffix", "domain_keyword"]);
   const foreignKeys = (node) => {
     const bad = [];
     const visit = (n) => {
