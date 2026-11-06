@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://sing-box.sagernet.org/schema.json
 # ios.yaml — iOS 的完整模板，内嵌 Tailscale，结构与 sing-box 的 JSON 一致（ADR-0010）。
 # { $include: 名字 } 引入 shared.yaml 的共用段，settings.yaml 生成的段名字是 groups、rule-sets、services。
 
@@ -9,6 +10,7 @@ inbounds:
     address: [198.51.100.1/30, "fdfe:dcba:9876::1/126"]
     auto_route: true
     dns_mode: hijack
+    loopback_address: ["10.7.0.1"] # for sidestore
     route_exclude_address:
       - 224.0.0.0/4
       - 255.255.255.255/32
