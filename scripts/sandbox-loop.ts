@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { RULES_URL } from "./settings.ts";
 
 const VM = "proxy-test";
