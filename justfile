@@ -78,8 +78,8 @@ sing_box_cmd := env_var_or_default("SING_BOX", "mise exec -- sing-box")
 
 # --- 生产底模装配与校验 ---
 # 单入口：一次重建 mac、iOS 与路由器三份底模。
-# 日常维护改 config/sing-box/settings.yaml（规则与分组）；稳定机制在 base.yaml，
-# 平台差异在 platforms/。合并顺序与固定优先级写在 base.yaml 的 slot/platform 标记里。
+# 日常维护改 config/sing-box/settings.yaml（规则与分组）；稳定原生字段在 base.yaml，
+# 平台差异在 platforms/。与设置相关的路由/DNS 顺序由 scripts/build-config.ts 的 makePolicy 固定表达。
 # 开发时只跑这一条命令，无需记住各个产物各自怎么生成；
 # 结束时报告哪份产物发生了变化。语义校验在 just check-template。
 template-build:

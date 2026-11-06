@@ -1,10 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { extractRealInput, planRuleSets, localizeRuleSets, isRepoArtifact } from "./sandbox-loop.ts";
+import { extractRealInput, planRuleSets, localizeRuleSets, isRepoArtifact, cleanOwnedArtifacts } from "./sandbox-loop.ts";
 import { RULES_URL } from "./settings.ts";
+
+describe("cleanOwnedArtifacts：只清自己的产物", () => {
+  test("保留 review/verification/rework 证据", () => {
+    const dir = mkdtempSync(join(tmpdir(), "artifacts-"));
+    try {
+      for (const name of ["review", "verification", "rework"]) mkdirSync(join(dir, name));
+      for (const name of ["sbtools", "commit", "sandbox-rules", "sbtools-aarch64-unknown-linux-musl"]) {
+        mkdirSync(join(dir, name));
+      }
+      cleanOwnedArtifacts(dir);
+      expect(readdirSync(dir).sort()).toEqual(["review", "rework", "verification"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("planRuleSets：tag → VM 本地文件", () => {
   test("仓库产物按 URL 真实文件名（解编码），外部 .srs 用独立序号目录", () => {

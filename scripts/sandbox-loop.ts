@@ -73,6 +73,17 @@ function fail(stage: string, detail: string): never {
  * 一旦这些路径确有差异就直接报错：那种情况下的产物与被测代码不对应，
  * 静默使用会产生最难排查的假绿。
  */
+/**
+ * 清理本工具自己管理的产物，不碰 .sandbox-artifacts 下的审查/验证/复现证据
+ * （postmortem 012：证据必须持久）。
+ */
+export function cleanOwnedArtifacts(dir = ARTIFACT_DIR): void {
+  for (const name of [basename(LOCAL_BINARY), ARTIFACT, "commit", basename(STAGING)]) {
+    rmSync(join(dir, name), { recursive: true, force: true });
+  }
+  mkdirSync(dir, { recursive: true });
+}
+
 function ensureBinary(): void {
   const head = host(["git", "rev-parse", "HEAD"]).out.trim();
   if (!head) fail("解析 HEAD", "git rev-parse HEAD 无输出");
@@ -119,8 +130,7 @@ function ensureBinary(): void {
   }
   const chosen = pick.chosen;
 
-  rmSync(ARTIFACT_DIR, { recursive: true, force: true });
-  mkdirSync(ARTIFACT_DIR, { recursive: true });
+  cleanOwnedArtifacts();
   const got = host([
     "gh", "run", "download", String(chosen.databaseId), "-n", ARTIFACT, "-D", ARTIFACT_DIR,
   ]);
@@ -352,10 +362,8 @@ function pushToGuest(): void {
     chmod +x ${GUEST_BINARY}.new
     mv -f ${GUEST_BINARY}.new ${GUEST_BINARY}
     rm -rf ${WORK}
-    mkdir -p ${WORK}/rules ${WORK}/external ${WORK}/tests
+    mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
-    cp -r ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/external/. ${WORK}/external/ 2>/dev/null || true
-    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/rules-map.json ${WORK}/rules-map.json
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
     cp ${REPO_IN_GUEST}/config/sing-box/base.yaml ${WORK}/base.yaml
     cp ${REPO_IN_GUEST}/config/sing-box/settings.yaml ${WORK}/settings.yaml
@@ -369,6 +377,17 @@ function pushToGuest(): void {
   const ver = guest(`${GUEST_BINARY} version`);
   if (ver.code !== 0) fail("执行 VM 内二进制", ver.err.trim());
   console.log(`[引导] VM 内核二进制: ${ver.out.trim()}`);
+}
+
+/** 规则集映射与外部 .srs 在服务端配置取回后才确定，第二阶段再拷入 VM。 */
+function pushRuleSetsToGuest(): void {
+  const r = guest(`
+    set -e
+    mkdir -p ${WORK}/external
+    cp -r ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/external/. ${WORK}/external/ 2>/dev/null || true
+    cp ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/rules-map.json ${WORK}/rules-map.json
+  `);
+  if (r.code !== 0) fail("同步规则集到 VM", r.err.trim());
 }
 
 /**
@@ -453,7 +472,7 @@ function loadRealInput(): { nodes: string[]; subs: string[] } | null {
 }
 
 /** 经客户端 encode + 服务端 /sub 取回真实产物，并后处理为可在 VM 内运行的配置。 */
-function fetchAndPrepare(options: LoopOptions, map: Record<string, string>): void {
+function fetchRawConfig(options: LoopOptions): { route?: { rule_set?: Array<Record<string, unknown>> } } {
   const real = options.nodes || options.subs ? null : loadRealInput();
   const nodes = options.nodes ?? real?.nodes ?? DEFAULT_NODES;
   const subs = options.subs ?? real?.subs ?? [];
@@ -501,11 +520,18 @@ function fetchAndPrepare(options: LoopOptions, map: Record<string, string>): voi
     yaml,
   );
   if (r.code !== 0) fail("取回服务端配置", (r.err + r.out).trim());
+  try {
+    return JSON.parse(r.out);
+  } catch (e) {
+    fail("解析服务端配置", e instanceof Error ? e.message : String(e));
+  }
+}
 
-  // 规则集本地化在宿主完成：与 pushToGuest 共用同一张 tag→路径映射
+/** 用服务端实际配置建立的 tag→路径映射做本地化，再写回 VM 并校验。 */
+function finalizeConfig(raw: unknown, map: Record<string, string>): void {
   let localized: unknown;
   try {
-    localized = localizeRuleSets(JSON.parse(r.out), map);
+    localized = localizeRuleSets(raw, map);
   } catch (e) {
     fail("本地化规则集", e instanceof Error ? e.message : String(e));
   }
@@ -556,15 +582,19 @@ export function ensureGuestKernel(): void {
 }
 
 export function bootstrap(options: LoopOptions = {}): void {
-  // 宿主侧校验先行：产物与本地规则缺失时不必碰 VM
-  const plan = planRuleSets();
+  // 二进制/仓库产物先行：底模声明的产物缺失时先报，不必碰 VM
   ensureBinary();
-  verifyLocalArtifacts(plan);
+  verifyLocalArtifacts(planRuleSets());
   ensureGuestKernel();
-  const map = stageRuleSets(plan);
   pushToGuest();
   startServer();
-  fetchAndPrepare(options, map);
+  // 规则集映射要看服务端实际配置（含 device overlay 声明的 set），再构建一次并校验
+  const raw = fetchRawConfig(options);
+  const plan = planRuleSets(raw);
+  verifyLocalArtifacts(plan);
+  const map = stageRuleSets(plan);
+  pushRuleSetsToGuest();
+  finalizeConfig(raw, map);
 }
 
 if (import.meta.main) {
