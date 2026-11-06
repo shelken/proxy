@@ -1,5 +1,5 @@
 [tools]
-sing-box = "1.14.3"
+sing-box = "1.14.4"
 
 [tasks.setup]
 description = "首次环境初始化：装 git hook"
