@@ -56,7 +56,7 @@ bun --no-env-file .agents/skills/verify-sbtools/helpers/verify.js all
 
 保存 `manifest.json`、构建日志、`suite-*.log`、各组 `results-*.json`、实际内核和服务端日志、两份被测二进制、源码快照与用例快照。证据目录在 `.sandbox-artifacts/verification/`，Git 已忽略此目录。
 
-CLI 记录命令、stdout、stderr 和退出码。HTTP 记录请求方法、端点、状态码与响应。订阅证明包含真实 encode URL 经真实 server 解密后返回的节点和 overlay。日志证明包含历史文件与新请求产生的内核日志。trace 证明包含实际 DNS、存续连接和静态规则。
+CLI 记录命令、stdout、stderr 和退出码。HTTP 记录请求方法、端点、状态码与响应。订阅证明包含真实 encode URL 经真实 server 解密后返回的节点和 overlay。日志证明包含历史文件与新请求产生的内核日志。trace 证明包含实际 DNS、路由判定与存续连接、HTTPS 首字节。
 
 自签名 TLS、无服务端、篡改密文和 fakeip 是负面对照。要求预期失败时仍报告其实际退出码。公网不可达是未通过或阻塞，不能按合成用例通过处理。`mac` 组核对实际剪切板 URL，并恢复原有数据类型和内容；原内容只在内存中保存，不写入证据。
 
