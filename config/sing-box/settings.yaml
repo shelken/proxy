@@ -3,11 +3,14 @@
 # 三份底模（Mac / iOS / 路由器）由本文件 + base.yaml + platforms/ 生成，改这里即三端生效。
 #   groups  出站分组：options 是节点候选（正则，沿用 sing-box selector 语义），default 是默认节点；
 #           组名可被 rules 的 to 引用，也可被其他组的 options 引用。
-#   rules   共享规则，顺序即首匹配顺序（拦截段除外，见 base.yaml）：
+#   rules   共享规则，顺序即首匹配顺序（to 为 reject / download 的规则固定排在前面，不受位置影响）：
 #             name    规则名，同时是产物文件名与 sing-box rule_set tag
 #             source  规则来源：本地 YAML（相对本文件）/ geosite:x / geoip:x / 外部 .srs URL
 #             to      去向：reject / direct / proxy / 本文件或 base 里的出站/分组名
-#           相邻且去向相同的规则会合并成一条 rule_set 列表，只有效果相同。
+#
+# 这 7 个规则名被 DNS 与 QUIC 规则按名字引用，且 to 必须保持如下约定；
+# 改名、删除或改去向不会报错，只会省略依赖它的规则（构建时打印 WARN）：
+#   MyReject→reject  Lan/MyDirect/ChinaMax/cftunnel/geoip-cn→direct  MyProxy→proxy
 
 groups:
   gemini:

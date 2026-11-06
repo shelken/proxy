@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { makePolicy, mergeTo, type Platform, type Role } from "./build-config.ts";
+import { inactiveAnchors, makePolicy, mergeTo, type Platform, type Role } from "./build-config.ts";
 import { artifactName, loadBase, loadSettings, singBoxCommand, type Settings } from "./settings.ts";
 import { buildOne } from "./rules-compile.ts";
 import {
@@ -180,6 +180,26 @@ describe("改去向/删除：关联随设置撤销", () => {
     for (const rule of [...p.route.rules, ...p.dns.rules]) {
       if (Array.isArray((rule as any).rule_set)) expect((rule as any).rule_set.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("策略锚点：缺失或改去向要有提示", () => {
+  const mutate = (fn: (doc: any) => void) => loadSettings(base, tempSettings(fn));
+
+  test("默认设置没有未生效的锚点", () => {
+    expect(inactiveAnchors(defaults)).toEqual([]);
+  });
+
+  test("改名与改去向各自给出带规则名的提示", () => {
+    const warnings = inactiveAnchors(
+      mutate((d) => {
+        d.rules.find((r: any) => r.name === "Lan").name = "LAN";
+        d.rules.find((r: any) => r.name === "MyProxy").to = "direct";
+      }),
+    );
+    expect(warnings).toHaveLength(2);
+    expect(warnings.find((w) => w.includes("Lan"))).toContain("不在设置里");
+    expect(warnings.find((w) => w.includes("MyProxy"))).toContain("direct");
   });
 });
 
