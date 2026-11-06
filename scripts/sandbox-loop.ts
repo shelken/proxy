@@ -12,7 +12,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { artifactName, RULES_URL } from "./settings.ts";
 
 const VM = "proxy-test";
 const ARTIFACT = "sbtools-aarch64-unknown-linux-musl";
@@ -23,6 +24,7 @@ const ARTIFACT_DIR = resolve(import.meta.dir, "../.sandbox-artifacts");
 const LOCAL_BINARY = resolve(ARTIFACT_DIR, "sbtools");
 const GUEST_BINARY = "/work/sbtools";
 const WORK = "/work/sing-box";
+const STAGING = resolve(ARTIFACT_DIR, "sandbox-rules");
 const REPO_IN_GUEST = resolve(import.meta.dir, "..").replace(
   process.env.HOME ?? "",
   "/host-home",
@@ -199,6 +201,12 @@ const BINARY_INPUTS = [
   "Cargo.toml",
   "Cargo.lock",
   "config/sing-box/template.json",
+  // 底模由这些输入生成，改动它们必须重建内嵌底模的二进制
+  "config/sing-box/settings.yaml",
+  "config/sing-box/base.yaml",
+  "config/sing-box/platforms",
+  "scripts/build-config.ts",
+  "scripts/settings.ts",
   ".github/workflows/release-sbtools.yml",
 ];
 
@@ -217,38 +225,73 @@ function relevantDiff(from: string, to: string): string {
   return r.out.trim();
 }
 
+interface RuleSetPlan {
+  tag: string;
+  url: string;
+  local: string;
+  external: boolean;
+}
+
+/**
+ * 底模声明的远程规则集 → VM 内本地文件。
+ *
+ * 本仓库产物用统一 artifact 名；外部 .srs（如小米）不编译、不反编译，原样下载后
+ * 按同一 tag 映射喂给内核，启动时零外网。
+ */
+export function planRuleSets(
+  template: { route?: { rule_set?: Array<Record<string, unknown>> } } = JSON.parse(
+    readFileSync(resolve(import.meta.dir, "../config/sing-box/template.json"), "utf-8"),
+  ),
+): RuleSetPlan[] {
+  return (template.route?.rule_set ?? [])
+    .filter((rs) => rs?.type === "remote" && typeof rs.url === "string")
+    .map((rs) => {
+      const url = rs.url as string;
+      const external = !url.startsWith(RULES_URL);
+      return {
+        tag: String(rs.tag),
+        url,
+        local: external ? `${artifactName(String(rs.tag))}.srs` : basename(new URL(url).pathname),
+        external,
+      };
+    });
+}
+
 /**
  * 同步前确认本地规则产物齐备。
  *
- * `pushToGuest` 把 `generated/singbox/` 整目录拷进 VM，缺哪个文件只有内核启动时
- * 才暴露成 `parse rule-set: open ...: no such file or directory`，报错点离根因
- * （没跑全量构建）很远。这里按底模声明的 tag 当场核对，缺了就直说要先构建。
- *
- * 与 `just template-check` 的区别：那条校验 settings/base/platforms 与三份底模是否一致，
- * 这条只问「本地产物是否齐到能喂给内核」，两者互补。
+ * `pushToGuest` 按 tag→本地文件映射拷贝规则集，缺哪个文件只有内核启动时才暴露成
+ * `parse rule-set: open ...: no such file or directory`。这里当场核对仓库产物；
+ * 外部 .srs 在 pushToGuest 时下载，不在预检里。
  */
-function verifyLocalArtifacts(): void {
-  const templatePath = resolve(import.meta.dir, "../config/sing-box/template.json");
-  const template = JSON.parse(readFileSync(templatePath, "utf-8")) as {
-    route?: { rule_set?: { tag?: string }[] };
-  };
-  const tags = (template.route?.rule_set ?? [])
-    .map((rs) => rs.tag)
-    .filter((tag): tag is string => typeof tag === "string");
+function verifyLocalArtifacts(plan: RuleSetPlan[]): void {
   const genDir = resolve(import.meta.dir, "../config/rules/generated/singbox");
-  const missing = tags.filter((tag) => !existsSync(join(genDir, `${tag}.srs`)));
+  const missing = plan.filter((p) => !p.external && !existsSync(join(genDir, p.local)));
   if (missing.length > 0) {
     fail(
       "检查本地规则产物",
-      `底模声明了 ${tags.length} 个规则集，本地 generated/singbox/ 缺 ${missing.length} 个：\n` +
-        `  ${missing.join(", ")}\n` +
+      `底模声明了 ${plan.length} 个远程规则集，本地 generated/singbox/ 缺 ${missing.length} 个：\n` +
+        `  ${missing.map((p) => p.local).join(", ")}\n` +
         `  先执行 just rules-build 生成全量产物再引导`,
     );
   }
 }
 
 /** 同步二进制、规则产物与底模到 VM。内核需要这些文件在可读位置。 */
-function pushToGuest(): void {
+function pushToGuest(plan: RuleSetPlan[]): void {
+  // 外部 .srs 先下到宿主 staging，再与仓库产物一起按映射拷进 VM：内核启动时零外网
+  rmSync(STAGING, { recursive: true, force: true });
+  mkdirSync(STAGING, { recursive: true });
+  const map: Record<string, string> = {};
+  for (const item of plan) {
+    if (item.external) {
+      const dl = Bun.spawnSync(["curl", "-fsSL", "--max-time", "60", item.url, "-o", join(STAGING, item.local)]);
+      if (dl.exitCode !== 0) fail("下载外部规则集", item.url);
+    }
+    map[item.tag] = `${WORK}/rules/${item.local}`;
+  }
+  writeFileSync(join(STAGING, "rules-map.json"), JSON.stringify(map, null, 2));
+
   // 崩溃可能留下服务端；替换 inode 避免原地覆写触发 ETXTBSY。
   const r = guest(`
     set -e
@@ -262,6 +305,7 @@ function pushToGuest(): void {
     rm -rf ${WORK}
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
+    cp -r ${REPO_IN_GUEST}/.sandbox-artifacts/sandbox-rules/. ${WORK}/rules/
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
     cp ${REPO_IN_GUEST}/config/sing-box/base.yaml ${WORK}/base.yaml
     cp ${REPO_IN_GUEST}/config/sing-box/settings.yaml ${WORK}/settings.yaml
@@ -423,18 +467,24 @@ inbounds 原样保留（TUN + mixed 2080）：TUN 断言与路由排除段是既
 且沙箱本就是特权环境，建 TUN 不耦合宿主网络。
 """
 import json
+import os
 import sys
 
 src, dst = sys.argv[1], sys.argv[2]
 d = json.load(open(src))
 
 RULES = "${WORK}/rules"
-d["route"]["rule_set"] = [
-    {"type": "local", "tag": r["tag"], "format": "binary", "path": f"{RULES}/{r['tag']}.srs"}
-    if r.get("type") == "remote"
-    else r
-    for r in d["route"]["rule_set"]
-]
+MAP = json.load(open(f"{RULES}/rules-map.json")) if os.path.exists(f"{RULES}/rules-map.json") else {}
+
+def localize(r):
+    if r.get("type") != "remote":
+        return r
+    path = MAP.get(r["tag"])
+    if not path:
+        raise SystemExit(f"规则集 {r['tag']} 没有本地映射")
+    return {"type": "local", "tag": r["tag"], "format": "binary", "path": path}
+
+d["route"]["rule_set"] = [localize(r) for r in d["route"]["rule_set"]]
 
 exp = d.get("experimental") or {}
 exp.pop("clash_api", None)
@@ -489,10 +539,11 @@ export function ensureGuestKernel(): void {
 
 export function bootstrap(options: LoopOptions = {}): void {
   // 宿主侧校验先行：产物与本地规则缺失时不必碰 VM
+  const plan = planRuleSets();
   ensureBinary();
-  verifyLocalArtifacts();
+  verifyLocalArtifacts(plan);
   ensureGuestKernel();
-  pushToGuest();
+  pushToGuest(plan);
   // 后处理脚本本身也要在 VM 内可读
   const put = guest("cat > /work/sandbox-prepare.py", PREPARE_SCRIPT);
   if (put.code !== 0) fail("推送后处理脚本", put.err.trim());

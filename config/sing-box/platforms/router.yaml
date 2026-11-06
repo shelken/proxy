@@ -1,5 +1,5 @@
-# platforms/router.yaml — 路由器底模的平台部分：网关 TUN、53 端口 DNS 入口与对局域网监听的面板。
-# 本网解析器（dns-lan）与部署域应答由设备 overlay 提供，路由器底模不塞回这些内容（ADR-0014）。
+# platforms/router.yaml — 路由器平台层：网关 TUN、53 端口 DNS 入口、对局域网监听的面板（原生字段）。
+# 本网解析器（dns-lan）与部署域应答由设备 overlay 提供，本层不塞回（ADR-0014）。
 
 inbounds:
   - type: tun
@@ -21,8 +21,3 @@ inbounds:
 experimental:
   clash_api: { external_controller: 0.0.0.0:9090, external_ui: ui, default_mode: rule }
   cache_file: { enabled: true, path: cache.db, store_fakeip: true, store_dns: true }
-
-route:
-  # 局域网设备的 DNS 目的地址是旁路由自己（私网），不先劫持会落进 ip_is_private → direct 绕成环
-  rules_head:
-    - { inbound: [dns-in], action: hijack-dns }

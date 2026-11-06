@@ -14,11 +14,8 @@ import {
 const TEMPLATE_PATH = resolve(import.meta.dir, "../template.json");
 const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
 const CONFIG_DIR = resolve(import.meta.dir, "..");
-const base = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "base.yaml"), "utf8")) as {
-  rule_set_url: string;
-  dns_companions: string[];
-  resolve_exclude: string[];
-};
+/** 本仓库发布规则产物的前缀（与 scripts/build-config.ts 的 RULES_URL 一致）。 */
+const PUBLISH_PREFIX = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox";
 const settings = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "settings.yaml"), "utf8")) as {
   groups: Record<string, { options: string[]; default: string }>;
   rules: Array<{ name: string; source: string; to: string }>;
@@ -378,26 +375,28 @@ describe("settings.yaml → template.json 生成契约", () => {
     expect(template.log).toEqual({ level: "info" });
   });
 
-  test("route.rule_set = DNS 伴生 + settings 规则，顺序一致", () => {
-    expect(template.route.rule_set.map((rs: { tag: string }) => rs.tag)).toEqual([
-      ...base.dns_companions.map((n) => `${n}-dns`),
-      ...settings.rules.map((r) => r.name),
-    ]);
+  test("声明唯一，且每个设置规则都有声明；非规则声明都是 -dns 伴生", () => {
+    const declared = template.route.rule_set.map((rs: { tag: string }) => rs.tag);
+    expect(new Set(declared).size).toBe(declared.length);
+    const names = new Set(settings.rules.map((r) => r.name));
+    for (const rule of settings.rules) expect(declared).toContain(rule.name);
+    for (const tag of declared) {
+      if (names.has(tag)) continue;
+      expect(tag.endsWith("-dns")).toBe(true);
+      expect(names.has(tag.slice(0, -"-dns".length))).toBe(true);
+    }
   });
 
-  test("每条声明的 URL：外部 .srs 原样，其余指向本仓库发布分支", () => {
+  test("声明的 URL：外部 .srs 原样，其余指向本仓库发布前缀", () => {
     const byTag = new Map<string, { url: string }>(
       template.route.rule_set.map((rs: { tag: string; url: string }) => [rs.tag, rs]),
     );
-    for (const name of base.dns_companions) {
-      const tag = `${name}-dns`;
-      expect(byTag.get(tag)?.url).toBe(base.rule_set_url.replace("{artifact}", tag));
-    }
-    for (const rule of settings.rules) {
-      const expectUrl = /^https?:\/\//.test(rule.source)
-        ? rule.source
-        : base.rule_set_url.replace("{artifact}", rule.name);
-      expect(byTag.get(rule.name)?.url).toBe(expectUrl);
+    const external = new Map(
+      settings.rules.filter((r) => /^https?:\/\//.test(r.source)).map((r) => [r.name, r.source]),
+    );
+    for (const rs of template.route.rule_set as Array<{ tag: string; url: string }>) {
+      const expected = external.get(rs.tag) ?? `${PUBLISH_PREFIX}/${rs.tag}.srs`;
+      expect(byTag.get(rs.tag)?.url).toBe(expected);
     }
   });
 

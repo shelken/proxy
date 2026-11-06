@@ -8,6 +8,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const CONFIG_DIR = resolve(import.meta.dir, "../config/sing-box");
 export const CUSTOM_DIR = resolve(import.meta.dir, "../config/rules/custom");
+/** 本仓库发布规则产物的前缀；产物名由 artifactName 归一化。装配器与沙箱消费链共用。 */
+export const RULES_URL = "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox";
 
 export type RuleKind = "local" | "geosite" | "geoip" | "url";
 export interface Rule {
@@ -31,15 +33,8 @@ export interface Settings {
   byName: Map<string, Rule>;
 }
 export interface Base {
-  rule_set_url: string;
-  dns_companions: string[];
-  resolve_exclude: string[];
-  log?: Record<string, unknown>;
-  dns: { rules: Array<Record<string, any>>; [k: string]: any };
-  http_clients: unknown[];
-  experimental: Record<string, any>;
-  outbounds: Array<{ tag: string } & Record<string, any>>;
-  route: { rules: Array<Record<string, any>>; [k: string]: any };
+  outbounds: Array<{ tag: string; default?: string } & Record<string, any>>;
+  [key: string]: unknown;
 }
 
 export const loadBase = (): Base =>
@@ -49,10 +44,6 @@ export const loadBase = (): Base =>
 export function artifactName(tag: string): string {
   return tag.replace(/[^\p{L}\p{N}._-]+/gu, "_").replace(/^_+|_+$/g, "") || "rule";
 }
-
-/** 本仓库发布地址：归一化后的产物名替换进 {artifact}。 */
-export const repoUrl = (base: Base, artifact: string) =>
-  base.rule_set_url.replace("{artifact}", artifact);
 
 /** sing-box 命令：SING_BOX 覆盖，缺省走 mise；底模 merge 与规则 compile 共用。 */
 export const singBoxCommand = (env = process.env.SING_BOX) =>

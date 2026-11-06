@@ -3,7 +3,26 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { extractRealInput } from "./sandbox-loop.ts";
+import { extractRealInput, planRuleSets } from "./sandbox-loop.ts";
+import { RULES_URL } from "./settings.ts";
+
+describe("planRuleSets：tag → VM 本地文件", () => {
+  test("仓库产物用 artifact，外部 .srs 原样下载", () => {
+    const plan = planRuleSets({
+      route: {
+        rule_set: [
+          { tag: "OpenAI", type: "remote", url: `${RULES_URL}/OpenAI.srs` },
+          { tag: "小米追踪", type: "remote", url: "https://cdn.example.com/xiaomi.srs" },
+          { tag: "Local", type: "local", path: "/x.srs" },
+        ],
+      },
+    });
+    expect(plan.map((p) => [p.tag, p.local, p.external])).toEqual([
+      ["OpenAI", "OpenAI.srs", false],
+      ["小米追踪", "小米追踪.srs", true],
+    ]);
+  });
+});
 
 describe("extractRealInput", () => {
   test("提取带引号与不带引号的 nodes/subs 列表项", () => {
@@ -51,9 +70,10 @@ test("沙箱引导拒绝无法核对的二进制输入", () => {
     mkdirSync(join(root, "scripts/sbtools-rs/src"), { recursive: true });
     mkdirSync(join(root, "config/sing-box"), { recursive: true });
     copyFileSync(join(import.meta.dir, "sandbox-loop.ts"), join(root, "scripts/sandbox-loop.ts"));
+    copyFileSync(join(import.meta.dir, "settings.ts"), join(root, "scripts/settings.ts"));
     writeFileSync(join(root, "scripts/sbtools-rs/src/main.rs"), "fn main() {}\n");
     writeFileSync(join(root, "config/sing-box/template.json"), JSON.stringify({
-      route: { rule_set: [{ tag: "fixture" }] },
+      route: { rule_set: [{ tag: "fixture", type: "remote", url: "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/fixture.srs" }] },
     }));
     git("init", "-q");
     git("add", ".");

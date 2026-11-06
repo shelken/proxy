@@ -1,5 +1,4 @@
-# platforms/ios.yaml — iOS 底模的平台部分：TUN 入站、内嵌 Tailscale 与本网解析器/部署域应答。
-# Tailscale 让单个 VPN 同时承载代理与内网访问：endpoint 只接收子网路由，DNS 不接管默认解析。
+# platforms/ios.yaml — iOS 平台层：TUN 入站、内嵌 Tailscale、本网解析器与部署域应答（原生字段）。
 
 inbounds:
   - type: tun
@@ -22,23 +21,16 @@ endpoints:
     system_interface: false
 
 dns:
-  servers_prepend:
+  servers:
     - type: tailscale
       tag: dns-ts
       endpoint: ts-ep
       accept_default_resolvers: false
       accept_search_domain: true
     - { type: local, tag: dns-lan }
-  rules_prepend:
+  rules:
     # Peer 的 DNS 查询绕过 route.rules 直接进 dnsRouter，路由层入站拒绝覆盖不到
     - { inbound: [ts-ep], action: reject }
     - { preferred_by: dns-ts, server: dns-ts, disable_optimistic_cache: true }
     - { domain_suffix: [.int.ooooo.space], query_type: [A], action: predefined, answer: ["*. IN A 192.168.69.46"] }
     - { domain_suffix: [int.ooooo.space], action: predefined }
-
-route:
-  # 入站拒绝必须在 sniff 与私网直连之前：晚于私网直连就会读到本机服务
-  rules_head:
-    - { inbound: [ts-ep], action: reject }
-  rules_hijack:
-    - { preferred_by: ts-ep, action: route, outbound: ts-ep }

@@ -244,6 +244,57 @@ sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo 
 }
 
 /**
+ * D5 外部 .srs 完整消费：下载小米 AdGuard .srs，内核加载后按规则集命中。
+ * 默认底模不启用小米；这里单独验证外部二进制规则集不经编译也能被内核消费。
+ */
+export function driveXiaomi(outDir) {
+  const results = [];
+  const add = (id, ok, detail) => {
+    results.push({ id, ok, detail });
+    log(`${ok ? "PASS" : "FAIL"}  ${id}  ${detail}`);
+  };
+  const url = "https://cdn.jsdelivr.net/gh/razaxq/dns-blocklists-sing-box@rule-set/hagezi-tracker-xiaomi.srs";
+  const local = join(outDir, "xiaomi.srs");
+  const dl = host("curl", ["-fsSL", "--max-time", "60", url, "-o", local]);
+  if (dl.code !== 0) {
+    add("D5/download", false, `下载失败: ${url}`);
+    return results;
+  }
+  add("D5/download", statSync(local).size > 0, `${statSync(local).size}B`);
+
+  const guestPath = `${GUEST_REPO}/${relative(REPO, resolve(local))}`;
+  const cfg = {
+    log: { level: "debug" },
+    inbounds: [{ type: "mixed", tag: "in", listen: "127.0.0.1", listen_port: 18182 }],
+    outbounds: [{ type: "direct", tag: "direct" }, { type: "block", tag: "block" }],
+    route: {
+      rule_set: [{ type: "local", tag: "小米追踪", format: "binary", path: guestPath }],
+      rules: [{ action: "sniff" }, { rule_set: "小米追踪", action: "route", outbound: "block" }],
+      final: "direct",
+    },
+  };
+  const script = `
+D=${GUEST_WORKDIR}-xiaomi; rm -rf $D; mkdir -p $D
+cat > $D/config.json <<'JSON'
+${JSON.stringify(cfg, null, 2)}
+JSON
+sudo -n ${GUEST_SB} check -c $D/config.json || { echo CHECK_FAILED; exit 1; }
+echo CHECK_OK
+sudo -n ${GUEST_SB} run -D $D -c $D/config.json > $D/sb.log 2>&1 &
+for i in $(seq 1 60); do grep -q "sing-box started" $D/sb.log && break; sleep 0.2; done
+grep -q "sing-box started" $D/sb.log && echo READY || { echo NOT_READY; tail -8 $D/sb.log; }
+curl -s -m 6 --proxy http://127.0.0.1:18182 https://api.xmpush.xiaomi.com/ -o /dev/null -w "HIT_HTTP=%{http_code}\\n"; echo HIT_EXIT=$?
+grep -oE "match\\[[0-9]+\\] rule_set=[^ ]+" $D/sb.log | head -4
+sudo -n pkill -f "rule-verif[y]-xiaomi/config.json" 2>/dev/null && echo KILLED || echo NO_PROC
+`;
+  const r = guest(script);
+  writeFileSync(join(outDir, "xiaomi-kernel.log"), r.out + r.err);
+  add("D5/check", /CHECK_OK/.test(r.out), "小米 .srs 被内核 check 接受");
+  add("D5/hit", /match\[\d+\] rule_set=小米追踪/.test(r.out), "api.xmpush.xiaomi.com 命中小米规则集");
+  return results;
+}
+
+/**
  * D4 DNS 伴生产物：internal 先发射域名版 JSON 再编译；geosite 直接复用主产物字节；
  * geoip 不产伴生；域名版只含 domain 类字段（Lan 作对照，主产物确含 ip_cidr）。
  */
@@ -298,7 +349,7 @@ export function driveDns(outDir) {
 }
 
 export function drive(outDir) {
-  const results = [...driveArtifacts(outDir), ...driveDns(outDir), ...driveKernel(outDir)];
+  const results = [...driveArtifacts(outDir), ...driveDns(outDir), ...driveKernel(outDir), ...driveXiaomi(outDir)];
   writeFileSync(join(outDir, "results.json"), JSON.stringify({ results }, null, 2));
   const failed = results.filter((r) => !r.ok);
   log(`[drive] ${results.length - failed.length}/${results.length} 通过`);

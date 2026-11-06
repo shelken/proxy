@@ -1,23 +1,14 @@
 #!/usr/bin/env bun
-// 三份底模的装配：settings.yaml（用户规则与分组）+ base.yaml（稳定机制）+ platforms/（平台差异）。
-// 输出交给官方 sing-box merge 归一化，字段顺序由内核决定，避免手写序列化漂移。
+// 三份底模装配：settings.yaml（用户规则与分组）+ base.yaml（原生共享字段）+ platforms/（平台原生层）。
 //
-// base.yaml 里引用设置清单的关联（DNS 解析归属、QUIC 豁免）按当前去向解析：
-// 条目被删或去向改变时自动撤销，不留未声明引用，也不产生空匹配。
+// 输入按 00-platform / 01-base / 02-policy 三个原生文档交给官方 sing-box merge：
+// 数组按文件序拼接，标量取更早文件（已由 build-config.test.ts 的 merge 契约测试验证）。
+// 与设置相关的路由/DNS 规则在 makePolicy 的一个固定顺序里生成，不做字段白名单转抄。
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  artifactName,
-  loadBase,
-  loadSettings,
-  repoUrl,
-  singBoxCommand,
-  type Base,
-  type Rule,
-  type Settings,
-} from "./settings.ts";
+import { artifactName, loadBase, loadSettings, RULES_URL, singBoxCommand, type Base, type Rule, type Settings } from "./settings.ts";
 
 const CONFIG = join(import.meta.dir, "../config/sing-box");
 const OUTPUTS: Record<string, string> = {
@@ -26,16 +17,15 @@ const OUTPUTS: Record<string, string> = {
   router: "template-router.json",
 };
 
-export interface Platform {
+export type Role = keyof typeof OUTPUTS;
+export type Platform = {
   inbounds: unknown[];
   endpoints?: unknown[];
+  dns?: Record<string, unknown>;
   experimental?: Record<string, unknown>;
-  dns?: { servers_prepend?: unknown[]; rules_prepend?: unknown[] };
-  route?: { rules_head?: unknown[]; rules_hijack?: unknown[] };
-}
+};
 
-type Entry = Record<string, any> & { link?: Array<{ name: string; to?: string }> };
-
+const rulesUrl = (artifact: string) => `${RULES_URL}/${artifact}.srs`;
 const ruleSetBlock = (tag: string, url: string) => ({
   type: "remote",
   tag,
@@ -44,107 +34,117 @@ const ruleSetBlock = (tag: string, url: string) => ({
   update_interval: "1d",
 });
 
-const combine = (names: string[], to: string) =>
-  names.length === 0
-    ? null
-    : to === "reject"
-      ? { rule_set: names, action: "reject" }
-      : { rule_set: names, action: "route", outbound: to };
+/** 沿 settings 分组与 base selector.default 解析最终默认去向；成环在配置期报错。 */
+function effectiveTo(rule: Rule, settings: Settings, base: Base): string {
+  const seen = new Set<string>();
+  let to = rule.to;
+  for (;;) {
+    const next = settings.groups[to]?.default ?? base.outbounds.find((o) => o.tag === to)?.default;
+    if (next === undefined) return to;
+    if (seen.has(to)) throw new Error(`settings.yaml: 去向默认值成环: ${[...seen, to].join(" -> ")}`);
+    seen.add(to);
+    to = next;
+  }
+}
 
-/** 规则的有效去向：分组取其默认节点。 */
-const effectiveTo = (rule: Rule, settings: Settings) =>
-  settings.groups[rule.to]?.default ?? rule.to;
-
-/** base 链接解析：只保留当前仍声明且去向匹配的清单；空结果表示整条规则作废。 */
-function resolveLink(entry: Entry, settings: Settings, dns: boolean) {
-  const names = entry.link!
-    .filter((l) => {
-      const rule = settings.byName.get(l.name);
-      if (!rule || (l.to && rule.to !== l.to)) return false;
-      return !dns || rule.companion;
+/** 只保留当前仍声明且去向匹配的清单；dns 还要求该清单能产出 -dns 伴生。 */
+function linkedNames(links: Array<{ name: string; to: string }>, settings: Settings, dns = false): string[] {
+  return links
+    .filter(({ name, to }) => {
+      const rule = settings.byName.get(name);
+      return rule !== undefined && rule.to === to && (!dns || rule.companion);
     })
     .map((l) => l.name);
-  if (names.length === 0) return null;
-  const { link, ...rest } = entry;
-  return { ...rest, rule_set: names.map((n) => (dns ? `${n}-dns` : n)) };
 }
 
-/** 固定解析排除清单：base 名单按当前去向过滤，再补上其余默认直连的清单。 */
-function resolveExclude(base: Base, settings: Settings): string[] {
-  const direct = new Set(settings.rules.filter((r) => effectiveTo(r, settings) === "direct").map((r) => r.name));
-  const names = base.resolve_exclude.filter((n) => direct.has(n));
-  for (const rule of settings.rules) {
-    if (direct.has(rule.name) && !names.includes(rule.name)) names.push(rule.name);
-  }
-  return names;
-}
+// 与设置相关的 DNS 规则：固定顺序，link 段按当前设置解析，其余原样保留。
+const DNS_POLICY: Array<Record<string, any> & { link?: { name: string; to: string } }> = [
+  { link: { name: "MyReject", to: "reject" }, action: "reject" },
+  { link: { name: "Lan", to: "direct" }, server: "dns-lan", disable_optimistic_cache: true },
+  { domain_suffix: ["local", "lan", "home.arpa"], server: "dns-lan", disable_optimistic_cache: true },
+  { link: { name: "MyDirect", to: "direct" }, server: "dns-lan", disable_optimistic_cache: true },
+  { clash_mode: "direct", server: "dns-lan" },
+  { query_type: ["PTR"], server: "dns-lan" },
+  { link: { name: "MyProxy", to: "proxy" }, query_type: ["A", "AAAA"], server: "dns-fakeip" },
+  { link: { name: "ChinaMax", to: "direct" }, server: "dns-direct-cn" },
+  { query_type: ["A", "AAAA"], server: "dns-fakeip" },
+];
 
-/** rest 段：尊重 settings 顺序，相邻同去向合并成一条。 */
-function restRules(rules: Rule[]) {
-  const groups: Array<{ to: string; names: string[] }> = [];
-  for (const rule of rules) {
-    if (rule.to === "reject" || rule.to === "download") continue;
-    const last = groups[groups.length - 1];
-    if (last?.to === rule.to) last.names.push(rule.name);
-    else groups.push({ to: rule.to, names: [rule.name] });
-  }
-  return groups.map((g) => combine(g.names, g.to)!);
-}
-
-function routeRules(base: Base, platform: Platform, settings: Settings) {
+function policyDns(settings: Settings) {
   const rules: Array<Record<string, any>> = [];
-  const reject = combine(settings.rules.filter((r) => r.to === "reject").map((r) => r.name), "reject");
-  const download = combine(settings.rules.filter((r) => r.to === "download").map((r) => r.name), "download");
-  const exclude = resolveExclude(base, settings);
+  const companions: string[] = [];
+  for (const entry of DNS_POLICY) {
+    const { link, ...rule } = entry;
+    if (!link) {
+      rules.push(rule);
+      continue;
+    }
+    if (!linkedNames([link], settings, true).length) continue;
+    companions.push(link.name);
+    rules.push({ ...rule, rule_set: [`${link.name}-dns`] });
+  }
+  return { rules, companions };
+}
 
-  for (const entry of base.route.rules as Entry[]) {
-    if (entry.platform === "head") rules.push(...(platform.route?.rules_head ?? []));
-    else if (entry.platform === "hijack") rules.push(...(platform.route?.rules_hijack ?? []));
-    else if (entry.slot === "reject") { if (reject) rules.push(reject); }
-    else if (entry.slot === "download") { if (download) rules.push(download); }
-    else if (entry.slot === "resolve") {
-      rules.push(
-        exclude.length > 0
-          ? { rule_set: exclude, invert: true, action: "resolve", server: "dns-proxy", strategy: "ipv4_only" }
-          : { action: "resolve", server: "dns-proxy", strategy: "ipv4_only" },
-      );
-    } else if (entry.slot === "rest") rules.push(...restRules(settings.rules));
-    else if (entry.link) {
-      const resolved = resolveLink(entry, settings, false);
-      if (resolved) rules.push(resolved);
-    } else rules.push(entry);
+/** QUIC 守卫：代理清单先拒 UDP 443/80，国内直连清单放行，其余兜底拒绝。 */
+function quicRules(settings: Settings): Array<Record<string, any>> {
+  const rules: Array<Record<string, any>> = [];
+  const proxy = linkedNames([{ name: "MyProxy", to: "proxy" }], settings);
+  if (proxy.length) rules.push({ network: "udp", port: [443, 80], rule_set: proxy, action: "reject", no_drop: true });
+  const direct = linkedNames(
+    [
+      { name: "ChinaMax", to: "direct" },
+      { name: "Lan", to: "direct" },
+      { name: "cftunnel", to: "direct" },
+      { name: "geoip-cn", to: "direct" },
+    ],
+    settings,
+  );
+  if (direct.length) {
+    rules.push({ network: "udp", port: [443, 80], rule_set: direct, action: "route", outbound: "direct" });
+  }
+  rules.push({ network: "udp", port: [443, 80], action: "reject", no_drop: true });
+  return rules;
+}
+
+function routeRules(settings: Settings, base: Base, role: Role): Array<Record<string, any>> {
+  const rules: Array<Record<string, any>> = [];
+  // 平台入口守卫：router 的 dns-in 与 iOS 的 ts-ep 都必须在 sniff 之前
+  if (role === "router") rules.push({ inbound: ["dns-in"], action: "hijack-dns" });
+  if (role === "ios") rules.push({ inbound: ["ts-ep"], action: "reject" });
+  rules.push({ action: "sniff", sniffer: ["http", "tls", "quic", "dns", "bittorrent"] });
+  rules.push({ protocol: "dns", action: "hijack-dns" });
+  rules.push({ port: 53, action: "hijack-dns" });
+  // iOS Tailscale 路由排在 DNS 劫持之后、私网直连之前
+  if (role === "ios") rules.push({ preferred_by: "ts-ep", action: "route", outbound: "ts-ep" });
+  rules.push({ ip_is_private: true, action: "route", outbound: "direct" });
+  for (const rule of settings.rules.filter((r) => r.to === "reject")) {
+    rules.push({ rule_set: [rule.name], action: "reject" });
+  }
+  rules.push(...quicRules(settings));
+  rules.push({ clash_mode: "direct", action: "route", outbound: "direct" });
+  rules.push({ clash_mode: "global", action: "route", outbound: "proxy" });
+  rules.push({ protocol: "bittorrent", action: "route", outbound: "torrent" });
+  for (const rule of settings.rules.filter((r) => r.to === "download")) {
+    rules.push({ rule_set: [rule.name], action: "route", outbound: "download" });
+  }
+  const direct = settings.rules.filter((r) => effectiveTo(r, settings, base) === "direct").map((r) => r.name);
+  rules.push(
+    direct.length > 0
+      ? { rule_set: direct, invert: true, action: "resolve", server: "dns-proxy", strategy: "ipv4_only" }
+      : { action: "resolve", server: "dns-proxy", strategy: "ipv4_only" },
+  );
+  for (const rule of settings.rules) {
+    if (rule.to !== "reject" && rule.to !== "download") {
+      rules.push({ rule_set: [rule.name], action: "route", outbound: rule.to });
+    }
   }
   return rules;
 }
 
-/** DNS 段：平台前置规则 + base 规则；链接解析出引用的 `<name>-dns` 伴生。 */
-function dnsBlock(base: Base, platform: Platform, settings: Settings) {
-  const rules: Array<Record<string, any>> = [...(platform.dns?.rules_prepend ?? [])];
-  const companions = new Set<string>();
-  for (const entry of base.dns.rules as Entry[]) {
-    if (!entry.link) {
-      rules.push(entry);
-      continue;
-    }
-    const resolved = resolveLink(entry, settings, true);
-    if (!resolved) continue;
-    for (const tag of resolved.rule_set as string[]) companions.add(tag.replace(/-dns$/, ""));
-    rules.push(resolved);
-  }
-  return {
-    block: {
-      servers: [...(platform.dns?.servers_prepend ?? []), ...base.dns.servers],
-      rules,
-      final: base.dns.final,
-      strategy: base.dns.strategy,
-      optimistic: base.dns.optimistic,
-    },
-    companions,
-  };
-}
-
-export function buildConfig(base: Base, platform: Platform, settings: Settings) {
-  const dns = dnsBlock(base, platform, settings);
+/** 设置驱动的策略层：route.rules / dns.rules / 设置分组 selector / rule_set 声明。 */
+export function makePolicy(settings: Settings, base: Base, role: Role) {
+  const dns = policyDns(settings);
   const groups = Object.entries(settings.groups).map(([tag, g]) => ({
     type: "selector",
     tag,
@@ -152,74 +152,36 @@ export function buildConfig(base: Base, platform: Platform, settings: Settings) 
     default: g.default,
     interrupt_exist_connections: true,
   }));
-
-  const dnsNames = [
-    ...base.dns_companions.filter((n) => dns.companions.has(n)),
-    ...[...dns.companions].filter((n) => !base.dns_companions.includes(n)),
-  ];
-  const dnsDecls = dnsNames.map((n) => {
-    const artifact = settings.byName.get(n)?.artifact ?? artifactName(n);
-    return ruleSetBlock(`${n}-dns`, repoUrl(base, `${artifact}-dns`));
+  const companions = dns.companions.map((name) => {
+    const artifact = settings.byName.get(name)!.artifact;
+    return ruleSetBlock(`${name}-dns`, rulesUrl(`${artifact}-dns`));
   });
-  const ruleDecls = settings.rules.map((r) =>
-    ruleSetBlock(r.name, r.kind === "url" ? r.source : repoUrl(base, r.artifact)),
+  const mains = settings.rules.map((rule) =>
+    ruleSetBlock(rule.name, rule.kind === "url" ? rule.source : rulesUrl(rule.artifact)),
   );
-
-  const config: Record<string, any> = {
-    log: base.log,
-    dns: dns.block,
-    http_clients: base.http_clients,
-    inbounds: platform.inbounds,
-    outbounds: [...base.outbounds, ...groups],
-    route: {
-      rules: routeRules(base, platform, settings),
-      rule_set: [...dnsDecls, ...ruleDecls],
-      final: base.route.final,
-      auto_detect_interface: base.route.auto_detect_interface,
-      default_domain_resolver: base.route.default_domain_resolver,
-      default_http_client: base.route.default_http_client,
-    },
-    experimental: platform.experimental ?? base.experimental,
+  return {
+    dns: { rules: dns.rules },
+    outbounds: groups,
+    route: { rules: routeRules(settings, base, role), rule_set: [...companions, ...mains] },
   };
-  if (platform.endpoints) config.endpoints = platform.endpoints;
-  return config;
 }
 
-const readPlatform = async (role: string) =>
-  Bun.YAML.parse(await Bun.file(join(CONFIG, "platforms", `${role}.yaml`)).text()) as Platform;
-
-if (import.meta.main) {
-  const base = loadBase();
-  const settings = loadSettings(base);
-  const check = Bun.argv.includes("--check");
-  let failed = false;
-
-  for (const [role, output] of Object.entries(OUTPUTS)) {
-    const platform = await readPlatform(role);
-    const work = await mkdtemp(join(tmpdir(), "sing-box-build-"));
-    const target = check ? join(work, "template.json") : join(CONFIG, output);
-    try {
-      const input = join(work, "config.json");
-      await writeFile(input, JSON.stringify(buildConfig(base, platform, settings), null, 2) + "\n");
-      const proc = Bun.spawnSync([...singBoxCommand(), "merge", target, "-c", input], {
-        stdio: ["ignore", "inherit", "inherit"],
-      });
-      if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败 (${role}): exit ${proc.exitCode}`);
-      if (!check) {
-        console.log(`${output}: 已生成`);
-        continue;
-      }
-      const diff = firstDiff(await Bun.file(target).bytes(), await Bun.file(join(CONFIG, output)).bytes());
-      if (diff) {
-        failed = true;
-        console.error(`${output}: 与重算结果不一致 — ${diff}`);
-      } else console.log(`${output}: OK`);
-    } finally {
-      await rm(work, { recursive: true, force: true });
-    }
+/** 把平台层、base 层、策略层交给官方 merge；target 为输出文件。 */
+export async function mergeTo(target: string, base: Base, platform: Platform, settings: Settings, role: Role): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "sing-box-input-"));
+  try {
+    await writeFile(join(dir, "00-platform.json"), JSON.stringify(platform, null, 2) + "\n");
+    await writeFile(join(dir, "01-base.json"), JSON.stringify(base, null, 2) + "\n");
+    await writeFile(join(dir, "02-policy.json"), JSON.stringify(makePolicy(settings, base, role), null, 2) + "\n");
+    const proc = Bun.spawnSync([...singBoxCommand(), "merge", target, "-C", dir], { stdio: ["ignore", "inherit", "inherit"] });
+    if (proc.exitCode !== 0) throw new Error(`sing-box merge 失败 (${role}): exit ${proc.exitCode}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
-  if (failed) process.exit(1);
 }
+
+const readPlatform = async (role: Role) =>
+  Bun.YAML.parse(await Bun.file(join(CONFIG, "platforms", `${role}.yaml`)).text()) as Platform;
 
 function firstDiff(a: Uint8Array, b: Uint8Array): string | null {
   if (a.length === b.length && a.every((v, i) => v === b[i])) return null;
@@ -228,4 +190,32 @@ function firstDiff(a: Uint8Array, b: Uint8Array): string | null {
   const ctx = (buf: Uint8Array) =>
     JSON.stringify(new TextDecoder().decode(buf.subarray(Math.max(0, i - 30), i + 30)));
   return `字节 ${i}: 磁盘 ${ctx(b)} != 重算 ${ctx(a)}`;
+}
+
+if (import.meta.main) {
+  const base = loadBase();
+  const settings = loadSettings(base);
+  const check = Bun.argv.includes("--check");
+  let failed = false;
+
+  for (const role of Object.keys(OUTPUTS) as Role[]) {
+    const platform = await readPlatform(role);
+    const work = await mkdtemp(join(tmpdir(), "sing-box-build-"));
+    const target = check ? join(work, "template.json") : join(CONFIG, OUTPUTS[role]);
+    try {
+      await mergeTo(target, base, platform, settings, role);
+      if (!check) {
+        console.log(`${OUTPUTS[role]}: 已生成`);
+        continue;
+      }
+      const diff = firstDiff(await Bun.file(target).bytes(), await Bun.file(join(CONFIG, OUTPUTS[role])).bytes());
+      if (diff) {
+        failed = true;
+        console.error(`${OUTPUTS[role]}: 与重算结果不一致 — ${diff}`);
+      } else console.log(`${OUTPUTS[role]}: OK`);
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  }
+  if (failed) process.exit(1);
 }

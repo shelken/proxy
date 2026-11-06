@@ -1,22 +1,9 @@
-# base.yaml — 三份底模共享的稳定部分：DNS、协议守卫、基础路由与固定优先级。
-#
-# 用户日常只改 settings.yaml；本文件描述内部机制，除非明确知道后果否则不要动。
-# `slot:` / `platform:` 标记由 scripts/build-config.ts 展开，展开位置就是首匹配顺序：
-#   reject 段在一切分流之前，download 段在 BT 之后、resolve 之前，rest 段尊重 settings 顺序。
-# 本文件里的 link 引用按 settings 当前去向解析：条目被删或去向改变时自动撤销，不会引用未声明的 tag。
-
-# 本仓库发布规则产物的地址：settings 里以本地路径 / geosite: / geoip: 声明的规则从这里取 .srs，
-# {artifact} 是归一化后的产物名（scripts/settings.ts 的 artifactName）
-rule_set_url: https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/{artifact}.srs
+# base.yaml — 三份底模共享的原生字段：DNS 服务器与全局、固定出站、路由全局、面板与 HTTP 客户端。
+# 用户日常只改 settings.yaml。这里只有 sing-box 原生字段，没有自定义指令；
+# 与设置相关的路由/DNS 规则由 scripts/build-config.ts 的 makePolicy 生成。
 
 log:
   level: info
-
-# DNS 伴生声明顺序（`<name>-dns`）；实际声明哪几个由 DNS 规则里的 link 决定
-dns_companions: [Lan, MyDirect, MyReject, MyProxy, ChinaMax]
-
-# v4 解析排除清单的固定部分；生成时追加 settings 里默认直连的规则与分组
-resolve_exclude: [ChinaMax, Lan, MyDirect, cftunnel, geoip-cn]
 
 dns:
   servers:
@@ -27,16 +14,6 @@ dns:
       detour: dns-auto
       tls: { enabled: true, server_name: cloudflare-dns.com }
     - { type: fakeip, tag: dns-fakeip, inet4_range: 198.18.0.0/15 }
-  rules:
-    - { link: [{ name: MyReject, to: reject }], action: reject }
-    - { link: [{ name: Lan, to: direct }], server: dns-lan, disable_optimistic_cache: true }
-    - { domain_suffix: [local, lan, home.arpa], server: dns-lan, disable_optimistic_cache: true }
-    - { link: [{ name: MyDirect, to: direct }], server: dns-lan, disable_optimistic_cache: true }
-    - { clash_mode: direct, server: dns-lan }
-    - { query_type: [PTR], server: dns-lan }
-    - { link: [{ name: MyProxy, to: proxy }], query_type: [A, AAAA], server: dns-fakeip }
-    - { link: [{ name: ChinaMax, to: direct }], server: dns-direct-cn }
-    - { query_type: [A, AAAA], server: dns-fakeip }
   strategy: prefer_ipv4
   optimistic: true
   final: dns-proxy
@@ -131,20 +108,3 @@ route:
   final: proxy
   default_domain_resolver: { server: dns-lan }
   default_http_client: rule-set-dl
-  rules:
-    - { platform: head }
-    - { action: sniff, sniffer: [http, tls, quic, dns, bittorrent] }
-    - { protocol: dns, action: hijack-dns }
-    - { port: 53, action: hijack-dns }
-    - { platform: hijack }
-    - { ip_is_private: true, action: route, outbound: direct }
-    - { slot: reject }
-    - { network: udp, port: [443, 80], link: [{ name: MyProxy, to: proxy }], action: reject, no_drop: true }
-    - { network: udp, port: [443, 80], link: [{ name: ChinaMax, to: direct }, { name: Lan, to: direct }, { name: cftunnel, to: direct }, { name: geoip-cn, to: direct }], action: route, outbound: direct }
-    - { network: udp, port: [443, 80], action: reject, no_drop: true }
-    - { clash_mode: direct, action: route, outbound: direct }
-    - { clash_mode: global, action: route, outbound: proxy }
-    - { protocol: bittorrent, action: route, outbound: torrent }
-    - { slot: download }
-    - { slot: resolve }
-    - { slot: rest }
