@@ -238,6 +238,22 @@ function urlBasename(url: string): string {
   return basename(decodeURIComponent(new URL(url).pathname));
 }
 
+const RELEASE = new URL(RULES_URL);
+
+/**
+ * 是否本仓库发布的直接产物：同 origin 且 path 的直接父目录就是发布目录。
+ * 相邻目录（singbox-backup/）与嵌套子目录（singbox/nested/）都算外部来源，
+ * 必须按用户 URL 原样下载，不能静默复用本地产物。
+ */
+export function isRepoArtifact(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.origin === RELEASE.origin && dirname(parsed.pathname) === RELEASE.pathname;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 底模声明的远程规则集 → VM 内本地文件。
  *
@@ -254,7 +270,7 @@ export function planRuleSets(
     .filter((rs) => rs?.type === "remote" && typeof rs.url === "string")
     .map((rs) => {
       const url = rs.url as string;
-      const external = !url.startsWith(RULES_URL);
+      const external = !isRepoArtifact(url);
       return {
         tag: String(rs.tag),
         url,

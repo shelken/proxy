@@ -212,25 +212,33 @@ describe("规则集装载", () => {
     // 装载失败会让内核 FATAL 退出，waitFor 通过即验证了「全部读入」
     await sb!.waitFor("sing-box started");
 
-    const template = JSON.parse(
-      readFileSync(resolve(import.meta.dir, "../template.json"), "utf-8"),
-    ) as { route: { rule_set: { tag: string }[] } };
-
-    // 逐个确认文件存在：区分「内核没读」与「产物根本没生成」。
-    // 不比对数量：数量由底模决定，写死只在加规则集时制造假失败。
-    const missing = template.route.rule_set
-      .map((rs) => rs.tag)
-      .filter((tag) => !existsSync(`${WORK}/rules/${tag}.srs`));
+    // 读真实内核配置的 route.rule_set[].path：不再按 tag 猜 /rules/<tag>.srs
+    // （A B 落 A_B、外部来源走 external/<序号>）。
+    const config = JSON.parse(readFileSync(CONFIG, "utf8")) as {
+      route: { rule_set: Array<{ tag: string; type?: string; path?: string }> };
+    };
+    expect(config.route.rule_set.filter((rs) => rs.type === "remote")).toEqual([]);
+    const missing = config.route.rule_set
+      .filter((rs) => rs.type === "local" && rs.path)
+      .filter((rs) => !existsSync(rs.path!))
+      .map((rs) => rs.tag);
     expect(missing).toEqual([]);
   });
 
   test("产物损坏能被检出", () => {
-    // 截断一个产物，内核必须拒绝而不是静默按空规则集处理
+    const config = JSON.parse(readFileSync(CONFIG, "utf8")) as {
+      route: { rule_set: Array<{ tag: string; type?: string; path?: string }> };
+    };
+    const target =
+      config.route.rule_set.find((rs) => rs.type === "local" && rs.tag === "OpenAI") ??
+      config.route.rule_set.find((rs) => rs.type === "local" && rs.path);
+    expect(target?.path).toBeTruthy();
+    // 截断真实配置里引用的产物，内核必须拒绝而不是静默按空规则集处理
     const r = sh(`
-      cp ${WORK}/rules/OpenAI.srs /tmp/openai.bak
-      head -c 16 /tmp/openai.bak > ${WORK}/rules/OpenAI.srs
+      cp ${target!.path} /tmp/rule.bak
+      head -c 16 /tmp/rule.bak > ${target!.path}
       ${SB} check -c ${CONFIG} >/dev/null 2>&1; echo "exit=$?"
-      cp /tmp/openai.bak ${WORK}/rules/OpenAI.srs
+      cp /tmp/rule.bak ${target!.path}
     `);
     expect(r.out).toContain("exit=1");
   });

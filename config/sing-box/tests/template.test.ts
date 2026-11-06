@@ -141,9 +141,16 @@ describe("template.json structural verification", () => {
     expect(ptrRule.server).toBe("dns-lan");
   });
 
-  test("个人域规则集走系统 DNS 且排在 FakeIP 之前", () => {
+  test("个人域规则集走系统 DNS 且排在 FakeIP 之前（存在且为直连时）", () => {
     const rules = template.dns?.rules ?? [];
+    const source = settings.rules.find((r) => r.name === "MyDirect");
+    const active = source && source.to === "direct" && !/^https?:\/\//.test(source.source);
     const zoneRule = rules.find((r) => r.rule_set?.includes("MyDirect-dns"));
+    if (!active) {
+      // 删除/改向/外部来源（无伴生）时不得残留 DNS 引用
+      expect(zoneRule).toBeUndefined();
+      return;
+    }
     expect(zoneRule).toBeDefined();
     const zoneIndex = rules.indexOf(zoneRule);
     // 必须是 dns-lan：局域网内由路由器应答真实内网 IP，
@@ -230,23 +237,20 @@ describe("template.json structural verification", () => {
 
 
 
-  test("每个非 direct 的路由目标都有对应 selector 策略组", () => {
-    // 契约：route.rules 里 route 到的出站，必须是在 outbounds 里声明的 selector。
-    // 故意不手抄组名清单：加一个策略组就要改测试，且漏改时断言的子集照旧通过，
-    // 新组实际没有任何覆盖（anthropic 加进来时就踩过）。
-    const selectors = new Set(
-      (template.outbounds ?? [])
-        .filter((o) => o.type === "selector")
-        .map((s) => s.tag),
-    );
+  test("每个路由目标的出站都在 outbounds / endpoints 里声明", () => {
+    // 契约：route.rules 里 route 到的出站必须是已声明的出站（selector/urltest/endpoint）。
+    // 不手抄组名清单：加一个出站就要改测试，且漏改时子集断言照旧通过（anthropic 踩过）。
+    const declared = new Set<string>([
+      ...(template.outbounds ?? []).map((o: { tag: string }) => o.tag),
+      ...(template.endpoints ?? []).map((e: { tag: string }) => e.tag),
+    ]);
     const targets = new Set(
       (template.route?.rules ?? [])
-        .map((r) => r.outbound)
-        .filter((o) => typeof o === "string" && o !== "direct"),
+        .map((r: { outbound?: unknown }) => r.outbound)
+        .filter((o): o is string => typeof o === "string"),
     );
     expect(targets.size).toBeGreaterThan(0);
-    const missing = [...targets].filter((tag) => !selectors.has(tag));
-    expect(missing).toEqual([]);
+    expect([...targets].filter((tag) => !declared.has(tag))).toEqual([]);
   });
 
   test("enables interrupt_exist_connections on all selector and urltest groups", () => {
@@ -337,8 +341,8 @@ describe("template.json structural verification", () => {
     const fakeipIndex = dnsRules.findIndex((r: { server?: string }) => r.server === "dns-fakeip");
     expect(fakeipIndex).toBeGreaterThan(-1);
     for (const rule of rejects) expect(dnsRules.indexOf(rule)).toBeLessThan(fakeipIndex);
-    // 历史行为守卫：默认设置里 MyReject 是拒绝清单，DNS 层必须拦住它
-    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject")) {
+    // 历史行为守卫：默认设置里 MyReject 是本地拒绝清单（有伴生），DNS 层必须拦住它
+    if (settings.rules.some((r) => r.name === "MyReject" && r.to === "reject" && !/^https?:\/\//.test(r.source))) {
       expect(rejects.some((r: { rule_set?: string | string[] }) => asArray(r.rule_set).includes("MyReject-dns"))).toBe(true);
     }
   });

@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { extractRealInput, planRuleSets, localizeRuleSets } from "./sandbox-loop.ts";
+import { extractRealInput, planRuleSets, localizeRuleSets, isRepoArtifact } from "./sandbox-loop.ts";
 import { RULES_URL } from "./settings.ts";
 
 describe("planRuleSets：tag → VM 本地文件", () => {
@@ -25,6 +25,23 @@ describe("planRuleSets：tag → VM 本地文件", () => {
       ["Alias", "rules/Other.srs", false],
       ["External", "external/0.srs", true],
     ]);
+  });
+
+  test("目录边界：相邻与嵌套目录不算本仓库直接产物", () => {
+    expect(isRepoArtifact(`${RULES_URL}/OpenAI.srs`)).toBe(true);
+    expect(isRepoArtifact(`${RULES_URL}-backup/OpenAI.srs`)).toBe(false);
+    expect(isRepoArtifact(`${RULES_URL}/nested/OpenAI.srs`)).toBe(false);
+    expect(isRepoArtifact("https://example.com/OpenAI.srs")).toBe(false);
+    const plan = planRuleSets({
+      route: {
+        rule_set: [
+          { tag: "Adjacent", type: "remote", url: `${RULES_URL}-backup/OpenAI.srs` },
+          { tag: "Nested", type: "remote", url: `${RULES_URL}/nested/OpenAI.srs` },
+        ],
+      },
+    });
+    expect(plan.every((p) => p.external)).toBe(true);
+    expect(plan.map((p) => p.path)).toEqual(["external/0.srs", "external/1.srs"]);
   });
 
   test("同 basename 的不同来源不共享路径（外部/外部、仓库/外部）", () => {

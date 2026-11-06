@@ -161,6 +161,7 @@ describe("变异验证：断言能拦住坏情况", () => {
     const directIdx = r.findIndex(
       (x: any) => x.outbound === "direct" && asArray(x.rule_set).includes("MyDirect"),
     );
+    if (directIdx < 0) return; // 当前设置无此规则，无可移动的坏例
     const [moved] = r.splice(directIdx, 1);
     r.push(moved);
     expect(() => assertMyDirectAndProxyBeforeServices(r, ios.outbounds)).toThrow();
@@ -172,6 +173,7 @@ describe("变异验证：断言能拦住坏情况", () => {
     const proxyIdx = r.findIndex(
       (x: any) => x.outbound === "proxy" && asArray(x.rule_set).includes("MyProxy"),
     );
+    if (proxyIdx < 0) return; // 当前设置无此规则
     const [moved] = r.splice(proxyIdx, 1);
     r.push(moved);
     expect(() => assertMyDirectAndProxyBeforeServices(r, ios.outbounds)).toThrow();
@@ -183,6 +185,7 @@ describe("变异验证：断言能拦住坏情况", () => {
     const idx = r.findIndex(
       (x: any) => x.action === "reject" && asArray(x.rule_set).includes("MyProxy"),
     );
+    if (idx < 0) return; // 当前设置无此规则
     const [moved] = r.splice(idx, 1);
     const exemptIdx = r.findIndex((x: any) => x.network === "udp" && x.outbound === "direct");
     r.splice(exemptIdx + 1, 0, moved);
@@ -193,8 +196,9 @@ describe("变异验证：断言能拦住坏情况", () => {
     const bad = clone(ios);
     const d = bad.dns.rules;
     const idx = d.findIndex((x: any) => asArray(x.rule_set).includes("MyProxy-dns"));
-    const [moved] = d.splice(idx, 1);
     const chinaIdx = d.findIndex((x: any) => asArray(x.rule_set).includes("ChinaMax-dns"));
+    if (idx < 0 || chinaIdx < 0) return; // 伴生不在当前设置里，无可移动的坏例
+    const [moved] = d.splice(idx, 1);
     d.splice(chinaIdx + 1, 0, moved);
     expect(() => assertMyProxyDnsBeforeChinaMax(d)).toThrow();
   });

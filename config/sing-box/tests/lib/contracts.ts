@@ -36,16 +36,13 @@ export const assertMyDirectAndProxyBeforeServices = (
   const myProxy = rules.findIndex(
     (r) => r.outbound === "proxy" && asArray(r.rule_set).includes("MyProxy"),
   );
-  // 清单不在当前设置里（被删/改向）时无此约束
-  if (myDirect < 0 || myProxy < 0) return;
   const firstService = rules.findIndex(
     (r) => r.outbound !== undefined && serviceOutbounds.has(r.outbound),
   );
-  expect(myDirect).toBeGreaterThanOrEqual(0);
-  expect(myProxy).toBeGreaterThanOrEqual(0);
   expect(firstService).toBeGreaterThan(-1);
-  expect(myDirect).toBeLessThan(firstService);
-  expect(myProxy).toBeLessThan(firstService);
+  // 各自独立判定：删掉一个自有清单不应放过另一个的顺序约束
+  if (myDirect >= 0) expect(myDirect).toBeLessThan(firstService);
+  if (myProxy >= 0) expect(myProxy).toBeLessThan(firstService);
 };
 
 // ADR-0011：MyProxy 与 ChinaMax 重叠的域名（如 minimax.io）不能被国内 QUIC 豁免直连，
