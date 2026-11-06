@@ -18,6 +18,7 @@ on:
       - "scripts/rules-compile.test.ts"
       - "scripts/build-config.ts"
       - "scripts/build-config.test.ts"
+      - "scripts/settings.ts"
       - ".github/workflows/build-rule-sets.yml"
   schedule:
     # 每天 20:23 UTC（北京 04:23）。上游清单（blackmatrix7 等）的内容会变，

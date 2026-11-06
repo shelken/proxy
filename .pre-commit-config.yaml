@@ -24,7 +24,7 @@ repos:
         name: sing-box 底模检查
         entry: just check-template
         language: system
-        files: ^(config/sing-box/|scripts/build-config\.ts$|scripts/merge-variant-fixture\.sh$)
+        files: ^(config/sing-box/|scripts/(build-config|settings)\.ts$|scripts/merge-variant-fixture\.sh$)
         pass_filenames: false
       - id: check-justfile
         name: justfile 废弃写法检查
@@ -37,5 +37,5 @@ repos:
         name: 规则生成与编译单测
         entry: just check-rules
         language: system
-        files: ^(config/rules/|config/sing-box/settings\.yaml$|scripts/(rules-compile|build-config)(\.test)?\.ts$)
+        files: ^(config/rules/|config/sing-box/settings\.yaml$|scripts/(rules-compile|build-config|settings)(\.test)?\.ts$)
         pass_filenames: false

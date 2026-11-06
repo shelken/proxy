@@ -6,14 +6,15 @@
 # 本文件引用的清单名（rule_set、DNS 伴生、resolve 排除）必须在 settings.yaml 里声明，
 # 否则构建报错，避免产物引用未声明的 tag。
 
-# 本仓库发布规则产物的地址：settings 里以本地路径 / geosite: / geoip: 声明的规则从这里取 .srs
-rule_set_url: https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/{tag}.srs
+# 本仓库发布规则产物的地址：settings 里以本地路径 / geosite: / geoip: 声明的规则从这里取 .srs，
+# {artifact} 是归一化后的产物名（scripts/settings.ts 的 artifactName）
+rule_set_url: https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/{artifact}.srs
 
 log:
   level: info
 
-# DNS 规则引用的域名版伴生规则集，声明顺序固定（先于全部业务清单声明）
-dns_rule_sets: [Lan-dns, MyDirect-dns, MyReject-dns, MyProxy-dns, ChinaMax-dns]
+# DNS 伴生声明顺序（`<name>-dns`）；实际声明哪几个由 DNS 规则里的 link 决定
+dns_companions: [Lan, MyDirect, MyReject, MyProxy, ChinaMax]
 
 # v4 解析排除清单的固定部分；生成时追加 settings 里默认直连的规则与分组
 resolve_exclude: [ChinaMax, Lan, MyDirect, cftunnel, geoip-cn]
@@ -28,14 +29,14 @@ dns:
       tls: { enabled: true, server_name: cloudflare-dns.com }
     - { type: fakeip, tag: dns-fakeip, inet4_range: 198.18.0.0/15 }
   rules:
-    - { rule_set: [MyReject-dns], action: reject }
-    - { rule_set: [Lan-dns], server: dns-lan, disable_optimistic_cache: true }
+    - { link: [{ name: MyReject, to: reject }], action: reject }
+    - { link: [{ name: Lan, to: direct }], server: dns-lan, disable_optimistic_cache: true }
     - { domain_suffix: [local, lan, home.arpa], server: dns-lan, disable_optimistic_cache: true }
-    - { rule_set: [MyDirect-dns], server: dns-lan, disable_optimistic_cache: true }
+    - { link: [{ name: MyDirect, to: direct }], server: dns-lan, disable_optimistic_cache: true }
     - { clash_mode: direct, server: dns-lan }
     - { query_type: [PTR], server: dns-lan }
-    - { rule_set: [MyProxy-dns], query_type: [A, AAAA], server: dns-fakeip }
-    - { rule_set: [ChinaMax-dns], server: dns-direct-cn }
+    - { link: [{ name: MyProxy, to: proxy }], query_type: [A, AAAA], server: dns-fakeip }
+    - { link: [{ name: ChinaMax, to: direct }], server: dns-direct-cn }
     - { query_type: [A, AAAA], server: dns-fakeip }
   strategy: prefer_ipv4
   optimistic: true
@@ -139,8 +140,8 @@ route:
     - { platform: hijack }
     - { ip_is_private: true, action: route, outbound: direct }
     - { slot: reject }
-    - { network: udp, port: [443, 80], rule_set: [MyProxy], action: reject, no_drop: true }
-    - { network: udp, port: [443, 80], rule_set: [ChinaMax, Lan, cftunnel, geoip-cn], action: route, outbound: direct }
+    - { network: udp, port: [443, 80], link: [{ name: MyProxy, to: proxy }], action: reject, no_drop: true }
+    - { network: udp, port: [443, 80], link: [{ name: ChinaMax, to: direct }, { name: Lan, to: direct }, { name: cftunnel, to: direct }, { name: geoip-cn, to: direct }], action: route, outbound: direct }
     - { network: udp, port: [443, 80], action: reject, no_drop: true }
     - { clash_mode: direct, action: route, outbound: direct }
     - { clash_mode: global, action: route, outbound: proxy }

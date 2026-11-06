@@ -12,14 +12,12 @@ import {
   emitSingbox,
   emitSingboxDns,
   externalUrls,
-  loadRules,
   orphanCustomLists,
-  outputName,
   parseYamlAst,
   type RuleAST,
-  type RuleSource,
   type SingBoxRule,
 } from "./rules-compile.ts";
+import { artifactName, type Rule } from "./settings.ts";
 
 /** 取出某个字段的全部值，跨 rule 合并。 */
 function fieldValues(rules: SingBoxRule[], field: string): unknown[] {
@@ -28,13 +26,6 @@ function fieldValues(rules: SingBoxRule[], field: string): unknown[] {
 
 function singboxRules(ast: RuleAST): SingBoxRule[] {
   return JSON.parse(emitSingbox(ast)).rules;
-}
-
-/** 把 settings 的 rules 写到临时文件，返回路径。测试只读不写仓库目录。 */
-function writeSettings(rules: string): string {
-  const path = `/tmp/rules-settings-${Math.random().toString(36).slice(2)}.yaml`;
-  Bun.write(path, `rules:\n${rules}`);
-  return path;
 }
 
 describe("外部原生引用", () => {
@@ -292,39 +283,26 @@ describe("emitPlain（Loon / Surge）", () => {
 });
 
 
-describe("settings 规则解析", () => {
-  test("输出名净化，去掉路径分隔符等非法字符", () => {
-    expect(outputName("My/Weird Tag")).toBe("My_Weird_Tag");
-    expect(outputName("***")).toBe("rule");
-  });
-
-  test("只取 rules 的 name 与 source", () => {
-    const path = writeSettings(
-      [
-        "  - { name: OpenAI, source: ../rules/custom/OpenAI.yaml, to: openai }",
-        "  - { name: Twitter, source: 'https://example.com/Twitter.srs', to: proxy }",
-      ].join("\n"),
-    );
-    expect(loadRules(path)).toEqual([
-      { tag: "OpenAI", source: "../rules/custom/OpenAI.yaml" },
-      { tag: "Twitter", source: "https://example.com/Twitter.srs" },
-    ]);
-  });
-
-  test("形状错误时直接报错", () => {
-    const path = `/tmp/rules-settings-${Math.random().toString(36).slice(2)}.yaml`;
-    Bun.write(path, "groups: {}\n");
-    expect(() => loadRules(path)).toThrow(/缺少 rules/);
-    expect(() => loadRules(writeSettings("  - { source: x, to: proxy }"))).toThrow(/缺少 name/);
-    expect(() => loadRules(writeSettings("  - { name: X, to: proxy }"))).toThrow(/缺少 source/);
+describe("产物命名与孤儿检测", () => {
+  test("产物名保留 CJK，折叠非法字符", () => {
+    expect(artifactName("小米追踪")).toBe("小米追踪");
+    expect(artifactName("My/Weird Tag")).toBe("My_Weird_Tag");
+    expect(artifactName("***")).toBe("rule");
   });
 
   test("只在 custom/ 放文件、不写进 settings 时能被识别为孤儿", () => {
     // 真实踩过的坑：把新列表丢进 custom/ 就以为 CI 会发现它。
     // settings.yaml 的 rules 是唯一入口，孤儿文件不产出任何规则，所以必须显式提醒。
-    const orphans = orphanCustomLists([
-      { tag: "Known", source: "../rules/custom/MyReject.yaml" },
-    ]);
+    const referenced = {
+      name: "Known",
+      source: "../rules/custom/MyReject.yaml",
+      to: "reject",
+      kind: "local",
+      artifact: "Known",
+      companion: true,
+      path: "config/rules/custom/MyReject.yaml",
+    } as Rule;
+    const orphans = orphanCustomLists([referenced]);
     expect(orphans).toContain("config/rules/custom/OpenAI.yaml");
     expect(orphans).not.toContain("config/rules/custom/MyReject.yaml");
   });

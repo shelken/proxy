@@ -16,7 +16,7 @@ const template = JSON.parse(await Bun.file(TEMPLATE_PATH).text());
 const CONFIG_DIR = resolve(import.meta.dir, "..");
 const base = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "base.yaml"), "utf8")) as {
   rule_set_url: string;
-  dns_rule_sets: string[];
+  dns_companions: string[];
   resolve_exclude: string[];
 };
 const settings = Bun.YAML.parse(readFileSync(join(CONFIG_DIR, "settings.yaml"), "utf8")) as {
@@ -380,7 +380,7 @@ describe("settings.yaml → template.json 生成契约", () => {
 
   test("route.rule_set = DNS 伴生 + settings 规则，顺序一致", () => {
     expect(template.route.rule_set.map((rs: { tag: string }) => rs.tag)).toEqual([
-      ...base.dns_rule_sets,
+      ...base.dns_companions.map((n) => `${n}-dns`),
       ...settings.rules.map((r) => r.name),
     ]);
   });
@@ -389,13 +389,14 @@ describe("settings.yaml → template.json 生成契约", () => {
     const byTag = new Map<string, { url: string }>(
       template.route.rule_set.map((rs: { tag: string; url: string }) => [rs.tag, rs]),
     );
-    for (const tag of base.dns_rule_sets) {
-      expect(byTag.get(tag)?.url).toBe(base.rule_set_url.replace("{tag}", tag));
+    for (const name of base.dns_companions) {
+      const tag = `${name}-dns`;
+      expect(byTag.get(tag)?.url).toBe(base.rule_set_url.replace("{artifact}", tag));
     }
     for (const rule of settings.rules) {
       const expectUrl = /^https?:\/\//.test(rule.source)
         ? rule.source
-        : base.rule_set_url.replace("{tag}", rule.name);
+        : base.rule_set_url.replace("{artifact}", rule.name);
       expect(byTag.get(rule.name)?.url).toBe(expectUrl);
     }
   });

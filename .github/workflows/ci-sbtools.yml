@@ -18,6 +18,7 @@ on:
       - "config/sing-box/tests/**"
       - "scripts/build-config.ts"
       - "scripts/build-config.test.ts"
+      - "scripts/settings.ts"
       - "scripts/merge-variant-fixture.sh"
       - ".mise.toml"
       - "Dockerfile"
