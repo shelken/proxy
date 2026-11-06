@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { assemble, mergeTo, type Doc, type Role } from "./build-config.ts";
-import { artifactName, loadBase, loadSettings, singBoxCommand, type Settings } from "./settings.ts";
+import { artifactName, loadShared, loadSettings, singBoxCommand, type Settings } from "./settings.ts";
 import { buildOne } from "./rules-compile.ts";
 import {
   assertAllRuleSetsDeclared,
@@ -20,7 +20,7 @@ import {
 const CONFIG = resolve(import.meta.dir, "../config/sing-box");
 const FIXTURES = resolve(import.meta.dir, "fixtures");
 const fixtureSettings = join(FIXTURES, "settings.yaml");
-const base = loadBase();
+const shared = loadShared();
 const settingsFile = readFileSync(fixtureSettings, "utf8");
 const platforms = Object.fromEntries(
   (["mac", "ios", "router"] as const).map((role) => [
@@ -28,7 +28,7 @@ const platforms = Object.fromEntries(
     Bun.YAML.parse(readFileSync(join(CONFIG, "platforms", `${role}.yaml`), "utf8")) as Doc,
   ]),
 ) as Record<Role, Doc>;
-const defaults = loadSettings(base, fixtureSettings);
+const defaults = loadSettings(shared, fixtureSettings);
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -58,12 +58,12 @@ const withRule = (cfg: any, tag: string) => cfg.route.rules.filter((r: any) => [
 /** 走真实 merge 产出终态配置（mac/ios/router 任一）。 */
 async function merged(settings: Settings, role: Role = "mac") {
   const target = join(tempDir("merged-"), "template.json");
-  await mergeTo(target, base, platforms[role], settings);
+  await mergeTo(target, shared, platforms[role], settings);
   return JSON.parse(readFileSync(target, "utf8"));
 }
 /** assemble 展开后的完整配置，取测试关心的三段。 */
 const policy = (settings: Settings, role: Role = "mac") => {
-  const d = assemble(settings, base, platforms[role]);
+  const d = assemble(settings, shared, platforms[role]);
   return {
     dns: { rules: d.dns.rules as Array<Record<string, any>> },
     route: { rules: d.route.rules as Array<Record<string, any>>, rule_set: d.route.rule_set as Array<Record<string, any>> },
@@ -78,10 +78,10 @@ function hostSingBox(): string {
 }
 
 describe("默认设置：生成结构", () => {
-  test("outbounds = base 固定出站 + settings 分组 selector", async () => {
+  test("outbounds = shared 固定出站 + settings 分组 selector", async () => {
     const cfg = await merged(defaults);
     expect(cfg.outbounds.map((o: any) => o.tag)).toEqual([
-      ...base.outbounds.map((o) => o.tag),
+      ...shared.outbounds.map((o) => o.tag),
       ...Object.keys(defaults.groups),
     ]);
     for (const [name, group] of Object.entries(defaults.groups)) {
@@ -113,7 +113,7 @@ describe("默认直连链：resolve 排除", () => {
     return new Set(rule.rule_set ?? []);
   };
 
-  test("默认包含直接直连、默认直连分组与 base 默认直连出站", () => {
+  test("默认包含直接直连、默认直连分组与 shared 默认直连出站", () => {
     const set = resolveSet(defaults);
     for (const name of ["MyDirect", "ChinaMax", "Lan", "cftunnel", "geoip-cn"]) expect(set.has(name)).toBe(true);
     const microsoft = defaults.rules.find((r) => r.to === "microsoft")!.name;
@@ -127,14 +127,14 @@ describe("默认直连链：resolve 排除", () => {
       d.groups = { ...d.groups, app: { options: ["lan"], default: "lan" }, lan: { options: ["direct"], default: "direct" } };
       d.rules.find((r: any) => r.name === "MyProxy").to = "app";
     });
-    expect(resolveSet(loadSettings(base, path)).has("MyProxy")).toBe(true);
+    expect(resolveSet(loadSettings(shared, path)).has("MyProxy")).toBe(true);
   });
 
-  test("base 内默认 direct 的 selector（torrent）解析为直连", () => {
+  test("shared 内默认 direct 的 selector（torrent）解析为直连", () => {
     const path = tempSettings((d) => {
       d.rules.push({ name: "Internal", source: localSource, to: "torrent" });
     });
-    expect(resolveSet(loadSettings(base, path)).has("Internal")).toBe(true);
+    expect(resolveSet(loadSettings(shared, path)).has("Internal")).toBe(true);
   });
 
   test("默认链成环在配置期报错", () => {
@@ -142,12 +142,12 @@ describe("默认直连链：resolve 排除", () => {
       d.groups = { ...d.groups, a: { options: ["b"], default: "b" }, b: { options: ["a"], default: "a" } };
       d.rules.push({ name: "Loop", source: localSource, to: "a" });
     });
-    expect(() => policy(loadSettings(base, path))).toThrow(/成环/);
+    expect(() => policy(loadSettings(shared, path))).toThrow(/成环/);
   });
 });
 
 describe("骨架与 settings 的关系", () => {
-  const mutate = (fn: (doc: any) => void) => loadSettings(base, tempSettings(fn));
+  const mutate = (fn: (doc: any) => void) => loadSettings(shared, tempSettings(fn));
   const byName = (doc: any, name: string) => doc.rules.find((r: any) => r.name === name);
   const rejectSets = (p: ReturnType<typeof policy>) => p.route.rules.find((r) => r.action === "reject" && r.rule_set && !r.network)?.rule_set;
   const tail = (p: ReturnType<typeof policy>) => p.route.rules.filter((r) => r.action === "route" && r.rule_set).map((r) => r.rule_set[0]);
@@ -179,8 +179,8 @@ describe("骨架与 settings 的关系", () => {
 
   /** 用改过的 shared.yaml 段装配 mac，检查展开规则对原生写法变化的反应。 */
   const withShared = (patch: Record<string, any>, settings: Settings = defaults) =>
-    assemble(settings, { ...base, ...patch } as any, platforms.mac);
-  const policyRules = () => base["route-policy"] as Array<Record<string, any>>;
+    assemble(settings, { ...shared, ...patch } as any, platforms.mac);
+  const policyRules = () => shared["route-policy"] as Array<Record<string, any>>;
   const services = (cfg: any) => cfg.route.rules.filter((r: any) => r.action === "route" && r.rule_set).map((r: any) => r.rule_set[0]);
 
   test("拦截规则加上动作参数（no_drop）仍认领，不重复追加", () => {
@@ -190,31 +190,31 @@ describe("骨架与 settings 的关系", () => {
   });
 
   test("DNS 规则引用路由规则的同名规则，不会让它丢掉服务路由", () => {
-    const cfg = withShared({ "dns-rules": [{ rule_set: ["PayPal"], action: "reject" }, ...(base["dns-rules"] as any[])] });
+    const cfg = withShared({ "dns-rules": [{ rule_set: ["PayPal"], action: "reject" }, ...(shared["dns-rules"] as any[])] });
     expect(services(cfg)).toContain("PayPal");
   });
 
   test("logical 规则里的 -dns 伴生也被检查和声明", () => {
     const logical = { type: "logical", mode: "and", rules: [{ rule_set: ["Privacy-dns"] }, { query_type: ["A"] }], action: "reject" };
-    const cfg = withShared({ "dns-rules": [logical, ...(base["dns-rules"] as any[])] });
+    const cfg = withShared({ "dns-rules": [logical, ...(shared["dns-rules"] as any[])] });
     expect(cfg.route.rule_set.map((r: any) => r.tag)).toContain("Privacy-dns");
     expect(() => withShared({ "dns-rules": [{ ...logical, rules: [{ rule_set: ["Nope-dns"] }] }] })).toThrow(/Nope-dns/);
   });
 
   test("规则名与去向名同名时报歧义，不静默改变引入范围", () => {
     const settings = mutate((d) => { d.rules.push({ name: "direct", source: localSource, to: "direct" }); });
-    expect(() => assemble(settings, base, platforms.mac)).toThrow(/既是规则名又是去向名/);
+    expect(() => assemble(settings, shared, platforms.mac)).toThrow(/既是规则名又是去向名/);
   });
 
   test("selector 没写 default：沿首个候选解析去向链", () => {
     const settings = mutate((d) => { delete d.groups.paypal.default; });
-    const cfg = assemble(settings, base, platforms.mac);
+    const cfg = assemble(settings, shared, platforms.mac);
     const resolve = cfg.route.rules.find((r: any) => r.action === "resolve");
     expect(resolve.rule_set).toContain(settings.rules.find((r) => r.to === "paypal")!.name);
   });
 
   test("模板把规则直接送往 direct 时，规则自己的去向必须是 direct", () => {
-    expect(() => assemble(mutate((d) => { byName(d, "Lan").to = "proxy"; }), base, platforms.mac)).toThrow(
+    expect(() => assemble(mutate((d) => { byName(d, "Lan").to = "proxy"; }), shared, platforms.mac)).toThrow(
       /规则 Lan 的去向是 proxy，但模板把它直接送往 direct/,
     );
   });
@@ -239,7 +239,7 @@ describe("名称与来源校验", () => {
     const path = tempSettings((d) => {
       d.rules.push({ name: "tracking-dns", source: "https://example.com/tracking.srs", to: "reject" });
     });
-    const p = policy(loadSettings(base, path));
+    const p = policy(loadSettings(shared, path));
     expect(p.route.rule_set.find((r) => r.tag === "tracking-dns")?.url).toBe("https://example.com/tracking.srs");
     expect(p.route.rule_set.filter((r) => r.tag === "tracking-dns")).toHaveLength(1);
   });
@@ -248,22 +248,22 @@ describe("名称与来源校验", () => {
     const remote = tempSettings((d) => {
       d.rules.push({ name: "MyDirect-dns", source: "https://example.com/x.srs", to: "proxy" });
     });
-    expect(() => loadSettings(base, remote)).toThrow(/tag 冲突: MyDirect-dns/);
+    expect(() => loadSettings(shared, remote)).toThrow(/tag 冲突: MyDirect-dns/);
     const local = tempSettings((d) => {
       d.rules.push({ name: "MyDirect-dns", source: localSource, to: "proxy" });
     });
-    expect(() => loadSettings(base, local)).toThrow(/tag 冲突: MyDirect-dns/);
+    expect(() => loadSettings(shared, local)).toThrow(/tag 冲突: MyDirect-dns/);
     const file = tempSettings((d) => {
       d.rules = [
         { name: "A B", source: localSource, to: "proxy" },
         { name: "A/B", source: localSource, to: "proxy" },
       ];
     });
-    expect(() => loadSettings(base, file)).toThrow(/产物名冲突/);
+    expect(() => loadSettings(shared, file)).toThrow(/产物名冲突/);
   });
 
   test("中文名：模板 URL 与编译产物文件名同源", async () => {
-    const settings = loadSettings(base, tempSettings((d) => { d.rules.push({ name: "小米追踪", source: localSource, to: "proxy" }); }));
+    const settings = loadSettings(shared, tempSettings((d) => { d.rules.push({ name: "小米追踪", source: localSource, to: "proxy" }); }));
     const p = policy(settings);
     expect(p.route.rule_set.find((r) => r.tag === "小米追踪")?.url.endsWith(`/${artifactName("小米追踪")}.srs`)).toBe(true);
 
@@ -277,21 +277,21 @@ describe("名称与来源校验", () => {
   test("来源格式在唯一入口校验，错误带条目名", () => {
     const bad = (source: string) => {
       const path = tempSettings((d) => { d.rules = [{ name: "X", source, to: "proxy" }]; });
-      return () => loadSettings(base, path);
+      return () => loadSettings(shared, path);
     };
     expect(bad("geosite:bad/name")).toThrow(/规则 X/);
     expect(bad("geoip:bad/name")).toThrow(/规则 X/);
     expect(bad("https://example.com/rules.txt")).toThrow(/规则 X/);
     expect(bad("https://example.com/rules.json")).toThrow(/规则 X/);
     const ok = tempSettings((d) => { d.rules = [{ name: "X", source: "https://example.com/x.srs?foo=1", to: "proxy" }]; });
-    expect(loadSettings(base, ok).byName.get("X")!.kind).toBe("url");
+    expect(loadSettings(shared, ok).byName.get("X")!.kind).toBe("url");
   });
 
   test("无效去向/重复名/错误来源/无效 group default/分组与出站同名", () => {
     const expectError = (yaml: object, pattern: RegExp) => {
       const path = join(tempDir("settings-"), "settings.yaml");
       writeFileSync(path, JSON.stringify(yaml));
-      expect(() => loadSettings(base, path)).toThrow(pattern);
+      expect(() => loadSettings(shared, path)).toThrow(pattern);
     };
     expectError({ rules: [{ name: "X", source: "https://e.com/x.srs", to: "nowhere" }] }, /规则 X 的去向 nowhere 无效/);
     expectError({ rules: [
@@ -309,7 +309,7 @@ describe("新增远程 .srs（小米）：三端一致", () => {
   for (const role of ["mac", "ios", "router"] as const) {
     test(`${role}：有且仅有一次正确 URL，进入拦截段`, async () => {
       const path = tempSettings((d) => { d.rules.push({ name: "小米追踪", source: url, to: "reject" }); });
-      const cfg = await merged(loadSettings(base, path), role);
+      const cfg = await merged(loadSettings(shared, path), role);
       expect(JSON.stringify(cfg).split(url).length - 1).toBe(1);
       expect(ruleSet(cfg, "小米追踪").url).toBe(url);
       expect(withRule(cfg, "小米追踪").some((r) => r.action === "reject")).toBe(true);
@@ -336,7 +336,7 @@ describe("改真实 settings → 重建三端 → 完整门禁", () => {
     const path = tempSettings((d) => {
       d.rules.push({ name: "A B", source: localSource, to: "proxy" });
     });
-    const settings = loadSettings(base, path);
+    const settings = loadSettings(shared, path);
     for (const role of ["mac", "ios", "router"] as const) {
       const cfg = await merged(settings, role);
       assertAllRuleSetsDeclared(cfg.route);

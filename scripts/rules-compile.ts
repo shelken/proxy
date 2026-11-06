@@ -17,8 +17,8 @@ import {
   artifactName,
   CUSTOM_DIR,
   geoTarget,
-  loadBase,
   loadSettings,
+  loadShared,
   singBoxCommand,
   type Rule,
   type Settings,
@@ -356,7 +356,7 @@ export function findRule(settings: Settings, target: string): Rule {
 }
 
 export function runBuild(options: { all?: boolean; tag?: string }): void {
-  const settings = loadSettings(loadBase());
+  const settings = loadSettings(loadShared());
   const orphans = orphanCustomLists(settings.rules);
   if (orphans.length > 0) {
     console.warn(`WARN: 以下 custom/ 列表没有在 settings.yaml 引用，不会产出任何规则：\n  ${orphans.join("\n  ")}`);

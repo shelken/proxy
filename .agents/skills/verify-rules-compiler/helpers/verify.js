@@ -137,7 +137,7 @@ export function doctor(outDir) {
   }
 
   const check = host("bun", ["scripts/build-config.ts", "--check"]);
-  if (check.code !== 0) problems.push(`底模与 settings/base/platforms 不一致：\n${check.out}${check.err}`);
+  if (check.code !== 0) problems.push(`底模与 settings/shared/platforms 不一致：\n${check.out}${check.err}`);
 
   const vm = guest("echo ok");
   if (vm.code !== 0) problems.push(`VM ${VM} 不可达：${vm.err.trim()}（just vm-start）`);
