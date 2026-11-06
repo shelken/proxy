@@ -1,4 +1,4 @@
-// Mac、iOS 与路由器底模共用同一份 settings.yaml 与 base.yaml，各端都必须满足的顺序契约集中在这里，
+// Mac、iOS 与路由器底模共用同一份 settings.yaml 与 shared.yaml，各端都必须满足的顺序契约集中在这里，
 // 由三份结构测试复用，变异验证也直接打这些函数，避免三处各写一份后口径漂移。
 import { expect } from "bun:test";
 

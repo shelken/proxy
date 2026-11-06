@@ -1,5 +1,8 @@
-# platforms/router.yaml — 路由器平台层：网关 TUN、53 端口 DNS 入口、对局域网监听的面板（原生字段）。
-# 本网解析器（dns-lan）与部署域应答由设备 overlay 提供，本层不塞回（ADR-0014）。
+# router.yaml — 路由器（单臂旁路由）的完整模板，结构与 sing-box 的 JSON 一致。
+# 本网解析器（dns-lan）与部署域应答由设备 overlay 提供，本模板不写（ADR-0014）。
+# { $include: 名字 } 引入 shared.yaml 的共用段，settings.yaml 生成的段名字是 groups、rule-sets、services。
+
+log: { $include: log }
 
 inbounds:
   - type: tun
@@ -18,5 +21,30 @@ inbounds:
   - { type: mixed, tag: mixed-in, listen: 127.0.0.1, listen_port: 2080 }
   - { type: direct, tag: dns-in, listen: "::", listen_port: 53 }
 
+dns:
+  $include: dns-options
+  servers:
+    - { $include: dns-servers }
+  rules:
+    - { $include: dns-rules }
+
+http_clients:
+  - { $include: http-clients }
+
 experimental:
+  $include: experimental
   clash_api: { external_controller: 0.0.0.0:9090 }
+
+outbounds:
+  - { $include: outbounds }
+  - { $include: groups }
+
+route:
+  $include: route-options
+  rules:
+    - { inbound: [dns-in], action: hijack-dns }
+    - { $include: route-intake }
+    - { $include: route-policy }
+    - { $include: services }
+  rule_set:
+    - { $include: rule-sets }

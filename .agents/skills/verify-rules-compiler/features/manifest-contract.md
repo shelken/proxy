@@ -1,18 +1,18 @@
 # 设置-底模契约
 
-三份底模由 `config/sing-box/settings.yaml` + `base.yaml` + `platforms/` 生成，规则声明、路由引用与 `-dns` 伴生出自同一次生成，不会漂移。构建期校验会直接报出是哪条规则、哪个名字出了问题
+三份底模由 `config/sing-box/platforms/` 各平台模板引入 `shared.yaml` 与 `settings.yaml` 生成，规则声明、路由引用与 `-dns` 伴生出自同一次生成，不会漂移。构建期校验会直接报出是哪条规则、哪个名字出了问题
 
 ## Sub-features
 
 - `contract-generate`：`scripts/build-config.ts --check` 重算三份产物并与磁盘逐字节比对，不一致时报出首个差异字节
 - `contract-settings`：`settings.yaml` 的校验覆盖规则名重复、去向无效、来源不存在、分组默认值不在候选里、`tag` 与产物名冲突
-- `contract-policy`：规则的 `dns` 取值须在 `reject / lan / fakeip / direct-cn` 内且来源有域名版，`quic: allow` 要求 `to: direct`，同策略的规则合并为一条 DNS 或 QUIC 规则
+- `contract-ref`：`shared.yaml` 与平台模板的 `rule_set` 里写的名字必须是 `settings.yaml` 的规则（DNS 里可以是它的 `-dns` 伴生）或去向名，否则构建报错并点名；`rule_set` 里的去向名（`reject`、`download`、`direct`）引入去向落在它的全部规则，其余规则追加为服务路由
 - `contract-publish`：发布分支只包含 `settings.yaml` 产出的产物，底模引用的 URL 必然存在
 
 ## How to get to it (user POV)
 
 - 改规则与分组：`config/sing-box/settings.yaml`，本地列表在 `config/rules/custom/`
-- 改原生字段：`config/sing-box/base.yaml` 与 `config/sing-box/platforms/`
+- 改共用的原生字段（DNS、内部出站、sniff、QUIC 守卫等）：`config/sing-box/shared.yaml`；改某个平台自己的字段：`config/sing-box/platforms/<角色>.yaml`
 - 生成：`just template-build`
 - 校验：`just template-check` 或 `just verify`（其上再加 Rust 与模板结构测试）
 

@@ -11,7 +11,7 @@ on:
       - "Cargo.lock"
       - "config/sing-box/template.json"
       - "config/sing-box/settings.yaml"
-      - "config/sing-box/base.yaml"
+      - "config/sing-box/shared.yaml"
       - "config/sing-box/platforms/**"
       - "config/sing-box/template-ios.json"
       - "config/sing-box/template-router.json"
@@ -85,7 +85,7 @@ jobs:
         with:
           bun-version: 1.4.4
 
-      # 校验三份底模与 settings.yaml + base.yaml + platforms/ 一致，口径与 just template-check 保持一致
+      # 校验三份底模与 settings.yaml + shared.yaml + platforms/ 一致，口径与 just template-check 保持一致
       - name: verify template build consistency
         env:
           SING_BOX: sing-box

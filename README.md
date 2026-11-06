@@ -61,7 +61,7 @@ rules:
 
 ## 核心策略组
 
-策略组定义在 `config/sing-box/settings.yaml`（业务分组）与 `base.yaml`（固定出站），生成结果见 `template.json`，底模结构说明见 [docs/sbtools.md](./docs/sbtools.md)，面板端的切换操作见[用户指南](./docs/user-guide/01-mac-sfm.md)
+策略组都定义在 `config/sing-box/settings.yaml` 的 `groups`，生成结果见 `template.json`，底模结构说明见 [docs/sbtools.md](./docs/sbtools.md)，面板端的切换操作见[用户指南](./docs/user-guide/01-mac-sfm.md)
 
 需要当前值时直接查：
 
@@ -72,7 +72,7 @@ jq -r '.outbounds[] | select(.type=="selector" or .type=="urltest") | "\(.tag) �
 ## 目录索引
 
 - `config/rules/`: 自定义规则列表与编译器 `scripts/rules-compile.ts`，详见其 [README](./config/rules/README.md)
-- `config/sing-box/`: 底模输入（`settings.yaml`、`base.yaml`、`platforms/`）、生成的三份底模与沙箱闭环套件
+- `config/sing-box/`: 底模输入（`platforms/` 各平台模板、`shared.yaml` 共用段、`settings.yaml` 分组与分流）、生成的三份底模与沙箱闭环套件
 - `config/loon/`: Loon 配置文件与插件
 - `scripts/sbtools-rs/`: sbtools Rust 源码，负责客户端编码与服务端装配
 - `docs/ARCH.md`: 系统顶层架构
@@ -91,7 +91,7 @@ mise install      # 装 sing-box (prek 由系统提供, 不在项目声明)
 mise run setup    # 装 git hook，每个克隆跑一次
 ```
 
-修改 `config/sing-box/settings.yaml`、`base.yaml`、`platforms/` 或 `config/rules/custom/` 后，用这三条命令重建并确认：
+修改 `config/sing-box/settings.yaml`、`shared.yaml`、`platforms/` 或 `config/rules/custom/` 后，用这三条命令重建并确认：
 
 ```bash
 just template-build    # 重新生成三份底模

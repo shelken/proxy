@@ -11,7 +11,7 @@ proxy/
 │   └── sbtools-rs/       # sbtools 客户端编码与服务端装配
 ├── config/
 │   ├── rules/            # 自定义规则列表 (custom/*.yaml)，由 settings.yaml 登记
-│   ├── sing-box/         # 底模输入 (settings.yaml + base.yaml + platforms/) 及其产物 (template.json、iOS 用 template-ios.json、路由器用 template-router.json)、沙箱测试套件
+│   ├── sing-box/         # 底模输入 (platforms/ 各平台模板 + shared.yaml 共用段 + settings.yaml 分组与分流) 及其产物 (template.json、iOS 用 template-ios.json、路由器用 template-router.json)、沙箱测试套件
 │   └── loon/             # Loon 配置与自动化插件 (plugins/)
 ├── docs/                 # 架构 (ARCH / sbtools) 与用户指南
 ├── .github/workflows/    # CI：ci-sbtools 门禁；release-plz 开版本 PR；release-sbtools 发布二进制与镜像

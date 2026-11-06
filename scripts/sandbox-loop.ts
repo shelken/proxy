@@ -213,7 +213,7 @@ const BINARY_INPUTS = [
   "config/sing-box/template.json",
   // 底模由这些输入生成，改动它们必须重建内嵌底模的二进制
   "config/sing-box/settings.yaml",
-  "config/sing-box/base.yaml",
+  "config/sing-box/shared.yaml",
   "config/sing-box/platforms",
   "scripts/build-config.ts",
   "scripts/settings.ts",
@@ -365,9 +365,9 @@ function pushToGuest(): void {
     mkdir -p ${WORK}/rules ${WORK}/tests
     cp -r ${REPO_IN_GUEST}/config/rules/generated/singbox/. ${WORK}/rules/
     cp ${REPO_IN_GUEST}/config/sing-box/template.json ${WORK}/template.json
-    cp ${REPO_IN_GUEST}/config/sing-box/base.yaml ${WORK}/base.yaml
+    cp ${REPO_IN_GUEST}/config/sing-box/shared.yaml ${WORK}/shared.yaml
     cp ${REPO_IN_GUEST}/config/sing-box/settings.yaml ${WORK}/settings.yaml
-    # tests/ 整目录在 VM 内跑，结构测试要读同目录的 base.yaml / settings.yaml（生成真源）
+    # tests/ 整目录在 VM 内跑，结构测试要读同目录的 shared.yaml / settings.yaml（生成真源）
     cp ${REPO_IN_GUEST}/config/sing-box/template-ios.json ${WORK}/template-ios.json
     cp ${REPO_IN_GUEST}/config/sing-box/template-router.json ${WORK}/template-router.json
     cp -r ${REPO_IN_GUEST}/config/sing-box/tests/. ${WORK}/tests/
