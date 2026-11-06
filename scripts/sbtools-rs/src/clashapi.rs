@@ -1,7 +1,7 @@
 //! Clash API 客户端：controller 发现、仅回环守卫、探活与 /version /configs /logs 读取。
 //!
-//! PR3 的 logs 与 PR4 的 live 归属段复用此模块，不另写第二套。
-//! 惯例来源：controller 守卫与探活同 `trace.rs`，流式读取同 `server.rs` 的 ureq
+//! `logs` 的流式读取与 `trace` 的连接读取复用此模块，不另写第二套。
+//! 惯例来源：controller 守卫与探活同 `trace/`，流式读取同 `server.rs` 的 ureq
 //! `into_reader` 用法。
 
 use serde_json::Value;
@@ -122,7 +122,7 @@ pub fn get_connections(controller: &str) -> Result<Value, String> {
 /// /logs 流式读取（连接建立后只吐新行，无回放）。返回逐行 `BufRead`。
 ///
 /// 只设连接超时、不设整体超时：整体超时会在长连接上掐断跟踪流。
-/// `cmd_logs -f` 是当前调用方，PR4 的 live 归属段复用。
+/// `cmd_logs -f` 是当前调用方，`trace` 的 live 归属段复用。
 pub fn logs_stream(controller: &str, level: &str) -> Result<impl BufRead + use<>, String> {
     // 只设连接超时，不设整体超时，避免长连接流式读取在 2s 后被整体超时强制切断
     let agent = ureq::Agent::new_with_config(

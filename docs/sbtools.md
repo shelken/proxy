@@ -336,7 +336,7 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | `scripts/sbtools-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
 | `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
 | `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
-| `scripts/sbtools-rs/src/trace.rs` | 真机全链路探测：内核 debug 日志流 → DNS/路由决策与出口链路 |
+| `scripts/sbtools-rs/src/trace/` | 真机全链路探测：日志捕获（log）、连接与探针（probe）、网段判定（net）、报告（report，事实与渲染分离） |
 | `scripts/sbtools-rs/src/clashapi.rs` | controller 统一决议与 Clash API 请求 |
 | `scripts/sbtools-rs/src/paths.rs` | 本地观测配置路径发现，YAML 优先于旧 JSON |
 | `scripts/sbtools-rs/src/redact.rs` | 生效配置脱敏：`subs` / `nodes` 整元素隐藏、敏感键替换、URL userinfo 兜底 |

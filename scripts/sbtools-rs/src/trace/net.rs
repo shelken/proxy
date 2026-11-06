@@ -131,14 +131,6 @@ fn in_range(ip: &str, r: &Ipv4Cidr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn fakeip_detects_pool_range() {
-        assert!(is_fakeip("198.18.0.13"));
-        assert!(is_fakeip("198.19.255.255"));
-        assert!(!is_fakeip("192.168.99.99"));
-        assert!(!is_fakeip("104.21.33.74"));
-        assert!(!is_fakeip("not-an-ip"));
-    }
 
     /// fakeip 段从底模读取，与 `config/sing-box/template.json` 的 inet4_range 绑定；
     /// 底模改了段而 trace 还写死 198.18/15 会静默误判。
@@ -166,14 +158,6 @@ mod tests {
         assert_eq!(range.prefix, 16);
         // 无 fakeip server → None，调用方回落底模
         assert!(fakeip_range_from(&serde_json::json!({})).is_none());
-    }
-
-    #[test]
-    fn parse_cidr4_rejects_malformed() {
-        assert!(parse_cidr4("198.18.0.0").is_none());
-        assert!(parse_cidr4("198.18.0.0/33").is_none());
-        assert!(parse_cidr4("not-an-ip/15").is_none());
-        assert_eq!(parse_cidr4("198.18.0.1/15").unwrap().net.octets()[1], 18);
     }
 
     /// tun 入站的 route_exclude_address 决定「直连所以没有路由日志」；

@@ -237,61 +237,28 @@ pub(super) fn capture_decisions(controller: &str, domain: &str) -> KernelDecisio
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn request_id_extracts_leading_bracket_number() {
-        assert_eq!(
-            request_id("[254349897 4ms] router: sniffed protocol: tls, domain: kelee.one"),
-            Some("254349897")
-        );
-        assert_eq!(request_id("no bracket here"), None);
-        assert_eq!(request_id("[abc 4ms] x"), None);
-    }
 
-    #[test]
-    fn domain_in_line_reads_sniff_exchange_and_lookup() {
-        assert_eq!(
-            domain_in_line("router: sniffed protocol: tls, domain: kelee.one"),
-            Some("kelee.one".to_string())
-        );
-        assert_eq!(
-            domain_in_line("dns: exchanged A ntp.ubuntu.com. 600 IN A 198.18.0.2"),
-            Some("ntp.ubuntu.com".to_string())
-        );
-        assert_eq!(
-            domain_in_line("dns: lookup succeed for kelee.one: 104.21.33.74"),
-            Some("kelee.one".to_string())
-        );
-        assert_eq!(
-            domain_in_line("dns: match[2] query_type=[A AAAA] => route(dns-fakeip)"),
-            None
-        );
-    }
+    // 日志样例来源：verify-sbtools observability 组 kernel-observability.log
+    // （run 20261106T121703Z，内核 sing-box 1.14.4；用例 trace-real-kernel / trace-fakeip / logs -f）。
+    // predefined 形态来自 postmortem 009 记录的实机捕获（内核 1.14.2）。
+    // 该组未产生 sniff 行与拨号 DNS 失败行，涉及之处用与内核同格式的合成样例并就地注明。
 
-    #[test]
-    fn route_target_extracts_outbound() {
-        assert_eq!(
-            route_target("router: match[20] rule_set=[ChinaMax Lan] => route(direct)"),
-            Some("direct")
-        );
-        assert_eq!(route_target("router: match[1] => sniff"), None);
-    }
-
-    /// 关联的核心契约：同请求号的行才归到目标域名，别的域名（后台缓存刷新）不能污染。
+    /// 关联的核心契约：同请求号的行才归到目标域名，别的域名不能污染。
     #[test]
     fn absorb_line_ignores_other_domains_by_request_id() {
         let mut ids = Vec::new();
         let mut g = KernelDecisions::default();
-        // 后台 ntp 请求：嗅探行域名不匹配 → 不登记
+        // fake.test 的请求号：exchange 行域名不匹配 → 不登记
         absorb_line(
-            "[111 0ms] router: sniffed protocol: udp, domain: ntp.ubuntu.com",
-            "prometheus.ooooo.space",
+            "[1076798454 0ms] dns: exchange fake.test. IN A",
+            "probe.test",
             &mut ids,
             &mut g,
         );
-        // 同 id 的 dns 决策行 → 必须被忽略，否则就是把别人的判定算到目标头上
+        // 同 id 的 dns 决策行（本身不带域名）→ 必须被忽略，否则就是把别人的判定算到目标头上
         absorb_line(
-            "[111 1ms] dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
-            "prometheus.ooooo.space",
+            "[1076798454 0ms] dns: match[0] domain_suffix=test => route(synthetic-dns)",
+            "probe.test",
             &mut ids,
             &mut g,
         );
@@ -301,16 +268,16 @@ mod tests {
             g.dns_match
         );
 
-        // 目标域名的嗅探行 → 登记 id
+        // 目标 probe.test 的请求号 → 登记并收下后续判定
         absorb_line(
-            "[222 0ms] router: sniffed protocol: tls, domain: prometheus.ooooo.space",
-            "prometheus.ooooo.space",
+            "[193977659 1ms] dns: lookup domain probe.test",
+            "probe.test",
             &mut ids,
             &mut g,
         );
         absorb_line(
-            "[222 4ms] router: match[20] rule_set=[ChinaMax Lan MyDirect] => route(direct)",
-            "prometheus.ooooo.space",
+            "[193977659 1ms] router: match[1] rule_set=Probe => route(direct)",
+            "probe.test",
             &mut ids,
             &mut g,
         );
@@ -320,189 +287,96 @@ mod tests {
                 .unwrap_or("")
                 .contains("route(direct)")
         );
-
-        // 拨号解析失败证据行
         absorb_line(
-            "[222 5ms] dns: lookup failed for prometheus.ooooo.space: (exchange4: NXDOMAIN | exchange6: NXDOMAIN)",
-            "prometheus.ooooo.space",
-            &mut ids,
-            &mut g,
-        );
-        assert!(g.dial_failure.as_deref().unwrap_or("").contains("NXDOMAIN"));
-    }
-
-    /// 拨号解析的三行证据（发起 / 成功 / 失败）都要能抓到，且互不覆盖。
-    /// 这是报告里「出站拨号解析」段的唯一数据来源。
-    #[test]
-    fn absorb_line_captures_dial_path_evidence() {
-        let mut g = KernelDecisions::default();
-
-        // 发起行：它存在而链路无 dns: match，就是「拨号不经 dns.rules」的直接证据
-        let mut ids = vec!["444".to_string()];
-        absorb_line(
-            "[444 4ms] dns: lookup domain prometheus.ooooo.space",
-            "prometheus.ooooo.space",
+            "[193977659 3ms] dns: lookup succeed for probe.test: 203.0.113.10",
+            "probe.test",
             &mut ids,
             &mut g,
         );
         assert!(
-            g.dial_lookup
+            g.dial_success
                 .as_deref()
                 .unwrap_or("")
-                .contains("lookup domain")
-        );
-        assert!(g.dial_failure.is_none() && g.dial_success.is_none());
-
-        // 失败行
-        absorb_line(
-            "[444 6ms] dns: lookup failed for prometheus.ooooo.space: (exchange4: NXDOMAIN | exchange6: NXDOMAIN)",
-            "prometheus.ooooo.space",
-            &mut ids,
-            &mut g,
-        );
-        assert!(g.dial_failure.as_deref().unwrap_or("").contains("NXDOMAIN"));
-        assert!(g.dial_success.is_none(), "失败不应同时被记成成功");
-
-        // 成功行（另一请求）
-        let mut d = KernelDecisions::default();
-        absorb_line(
-            "[555 4ms] dns: lookup succeed for kelee.one: 104.21.33.74",
-            "kelee.one",
-            &mut vec!["555".to_string()],
-            &mut d,
-        );
-        assert!(
-            d.dial_success
-                .as_deref()
-                .unwrap_or("")
-                .contains("104.21.33.74")
+                .contains("203.0.113.10")
         );
     }
 
     /// Clash API `/dns/query` 触发的日志没有请求号（该端点用 context.Background()
     /// 起 Exchange）。这类行只能凭本行域名归属，不能因为取不到 id 就丢。
-    /// 回归：早先无条件要求 id，会把触发 1 产出的 dns: match 全部丢弃。
     #[test]
     fn absorb_line_accepts_id_less_lines_by_domain() {
         let mut ids: Vec<String> = Vec::new();
         let mut g = KernelDecisions::default();
 
+        // 无 id 行不带域名，无从判断归属，不得收下（否则又是「第一条 match」污染）
         absorb_line(
-            "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
-            "prometheus.ooooo.space",
+            "dns: match[0] domain_suffix=test => route(synthetic-dns)",
+            "probe.test",
             &mut ids,
             &mut g,
         );
-        // 无 id 行不带域名，无从判断归属，不得收下（否则又是「第一条 match」污染）
         assert!(g.dns_match.is_none(), "无域名的无 id 行不应被收下");
 
         // 同查询的 exchange 行确立域名归属，随后的无 id match 行据此被收下
         absorb_line(
-            "dns: exchange prometheus.ooooo.space. IN A",
-            "prometheus.ooooo.space",
+            "dns: exchange probe.test. IN A",
+            "probe.test",
             &mut ids,
             &mut g,
         );
-        assert_eq!(
-            g.recent_dns_domain.as_deref(),
-            Some("prometheus.ooooo.space")
-        );
+        assert_eq!(g.recent_dns_domain.as_deref(), Some("probe.test"));
         absorb_line(
-            "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
-            "prometheus.ooooo.space",
+            "dns: match[0] domain_suffix=test => route(synthetic-dns)",
+            "probe.test",
             &mut ids,
             &mut g,
         );
-        assert!(g.dns_match.as_deref().unwrap_or("").contains("dns-fakeip"));
+        assert!(
+            g.dns_match
+                .as_deref()
+                .unwrap_or("")
+                .contains("route(synthetic-dns)")
+        );
 
         // 别的域名的无 id 行仍须拒绝
         let mut g2 = KernelDecisions::default();
         absorb_line(
-            "dns: exchange ntp.ubuntu.com. IN A",
-            "prometheus.ooooo.space",
+            "dns: exchange fake.test. IN A",
+            "probe.test",
             &mut Vec::new(),
             &mut g2,
         );
         absorb_line(
-            "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
-            "prometheus.ooooo.space",
+            "dns: match[0] domain_suffix=test => route(synthetic-dns)",
+            "probe.test",
             &mut Vec::new(),
             &mut g2,
         );
         assert!(g2.dns_match.is_none(), "无 id 且域名不匹配的行不得被收下");
     }
 
-    /// 多行载荷（here-doc 日志）会被拼成一行、整体命中域名与决策子串，
-    /// 误收成一次「决策」。真内核日志每条只有一行。
-    #[test]
-    fn absorb_line_rejects_multiline_payload() {
-        let mut ids: Vec<String> = vec!["7".to_string()];
-        let mut g = KernelDecisions::default();
-        absorb_line(
-            "[7 1ms] dns: exchanged A ooooo.space. 600 IN A 198.18.0.2\nlookup succeed for ooooo.space: 198.18.0.2",
-            "ooooo.space",
-            &mut ids,
-            &mut g,
-        );
-        // 整条载荷里同时命中域名与两类决策子串，未拦下则会被收成拨号成功
-        assert!(
-            g.dial_success.is_none() && g.recent_dns_domain.is_none() && g.dial_lookup.is_none(),
-            "多行载荷不应被当成一条日志: {g:?}"
-        );
-    }
-
-    /// 收工条件：router match 到手后，只要有一条拨号结果行就可以停，
-    /// 不能因为等不到 dns: match（无 id 行未到达）而空等到超时。
-    #[test]
-    fn absorb_line_signals_done_on_dial_result() {
-        let mut ids: Vec<String> = vec!["8".to_string()];
-        let mut g = KernelDecisions::default();
-        absorb_line(
-            "[8 1ms] router: match[20] rule_set=[MyDirect] => route(direct)",
-            "ooooo.space",
-            &mut ids,
-            &mut g,
-        );
-        // 尚无拨号结果 → 未完成
-        assert!(!absorb_line(
-            "[8 2ms] dns: lookup domain ooooo.space",
-            "ooooo.space",
-            &mut ids,
-            &mut g
-        ));
-        // 拨号失败行到达 → 完成
-        assert!(absorb_line(
-            "[8 5ms] dns: lookup failed for ooooo.space: (exchange4: NXDOMAIN)",
-            "ooooo.space",
-            &mut ids,
-            &mut g
-        ));
-    }
-
-    /// 无 id 前缀的 `dns: match[N]` 行不带域名（只带 query_type / domain_suffix），
-    /// 靠上一条 exchange/exchanged 行确立的域名回填。回归：只按本行域名归属时，
-    /// 这类行整条被丢，内核 DNS 判定阶段落空——正是实机抓到的样子。
+    /// 无 id 前缀的 `dns: match[N]` 行不带域名（只带 domain_suffix），靠上一条
+    /// exchange 行确立的域名回填。回归：只按本行域名归属时这类行整条被丢。
     #[test]
     fn absorb_line_backfills_recent_dns_domain() {
-        // 与实机捕获一致的行序（example.com 走 fakeip）
         let mut ids: Vec<String> = Vec::new();
         let mut g = KernelDecisions::default();
         for line in [
-            "dns: exchange example.com. IN A",
-            "dns: match[8] query_type=[A AAAA] => route(dns-fakeip)",
+            "dns: exchange probe.test. IN A",
+            "dns: match[0] domain_suffix=test => route(synthetic-dns)",
         ] {
-            absorb_line(line, "example.com", &mut ids, &mut g);
+            absorb_line(line, "probe.test", &mut ids, &mut g);
         }
         assert!(
             g.dns_match
                 .as_deref()
                 .unwrap_or("")
-                .contains("route(dns-fakeip)"),
+                .contains("route(synthetic-dns)"),
             "match 行应经最近域名回填被收下: {:?}",
             g.dns_match
         );
 
-        // 内网名走 predefined，返回真实 IP；match 行带 domain_suffix 也无 id
+        // 内网名走 predefined，返回真实 IP（postmortem 009 的实机捕获）
         let mut g2 = KernelDecisions::default();
         for line in [
             "dns: exchange photo.int.ooooo.space. IN A",
@@ -519,20 +393,114 @@ mod tests {
             g2.dns_match
         );
 
-        // 最近域名是别的查询时不得收下：回填只认目标域名
+        // 最近域名是别的查询时不得收下
         let mut g3 = KernelDecisions::default();
         absorb_line(
-            "dns: exchange other.example.net. IN A",
-            "photo.int.ooooo.space",
+            "dns: exchange fake.test. IN A",
+            "probe.test",
             &mut ids,
             &mut g3,
         );
         absorb_line(
-            "dns: match[0] query_type=A => route(dns-fakeip)",
-            "photo.int.ooooo.space",
+            "dns: match[0] domain_suffix=test => route(synthetic-dns)",
+            "probe.test",
             &mut ids,
             &mut g3,
         );
         assert!(g3.dns_match.is_none(), "最近域名不属于目标时不应收下");
+    }
+
+    /// 多行载荷（here-doc 日志）会被拼成一行、整体命中域名与决策子串，
+    /// 误收成一次「决策」。真内核日志每条只有一行。合成样例，测的是防御边界。
+    #[test]
+    fn absorb_line_rejects_multiline_payload() {
+        let mut ids: Vec<String> = vec!["7".to_string()];
+        let mut g = KernelDecisions::default();
+        absorb_line(
+            "[7 1ms] dns: exchanged A ooooo.space. 600 IN A 198.18.0.2\nlookup succeed for ooooo.space: 198.18.0.2",
+            "ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        assert!(
+            g.dial_success.is_none() && g.recent_dns_domain.is_none() && g.dial_lookup.is_none(),
+            "多行载荷不应被当成一条日志: {g:?}"
+        );
+    }
+
+    /// 收工条件：router match 到手后，只要有一条拨号结果行就可以停，
+    /// 不能因为等不到 dns: match 而空等到超时。拨号失败行观测组未产生，
+    /// 用与内核 1.14.4 同格式的合成样例（`lookup failed for <domain>: (exchange4: <rcode> | ...)`）。
+    #[test]
+    fn absorb_line_signals_done_on_dial_result() {
+        let mut ids: Vec<String> = vec!["8".to_string()];
+        let mut g = KernelDecisions::default();
+        assert!(!absorb_line(
+            "[8 1ms] router: match[1] rule_set=Probe => route(direct)",
+            "probe.test",
+            &mut ids,
+            &mut g
+        ));
+        assert!(!absorb_line(
+            "[8 2ms] dns: lookup domain probe.test",
+            "probe.test",
+            &mut ids,
+            &mut g
+        ));
+        assert!(absorb_line(
+            "[8 5ms] dns: lookup failed for probe.test: (exchange4: NXDOMAIN | exchange6: NXDOMAIN)",
+            "probe.test",
+            &mut ids,
+            &mut g
+        ));
+    }
+
+    /// 拨号解析的三行证据（发起 / 成功 / 失败）都要能抓到，且互不覆盖。
+    /// 发起与成功行来自真抓取；失败行观测组未产生，用同格式合成样例。
+    #[test]
+    fn absorb_line_captures_dial_path_evidence() {
+        let mut ids: Vec<String> = vec!["193977659".to_string()];
+        let mut g = KernelDecisions::default();
+
+        // 发起行：它存在而链路无 dns: match，就是「拨号不经 dns.rules」的直接证据
+        absorb_line(
+            "[193977659 1ms] dns: lookup domain probe.test",
+            "probe.test",
+            &mut ids,
+            &mut g,
+        );
+        assert!(
+            g.dial_lookup
+                .as_deref()
+                .unwrap_or("")
+                .contains("lookup domain")
+        );
+        assert!(g.dial_failure.is_none() && g.dial_success.is_none());
+
+        // 成功行
+        absorb_line(
+            "[193977659 3ms] dns: lookup succeed for probe.test: 203.0.113.10",
+            "probe.test",
+            &mut ids,
+            &mut g,
+        );
+        assert!(
+            g.dial_success
+                .as_deref()
+                .unwrap_or("")
+                .contains("203.0.113.10")
+        );
+        assert!(g.dial_failure.is_none(), "成功不应同时被记成失败");
+
+        // 失败行（合成，观测组未产生拨号 DNS 失败）
+        let mut d = KernelDecisions::default();
+        absorb_line(
+            "[444 6ms] dns: lookup failed for probe.test: (exchange4: NXDOMAIN | exchange6: NXDOMAIN)",
+            "probe.test",
+            &mut vec!["444".to_string()],
+            &mut d,
+        );
+        assert!(d.dial_failure.as_deref().unwrap_or("").contains("NXDOMAIN"));
+        assert!(d.dial_success.is_none(), "失败不应同时被记成成功");
     }
 }

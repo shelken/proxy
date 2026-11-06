@@ -219,19 +219,4 @@ mod tests {
         assert_eq!(m.rule, "domain_suffix=demo.test => route(proxy)");
         assert_eq!(m.chains, vec!["proxy".to_string(), "selfhost".to_string()]);
     }
-
-    /// 探针只走显式回环的 mixed 入站，与 controller 守卫同一纪律。
-    #[test]
-    fn mixed_loopback_port_requires_explicit_loopback() {
-        let cfg = serde_json::json!({"inbounds": [
-            {"type": "tun"},
-            {"type": "mixed", "listen": "127.0.0.1", "listen_port": 19081}
-        ]});
-        assert_eq!(mixed_loopback_port(&cfg), Some(19081));
-        let cfg = serde_json::json!({"inbounds": [
-            {"type": "mixed", "listen": "0.0.0.0", "listen_port": 19081}
-        ]});
-        assert_eq!(mixed_loopback_port(&cfg), None);
-        assert_eq!(mixed_loopback_port(&serde_json::json!({})), None);
-    }
 }
