@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "imap.gmail.com",
+        "smtp.gmail.com"
+      ]
+    }
+  ]
+}
