@@ -69,7 +69,7 @@ fn usage() -> String {
         "sbtools — 客户端加密编码 + 服务端原生合并",
         "",
         "  sbtools encode -s <server> [-c <config.yaml>]   校验 YAML、加密生成订阅 URL 并写入剪切板",
-        "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 解析/dns归属/内核判定/live归属/静态规则/耗时",
+        "  sbtools trace <domain> [--api <127.0.0.1:9090>]  真机全链路探测: 解析/DNS/路由/连通",
         "  sbtools check [-c <config.yaml>]               离线校验: 合并 overlay 到底模并跑内核 check, 打印生效摘要",
         "  sbtools config [--path <config.yaml|singbox.json>]  打印生效配置(隐私脱敏); SFM 可达时附 /configs 运行时摘要",
         "  sbtools logs [-f] [-n N] [--level debug|info|warn|error]  查看日志: -f 跟踪 /logs 流, -n N 读 log.output 末 N 行",
@@ -169,9 +169,8 @@ fn cmd_trace(rest: &[String]) -> Result<(), String> {
             ));
         }
     };
-    let fails = trace::trace(&domain, Some(&controller));
-    if fails > 0 {
-        return Err(format!("{fails} 个阶段失败"));
+    if !trace::trace(&domain, &controller) {
+        std::process::exit(1);
     }
     Ok(())
 }
@@ -493,7 +492,7 @@ mod tests {
         assert!(u.contains("check"));
         assert!(u.contains("sbtools config [--path"));
         assert!(u.contains("sbtools logs [-f] [-n N]"));
-        assert!(u.contains("解析/dns归属/内核判定/live归属/静态规则/耗时"));
+        assert!(u.contains("解析/DNS/路由/连通"));
         assert!(!u.contains("doctor"));
         assert!(!u.contains("sbtools sync"));
         assert!(u.contains("encode -s <server>"));

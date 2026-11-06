@@ -1,11 +1,12 @@
-//! trace: 对指定域名做全链路探测（系统解析 / 内核 DNS 判定 / 路由判定 / 出站链路 / 首字节耗时）。
+//! trace: 对指定域名做全链路探测（系统解析 / 内核 DNS 判定 / 路由判定 / 拨号证据 / 首字节耗时）。
 //!
-//! 核心机制：监听内核 debug 日志流（`GET /logs?level=debug`），主动注入查询与流量，
-//! 精确捕获 sing-box 内部真正的决策记录：
-//!   1. DNS 走线：具体哪条 DNS 规则命中、具体选了哪个 DNS Server（`route(dns-fakeip)` / `route(dns-direct-cn)` 等）
-//!   2. 路由走线：具体哪条路由规则命中、分配到哪个策略组（`route(gemini)` / `route(direct)` 等）
-//!   3. 出口链路：连接实际经过的节点链（`vps-hy2 → selfhost → openai → gemini`）
-//!   4. 首字节耗时：端到端真实延迟
+//! 报告是「第一行结论 + 一条因果链」：解析 → DNS → 拨号 → 路由 → 连通。
+//! 事实收集（`collect_facts`，唯一的 IO 段）与文本渲染（`render`，纯函数）分开，
+//! 渲染可以不碰网络地逐字单测。
+//!
+//! DNS 与路由判定只认内核 debug 日志流与 /connections，不做本地推演：
+//! 内核视角即真相。日志关联靠请求号，`dns: match[N]` 行不带域名，
+//! 由相邻的 exchange/exchanged 行回填归属。
 //!
 //! 与 `scripts/trace-route.ts`（沙箱侧）的分工：本模块跑在真机上，验证**当前部署**
 //! 在真实网络环境下的表现；沙箱侧在 Lima VM 内用于**离线复现**配置裁决。两者被测
@@ -69,14 +70,12 @@ fn route_target(decision: &str) -> Option<&str> {
 }
 
 /// 系统 resolver 解析（getaddrinfo），返回首个 IPv4。
-pub fn system_resolve(domain: &str) -> Option<(String, u128)> {
-    let start = Instant::now();
+fn system_resolve(domain: &str) -> Option<String> {
     let addrs: Vec<_> = (domain, 0u16).to_socket_addrs().ok()?.collect();
-    let ip = addrs.iter().find_map(|a| match a {
+    addrs.iter().find_map(|a| match a {
         std::net::SocketAddr::V4(v4) => Some(v4.ip().to_string()),
         std::net::SocketAddr::V6(_) => None,
-    })?;
-    Some((ip, start.elapsed().as_millis()))
+    })
 }
 
 /// 内核决策捕获结果
@@ -84,8 +83,6 @@ pub fn system_resolve(domain: &str) -> Option<(String, u128)> {
 struct KernelDecisions {
     dns_match: Option<String>,
     router_match: Option<String>,
-    /// 该域名是否拿到过 fakeip 答案（拨号会因此失败，不算成功）
-    fakeip_answer: Option<String>,
     /// 拨号解析失败证据行（`lookup failed for <domain>: ...`）
     dial_failure: Option<String>,
     /// 拨号解析成功行（`lookup succeed for <domain>: ...`）
@@ -166,16 +163,6 @@ fn absorb_line(
         guard.dial_success = Some(payload.trim().to_string());
     } else if payload.contains("dns: lookup domain ") && guard.dial_lookup.is_none() {
         guard.dial_lookup = Some(payload.trim().to_string());
-    } else if payload.contains("exchanged")
-        && payload.contains(" IN A ")
-        && guard.fakeip_answer.is_none()
-    {
-        // 提取答案 IP，稍后判断是否落 fakeip 段
-        if let Some(ans) = payload.rsplit(' ').next()
-            && ans.parse::<std::net::Ipv4Addr>().is_ok()
-        {
-            guard.fakeip_answer = Some(ans.to_string());
-        }
     }
     guard.router_match.is_some() && (guard.dns_match.is_some() || guard.dial_failure.is_some())
 }
@@ -264,11 +251,6 @@ fn capture_decisions(controller: &str, domain: &str) -> KernelDecisions {
     drop(handle);
 
     decisions.lock().map(|g| g.clone()).unwrap_or_default()
-}
-
-/// Clash API 查询活跃连接中该域名的出站代理链路
-pub fn clash_api_chain(domain: &str, controller: &str) -> Option<String> {
-    conn_match(domain, controller).map(|m| m.chains.join(" → "))
 }
 
 // ===== live 路由归属 =====
@@ -404,24 +386,6 @@ fn live_attribution(domain: &str, controller: &str) -> Option<ConnMatch> {
             return None;
         }
         std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// live 归属段报告。未命中不判失败：连接可能已关闭或探针未进入内核。
-fn report_live_attribution(ec: &str, domain: &str) {
-    match live_attribution(domain, ec) {
-        Some(m) if m.rule.is_empty() => {
-            println!(
-                "✓ live 路由归属   链路 {}  (缺省路由，无 rule 串)",
-                m.chains.join(" → ")
-            );
-        }
-        Some(m) => println!(
-            "✓ live 路由归属   {}  链路 {}",
-            m.rule,
-            m.chains.join(" → ")
-        ),
-        None => println!("· live 路由归属   未捕获到存续连接（连接已关闭或探针未进入内核）"),
     }
 }
 
@@ -562,135 +526,257 @@ pub fn controller_reachable(controller: &str) -> bool {
     crate::clashapi::reachable(controller)
 }
 
-/// 内核决策段的报告：DNS 判定 / 路由判定 / 拨号解析证据 / 出口链路。
-/// 返回本段新增的失败阶段数。
-fn report_kernel_decisions(ec: &str, domain: &str, resolved_ip: Option<&str>) -> u8 {
-    let decisions = capture_decisions(ec, domain);
-    let mut fails: u8 = 0;
-
-    match &decisions.dns_match {
-        Some(decision) => {
-            if decision.contains("dns-fakeip") {
-                println!("✓ 内核 DNS 判定   {decision}  ← 假 IP 路径, 拨号将失败");
-            } else {
-                println!("✓ 内核 DNS 判定   {decision}");
-            }
-        }
-        None => {
-            println!("⚠ 内核 DNS 判定   未捕获到匹配规则（可能命中缓存或 final）");
-        }
-    }
-
-    match &decisions.router_match {
-        Some(decision) => println!("✓ 内核路由判定   {decision}"),
-        None => {
-            // 目标在 route_exclude_address 内时内核本就不产生路由日志，
-            // 与「没抓到」是两回事，不能都打 ⚠
-            if resolved_ip.is_some_and(is_excluded) {
-                println!(
-                    "· 内核路由判定   目标 {} 在 route_exclude_address 内，不经路由判定（直连）",
-                    resolved_ip.unwrap_or("?")
-                );
-            } else {
-                println!("⚠ 内核路由判定   未捕获到路由规则（可能直连或默认策略）");
-            }
-        }
-    }
-
-    // 拨号解析证据行：诊断内网名失败的关键一行，缺失时旧版报告无从定位。
-    // 同时报出「拨号走哪个解析路径」：这行不经 dns.rules，只认
-    // route.default_domain_resolver，与入站查询是两条不同的解析路径。
-    if let Some(f) = &decisions.dial_failure {
-        println!("✗ 出站拨号解析   {f}  ← 不经 dns.rules，只认 route.default_domain_resolver");
-        fails += 1;
-    } else if let Some(s) = &decisions.dial_success {
-        println!("✓ 出站拨号解析   {s}");
-    } else if let Some(l) = &decisions.dial_lookup {
-        println!("· 出站拨号解析   {l}  (已发起，未观察到结果行)");
-    } else if let Some(ans) = &decisions.fakeip_answer.filter(|a| is_fakeip(a)) {
-        println!("⚠ 出站拨号解析   拿到 fakeip 答案 {ans}，未观察到失败行（可能连接未走到拨号）");
-    }
-
-    // 阶段 4: 出口代理链路
-    match clash_api_chain(domain, ec) {
-        Some(chain) => println!("✓ 实际出站链路   {chain}"),
-        None => {
-            // 若短连接已关闭，从路由判定的目标也能明确出口
-            if let Some(rd) = &decisions.router_match
-                && let Some(target) = route_target(rd)
-            {
-                println!("✓ 规则分配目标   {target}");
-            }
-        }
-    }
-    fails
+/// 拨号解析证据：成功不展示，只上报失败与「已发起未见结果」。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum DialFact {
+    #[default]
+    None,
+    Failed(String),
+    Initiated,
 }
 
-/// 执行全部阶段并打印报告；返回失败阶段数。
-pub fn trace(domain: &str, controller: Option<&str>) -> u8 {
-    println!("=== sbtools trace — {domain} 全链路探测 ===\n");
+/// 一次探测收集到的全部事实。渲染（`render`）只看这些字段，不碰网络。
+#[derive(Debug, Clone, Default)]
+struct Facts {
+    domain: String,
+    /// 系统解析结果；None 表示解析失败/超时
+    resolved_ip: Option<String>,
+    /// 系统解析是否落在 fakeip 段（采集时判定，渲染不读 $HOME）
+    resolved_fakeip: bool,
+    /// Some(controller) 表示控制面不可达，内核相关段全部跳过
+    kernel_unreachable: Option<String>,
+    dns_match: Option<String>,
+    router_match: Option<String>,
+    conn: Option<ConnMatch>,
+    dial: DialFact,
+    /// 目标 IP 落在 tun 的 route_exclude_address 内（不经路由判定）
+    target_excluded: bool,
+    /// HTTPS 首字节：(成功, 毫秒)
+    https: (bool, u128),
+}
 
-    let mut fails: u8 = 0;
+/// 收集事实（唯一的 IO 段）：系统解析、内核日志流、/connections 探针、HTTPS 首字节。
+fn collect_facts(domain: &str, controller: &str) -> Facts {
+    let mut facts = Facts {
+        domain: domain.to_string(),
+        ..Facts::default()
+    };
 
-    // 阶段 1: 系统 resolver
-    let mut resolved_fakeip = false;
-    let mut resolved_ip: Option<String> = None;
-    if let Some((ip, ms)) = system_resolve(domain) {
-        resolved_ip = Some(ip.clone());
-        if is_fakeip(&ip) {
-            resolved_fakeip = true;
-            println!("✗ 系统 resolver   A {ip}  ({ms}ms)  ← fakeip 假 IP, 非真实解析");
-            fails += 1;
-        } else {
-            println!("✓ 系统 resolver   A {ip}  ({ms}ms)");
-        }
-    } else {
-        println!("✗ 系统 resolver   解析失败/超时");
-        fails += 1;
+    if let Some(ip) = system_resolve(domain) {
+        facts.resolved_fakeip = is_fakeip(&ip);
+        facts.resolved_ip = Some(ip);
     }
 
-    // 阶段 3 & 4: 监听内核决策流（DNS 规则 + 路由规则）
-    match controller {
-        Some(ec) if controller_reachable(ec) => {
-            fails += report_kernel_decisions(ec, domain, resolved_ip.as_deref());
-            report_live_attribution(ec, domain);
-        }
-        Some(ec) => {
-            // 控制面不通时后面每个阶段都会「无数据」，与其打一串 ⚠ 不如直说
-            println!("✗ Clash API       {ec} 不可达（内核未运行 / controller 未开）");
-            fails += 1;
-        }
-        None => {
-            println!(
-                "⚠ Clash API       未配置或不可达，跳过内核层判定（传 --api 127.0.0.1:9090 指定）"
-            );
-        }
-    }
-
-    // 阶段 5: HTTP 首字节耗时
-    let (ok, ms) = http_first_byte(&format!("https://{domain}/"));
-    if ok {
-        println!("✓ HTTPS 首字节    {ms}ms");
-        if ms > 3000 {
-            println!("  ⚠ 超过 3s — 结合上方 DNS 与路由阶段定位延迟根因");
-        }
-    } else {
-        // 立即失败（<1s）几乎都是拨号阶段的解析失败，不是超时
-        let kind = if ms < 1000 {
-            "立即失败 — 拨号/解析阶段拒绝，非超时"
-        } else {
-            "超时"
+    if controller_reachable(controller) {
+        let decisions = capture_decisions(controller, domain);
+        facts.router_match = decisions.router_match;
+        facts.dial = match (&decisions.dial_failure, &decisions.dial_lookup) {
+            (Some(raw), _) => DialFact::Failed(raw.clone()),
+            (None, Some(_)) => DialFact::Initiated,
+            (None, None) => DialFact::None,
         };
-        let hint = if resolved_fakeip {
-            "（系统解析给的已是 fakeip 假 IP）"
+        facts.dns_match = decisions.dns_match;
+        facts.target_excluded = facts.resolved_ip.as_deref().is_some_and(is_excluded);
+        facts.conn = live_attribution(domain, controller);
+    } else {
+        facts.kernel_unreachable = Some(controller.to_string());
+    }
+
+    facts.https = http_first_byte(&format!("https://{domain}/"));
+    facts
+}
+
+/// 从 `dns: match[N] <条件> => route(<server>)` 或 `=> predefined(...)` 解析
+/// `(条件串, server 展示串)`。只认内核 debug 日志。
+fn parse_dns_match(raw: &str) -> (String, String) {
+    let after = raw.split("match[").nth(1).unwrap_or(raw);
+    let cond = after
+        .split_once(']')
+        .map_or("", |(_, rest)| rest.split(" => ").next().unwrap_or(rest))
+        .trim()
+        .to_string();
+    let server = if let Some(inner) = raw.split("=> predefined(").nth(1) {
+        let ip = inner
+            .split("IN A ")
+            .nth(1)
+            .map(|s| s.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.')))
+            .filter(|s| !s.is_empty());
+        ip.map_or_else(|| "predefined".to_string(), |ip| format!("predefined {ip}"))
+    } else if let Some(s) = raw.split("=> route(").nth(1) {
+        s.split(')').next().unwrap_or(s).to_string()
+    } else {
+        raw.split("=> ").nth(1).unwrap_or("route").to_string()
+    };
+    (cond, server)
+}
+
+/// 规则串里 ` => ` 之前的条件部分，去内核日志的 `router: match[N] ` 前缀。
+fn rule_condition(raw: &str) -> String {
+    let head = raw.split(" => ").next().unwrap_or(raw);
+    head.split("match[")
+        .nth(1)
+        .and_then(|s| s.split_once(']').map(|(_, rest)| rest))
+        .unwrap_or(head)
+        .trim()
+        .to_string()
+}
+
+/// 拨号失败行里的错误码（`lookup failed for <domain>: (exchange4: NXDOMAIN | ...)`）。
+fn dial_failure_code(raw: &str) -> String {
+    raw.split("exchange4: ")
+        .nth(1)
+        .and_then(|s| {
+            s.split(|c: char| c.is_whitespace() || c == '|' || c == ')')
+                .next()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or("lookup failed")
+        .to_string()
+}
+
+/// 路由行与其中的出站。来源优先级：存续连接 > 内核路由日志 > route_exclude_address
+/// 说明 > 未捕获。
+fn route_row(f: &Facts) -> (String, Option<String>) {
+    if let Some(m) = &f.conn
+        && let Some(outbound) = m.chains.first()
+    {
+        return (
+            format!(
+                "路由   {} → {}   链路 {}",
+                rule_condition(&m.rule),
+                outbound,
+                m.chains.join(" → ")
+            ),
+            Some(outbound.clone()),
+        );
+    }
+    if let Some(raw) = &f.router_match
+        && let Some(target) = route_target(raw)
+    {
+        return (
+            format!("路由   {} → {target}", rule_condition(raw)),
+            Some(target.to_string()),
+        );
+    }
+    if f.target_excluded {
+        return (
+            "路由   未经路由判定（目标在 route_exclude_address 内，直连）".to_string(),
+            None,
+        );
+    }
+    (
+        "路由   未捕获   没有存续连接，也没抓到日志".to_string(),
+        None,
+    )
+}
+
+/// 把事实渲染成报告文本与失败段数。纯函数：不碰网络、不读磁盘。
+fn render(f: &Facts) -> (String, u8) {
+    let (route_line, route_outbound) = if f.kernel_unreachable.is_some() {
+        (String::new(), None)
+    } else {
+        route_row(f)
+    };
+
+    let mut failures = 0u8;
+    let mut lines: Vec<String> = Vec::new();
+
+    match &f.resolved_ip {
+        Some(ip) if f.resolved_fakeip => lines.push(format!("解析   {ip}   fakeip，由内核接管")),
+        Some(ip) => lines.push(format!("解析   {ip}   真实 IP")),
+        None => {
+            lines.push("解析   ✗ 解析失败/超时".to_string());
+            failures += 1;
+        }
+    }
+
+    if f.kernel_unreachable.is_some() {
+        failures += 1;
+        lines.push("内核   ✗ 不可达，已跳过 DNS / 路由 / 链路".to_string());
+    } else {
+        lines.push(match &f.dns_match {
+            Some(raw) => {
+                let (cond, server) = parse_dns_match(raw);
+                format!("DNS    {server}   ← {cond}")
+            }
+            None => "DNS    未捕获   命中缓存，或日志级别不是 debug".to_string(),
+        });
+        match &f.dial {
+            DialFact::Failed(raw) => {
+                failures += 1;
+                lines.push(format!(
+                    "拨号   ✗ lookup failed: {}",
+                    dial_failure_code(raw)
+                ));
+                lines.push(
+                    "       拨号解析不经 dns.rules，只认 route.default_domain_resolver".to_string(),
+                );
+            }
+            DialFact::Initiated => lines.push("拨号   · 已发起，未观察到结果".to_string()),
+            DialFact::None => {}
+        }
+        lines.push(route_line);
+    }
+
+    let (ok, ms) = f.https;
+    if ok {
+        if f.kernel_unreachable.is_some() {
+            lines.push(format!(
+                "连通   HTTPS 首字节 {ms}ms（内核不可达，路径未确认）"
+            ));
+        } else {
+            lines.push(format!("连通   HTTPS 首字节 {ms}ms"));
+            if ms > 3000 {
+                lines.push("  ⚠ 超过 3s — 结合上方 DNS 与路由定位延迟根因".to_string());
+            }
+        }
+    } else {
+        failures += 1;
+        let kind = if ms < 1000 {
+            format!("立即失败 {ms}ms（拨号被拒，不是超时）")
+        } else {
+            format!("超时 {ms}ms")
+        };
+        lines.push(format!("连通   ✗ {kind}"));
+    }
+
+    let conclusion = if f.resolved_ip.is_none() {
+        "系统解析失败".to_string()
+    } else if let Some(controller) = &f.kernel_unreachable {
+        format!("内核不可达（{controller}）")
+    } else if matches!(f.dial, DialFact::Failed(_)) {
+        "拨号解析失败".to_string()
+    } else if !ok {
+        let kind = if ms < 1000 { "立即失败" } else { "超时" };
+        let hint = if f.resolved_fakeip {
+            "（系统解析为 fakeip）"
         } else {
             ""
         };
-        println!("✗ HTTPS 首字节    {ms}ms ({kind}){hint}");
-        fails += 1;
-    }
+        format!("HTTPS 失败 {kind} {ms}ms{hint}")
+    } else {
+        match route_outbound.as_deref() {
+            Some("direct") => format!("直连，HTTPS {ms}ms"),
+            Some(outbound) => format!("经 {outbound} 出站，HTTPS {ms}ms"),
+            None => "通，但路由判定未捕获".to_string(),
+        }
+    };
 
-    fails
+    let mark = if failures == 0 { "✓" } else { "✗" };
+    let mut text = format!("{}  {mark} {conclusion}\n\n", f.domain);
+    for line in &lines {
+        text.push_str(line);
+        text.push('\n');
+    }
+    (text, failures)
+}
+
+/// 执行一次全链路探测并打印报告；返回是否全部通过（任一 ✗ 段即 false）。
+pub fn trace(domain: &str, controller: &str) -> bool {
+    let facts = collect_facts(domain, controller);
+    let (text, failures) = render(&facts);
+    print!("{text}");
+    failures == 0
 }
 
 #[cfg(test)]
@@ -800,21 +886,6 @@ mod tests {
         assert!(g.dial_failure.as_deref().unwrap_or("").contains("NXDOMAIN"));
     }
 
-    /// fakeip 答案被抓出来，供上层判定「不算成功」。
-    #[test]
-    fn absorb_line_captures_fakeip_answer() {
-        let mut ids = vec!["333".to_string()];
-        let mut g = KernelDecisions::default();
-        absorb_line(
-            "[333 1ms] dns: exchanged A ooooo.space. 600 IN A 198.18.0.2",
-            "ooooo.space",
-            &mut ids,
-            &mut g,
-        );
-        assert_eq!(g.fakeip_answer.as_deref(), Some("198.18.0.2"));
-        assert!(is_fakeip(g.fakeip_answer.as_deref().unwrap_or("")));
-    }
-
     /// 拨号解析的三行证据（发起 / 成功 / 失败）都要能抓到，且互不覆盖。
     /// 这是报告里「出站拨号解析」段的唯一数据来源。
     #[test]
@@ -880,32 +951,40 @@ mod tests {
         // 无 id 行不带域名，无从判断归属，不得收下（否则又是「第一条 match」污染）
         assert!(g.dns_match.is_none(), "无域名的无 id 行不应被收下");
 
+        // 同查询的 exchange 行确立域名归属，随后的无 id match 行据此被收下
         absorb_line(
-            "dns: exchanged A prometheus.ooooo.space. 600 IN A 198.18.0.2",
+            "dns: exchange prometheus.ooooo.space. IN A",
             "prometheus.ooooo.space",
             &mut ids,
             &mut g,
         );
-        assert_eq!(g.fakeip_answer.as_deref(), Some("198.18.0.2"));
+        assert_eq!(
+            g.recent_dns_domain.as_deref(),
+            Some("prometheus.ooooo.space")
+        );
+        absorb_line(
+            "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
+            "prometheus.ooooo.space",
+            &mut ids,
+            &mut g,
+        );
+        assert!(g.dns_match.as_deref().unwrap_or("").contains("dns-fakeip"));
 
         // 别的域名的无 id 行仍须拒绝
         let mut g2 = KernelDecisions::default();
+        absorb_line(
+            "dns: exchange ntp.ubuntu.com. IN A",
+            "prometheus.ooooo.space",
+            &mut Vec::new(),
+            &mut g2,
+        );
         absorb_line(
             "dns: match[2] query_type=[A AAAA] => route(dns-fakeip)",
             "prometheus.ooooo.space",
             &mut Vec::new(),
             &mut g2,
         );
-        absorb_line(
-            "dns: exchanged A ntp.ubuntu.com. 600 IN A 198.18.0.9",
-            "prometheus.ooooo.space",
-            &mut Vec::new(),
-            &mut g2,
-        );
-        assert!(
-            g2.fakeip_answer.is_none(),
-            "无 id 且域名不匹配的行不得被收下"
-        );
+        assert!(g2.dns_match.is_none(), "无 id 且域名不匹配的行不得被收下");
     }
 
     /// 多行载荷（here-doc 日志）会被拼成一行、整体命中域名与决策子串，
@@ -922,7 +1001,7 @@ mod tests {
         );
         // 整条载荷里同时命中域名与两类决策子串，未拦下则会被收成拨号成功
         assert!(
-            g.dial_success.is_none() && g.fakeip_answer.is_none() && g.dial_lookup.is_none(),
+            g.dial_success.is_none() && g.recent_dns_domain.is_none() && g.dial_lookup.is_none(),
             "多行载荷不应被当成一条日志: {g:?}"
         );
     }
@@ -1127,6 +1206,125 @@ mod tests {
         let m = parse_conn_match(&v, "demo.test").expect("sniffHost 应命中");
         assert_eq!(m.rule, "domain_suffix=demo.test => route(proxy)");
         assert_eq!(m.chains, vec!["proxy".to_string(), "selfhost".to_string()]);
+    }
+
+    /// 五个验收场景的渲染逐字比对。事实全部合成，渲染不碰网络。
+    fn assert_render(facts: &Facts, expected: &str) {
+        let (text, _) = render(facts);
+        assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn render_scenario_a_proxy() {
+        assert_render(
+            &Facts {
+                domain: "app.example.test".into(),
+                resolved_ip: Some("198.18.0.13".into()),
+                resolved_fakeip: true,
+                dns_match: Some("dns: match[2] query_type=[A AAAA] => route(dns-fakeip)".into()),
+                conn: Some(ConnMatch {
+                    rule: "rule_set=MyProxy => route(proxy)".into(),
+                    chains: vec!["proxy".into(), "selfhost".into(), "vps-hy2".into()],
+                }),
+                https: (true, 230),
+                ..Facts::default()
+            },
+            "app.example.test  ✓ 经 proxy 出站，HTTPS 230ms\n\n\
+解析   198.18.0.13   fakeip，由内核接管\n\
+DNS    dns-fakeip   ← query_type=[A AAAA]\n\
+路由   rule_set=MyProxy → proxy   链路 proxy → selfhost → vps-hy2\n\
+连通   HTTPS 首字节 230ms\n",
+        );
+    }
+
+    #[test]
+    fn render_scenario_b_direct_cn() {
+        assert_render(
+            &Facts {
+                domain: "cn.example.test".into(),
+                resolved_ip: Some("203.0.113.8".into()),
+                dns_match: Some(
+                    "dns: match[1] rule_set=ChinaMax-dns => route(dns-direct-cn)".into(),
+                ),
+                conn: Some(ConnMatch {
+                    rule: "rule_set=ChinaMax => route(direct)".into(),
+                    chains: vec!["direct".into()],
+                }),
+                https: (true, 35),
+                ..Facts::default()
+            },
+            "cn.example.test  ✓ 直连，HTTPS 35ms\n\n\
+解析   203.0.113.8   真实 IP\n\
+DNS    dns-direct-cn   ← rule_set=ChinaMax-dns\n\
+路由   rule_set=ChinaMax → direct   链路 direct\n\
+连通   HTTPS 首字节 35ms\n",
+        );
+    }
+
+    #[test]
+    fn render_scenario_c_dial_failure() {
+        assert_render(
+            &Facts {
+                domain: "photo.int.example.test".into(),
+                resolved_ip: Some("192.168.1.46".into()),
+                dns_match: Some(
+                    "dns: match[0] domain_suffix=.int.example.test => predefined(NOERROR,*. 3600 IN A 192.168.1.46)"
+                        .into(),
+                ),
+                dial: DialFact::Failed(
+                    "dns: lookup failed for photo.int.example.test: (exchange4: NXDOMAIN | exchange6: NXDOMAIN)"
+                        .into(),
+                ),
+                target_excluded: true,
+                https: (false, 8),
+                ..Facts::default()
+            },
+            concat!(
+                "photo.int.example.test  ✗ 拨号解析失败\n",
+                "\n",
+                "解析   192.168.1.46   真实 IP\n",
+                "DNS    predefined 192.168.1.46   ← domain_suffix=.int.example.test\n",
+                "拨号   ✗ lookup failed: NXDOMAIN\n",
+                "       拨号解析不经 dns.rules，只认 route.default_domain_resolver\n",
+                "路由   未经路由判定（目标在 route_exclude_address 内，直连）\n",
+                "连通   ✗ 立即失败 8ms（拨号被拒，不是超时）\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn render_scenario_d_kernel_unreachable() {
+        assert_render(
+            &Facts {
+                domain: "app.example.test".into(),
+                resolved_ip: Some("104.21.0.1".into()),
+                kernel_unreachable: Some("127.0.0.1:9090".into()),
+                https: (true, 310),
+                ..Facts::default()
+            },
+            "app.example.test  ✗ 内核不可达（127.0.0.1:9090）\n\n\
+解析   104.21.0.1   真实 IP\n\
+内核   ✗ 不可达，已跳过 DNS / 路由 / 链路\n\
+连通   HTTPS 首字节 310ms（内核不可达，路径未确认）\n",
+        );
+    }
+
+    #[test]
+    fn render_scenario_e_uncaptured_route() {
+        assert_render(
+            &Facts {
+                domain: "app.example.test".into(),
+                resolved_ip: Some("198.18.0.13".into()),
+                resolved_fakeip: true,
+                https: (true, 230),
+                ..Facts::default()
+            },
+            "app.example.test  ✓ 通，但路由判定未捕获\n\n\
+解析   198.18.0.13   fakeip，由内核接管\n\
+DNS    未捕获   命中缓存，或日志级别不是 debug\n\
+路由   未捕获   没有存续连接，也没抓到日志\n\
+连通   HTTPS 首字节 230ms\n",
+        );
     }
 
     /// 探针只走显式回环的 mixed 入站，与 controller 守卫同一纪律。

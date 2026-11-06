@@ -102,12 +102,12 @@ test("check downloads the public template and performs the real kernel check", a
   expect(r.stdout).toContain("log.level: warn");
 }, 30000);
 
-test("trace reports successful public resolver, live rule-set route and HTTPS first byte", async () => {
+test("trace reports actual A, public DNS server, PublicExample rule set and direct chain over HTTPS", async () => {
   const r = await run("trace-public-https", ["trace", "example.com", "--api", "127.0.0.1:19191"]);
   expect(r.exit, r.stdout + r.stderr).toBe(0);
-  expect(r.stdout).toContain("✓ 系统 resolver");
-  expect(r.stdout).toContain("domain_suffix=example.com => public-dns");
-  expect(r.stdout).toMatch(/✓ live 路由归属.*PublicExample.*direct/i);
-  expect(r.stdout).toContain("✓ 静态规则"); expect(r.stdout).toContain("PublicExample");
-  expect(r.stdout).toContain("✓ HTTPS 首字节");
+  expect(r.stdout).toContain("真实 IP");
+  expect(r.stdout).toContain("public-dns");
+  expect(r.stdout).toContain("PublicExample");
+  expect(r.stdout).toContain("direct");
+  expect(r.stdout).toContain("HTTPS 首字节");
 }, 30000);
