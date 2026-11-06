@@ -3,7 +3,7 @@
 //! `collect_facts` 是唯一的 IO 段；`render` 只把事实排成「第一行结论 + 因果链」，
 //! 逐字单测不碰网络；`trace` 串起两者并给出退出码。
 
-use super::log::{capture_decisions, route_target};
+use super::log::{KernelDecisions, capture_decisions, route_target};
 use super::net::{is_excluded, is_fakeip};
 use super::probe::{ConnMatch, http_first_byte, live_attribution, system_resolve};
 
@@ -50,12 +50,8 @@ fn collect_facts(domain: &str, controller: &str) -> Facts {
 
     if crate::clashapi::reachable(controller) {
         let decisions = capture_decisions(controller, domain);
+        facts.dial = dial_fact(&decisions);
         facts.router_match = decisions.router_match;
-        facts.dial = match (&decisions.dial_failure, &decisions.dial_lookup) {
-            (Some(raw), _) => DialFact::Failed(raw.clone()),
-            (None, Some(_)) => DialFact::Initiated,
-            (None, None) => DialFact::None,
-        };
         facts.dns_match = decisions.dns_match;
         facts.target_excluded = facts.resolved_ip.as_deref().is_some_and(is_excluded);
         facts.conn = live_attribution(domain, controller);
@@ -65,6 +61,14 @@ fn collect_facts(domain: &str, controller: &str) -> Facts {
 
     facts.https = http_first_byte(&format!("https://{domain}/"));
     facts
+}
+
+fn dial_fact(d: &KernelDecisions) -> DialFact {
+    match (&d.dial_failure, &d.dial_lookup) {
+        (Some(raw), _) => DialFact::Failed(raw.clone()),
+        (None, Some(_)) if d.dial_success.is_none() => DialFact::Initiated,
+        _ => DialFact::None,
+    }
 }
 
 /// 从 `dns: match[N] <条件> => route(<server>)` 或 `=> predefined(...)` 解析
@@ -148,7 +152,7 @@ fn route_row(f: &Facts) -> (String, Option<String>) {
     if f.target_excluded {
         return (
             "路由   未经路由判定（目标在 route_exclude_address 内，直连）".to_string(),
-            None,
+            Some("direct".to_string()),
         );
     }
     (
@@ -351,6 +355,33 @@ DNS    dns-direct-cn   ← rule_set=ChinaMax-dns\n\
                 "连通   ✗ 立即失败 8ms（拨号被拒，不是超时）\n",
             ),
         );
+    }
+
+    /// 目标在 route_exclude_address 内且 HTTPS 成功：绕过 TUN 是确定的直连，不是「未捕获」。
+    #[test]
+    fn excluded_target_success_is_direct() {
+        let (text, failures) = render(&Facts {
+            domain: "nas.int.example.test".into(),
+            resolved_ip: Some("192.168.1.46".into()),
+            target_excluded: true,
+            https: (true, 12),
+            ..Facts::default()
+        });
+        assert_eq!(failures, 0);
+        assert!(
+            text.starts_with("nas.int.example.test  ✓ 直连，HTTPS 12ms\n"),
+            "{text}"
+        );
+    }
+
+    /// 拨号解析成功（lookup domain → lookup succeed）不展示；只有发起而无结果才提示。
+    #[test]
+    fn dial_fact_hides_success() {
+        let mut d = KernelDecisions::default();
+        d.dial_lookup = Some("dns: lookup domain a.test".into());
+        assert_eq!(dial_fact(&d), DialFact::Initiated);
+        d.dial_success = Some("lookup succeed for a.test: 1.2.3.4".into());
+        assert_eq!(dial_fact(&d), DialFact::None);
     }
 
     #[test]

@@ -46,10 +46,12 @@ fn parse_conn_match(v: &Value, domain: &str) -> Option<ConnMatch> {
         if !hit {
             continue;
         }
+        // 内核 /connections 的 chains 是末端节点在前、策略组在后；反转成「组 → 节点」
         let chains: Vec<String> = c["chains"]
             .as_array()
             .map(|a| {
                 a.iter()
+                    .rev()
                     .filter_map(|x| x.as_str().map(String::from))
                     .collect()
             })
@@ -205,12 +207,12 @@ mod tests {
         );
     }
 
-    /// host 为空时按 sniffHost 后缀回退命中；chains 全量保留。
+    /// host 为空时按 sniffHost 后缀回退命中；chains 取内核原始顺序（末端在前）并反转。
     #[test]
     fn parse_conn_match_falls_back_to_sniff_host() {
         let v = serde_json::json!({
             "connections": [{
-                "chains": ["proxy", "selfhost"],
+                "chains": ["selfhost", "proxy"],
                 "metadata": {"host": "", "sniffHost": "speed.demo.test"},
                 "rule": "domain_suffix=demo.test => route(proxy)"
             }]

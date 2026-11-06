@@ -67,7 +67,7 @@ pub(super) struct KernelDecisions {
     /// 拨号解析失败证据行（`lookup failed for <domain>: ...`）
     pub(super) dial_failure: Option<String>,
     /// 拨号解析成功行（`lookup succeed for <domain>: ...`）
-    dial_success: Option<String>,
+    pub(super) dial_success: Option<String>,
     /// 拨号解析发起行（`dns: lookup domain <domain>`）。
     /// 这行存在而整条链路无 dns: match，就是「拨号走 default_domain_resolver、
     /// 不经 dns.rules」的直接证据。
