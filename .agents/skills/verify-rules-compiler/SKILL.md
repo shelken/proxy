@@ -18,7 +18,7 @@ RUN=".sandbox-artifacts/verification/$(date -u +%Y%m%dT%H%M%SZ)"
 bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js launch --out "$RUN"
 ```
 
-launch 执行 `bun scripts/rules-compile.ts build --all`（33 个 tag），并把 commit、`index.yaml`/`template.json` 指纹与全部产物的 SHA-256 写入 `manifest.json`。`phase` 为 `ready` 才能继续。不要用旧 `generated/` 冒充本次构建。
+launch 执行 `bun scripts/rules-compile.ts build --all`，并把 commit、`settings.yaml` 指纹与全部产物的 SHA-256 写入 `manifest.json`。`phase` 为 `ready` 才能继续。不要用旧 `generated/` 冒充本次构建。
 
 不要直接跑 `just sandbox-loop`：它取 CI 产物并起 sbtools 服务端，会牵入个人订阅；规则验证不需要它。
 

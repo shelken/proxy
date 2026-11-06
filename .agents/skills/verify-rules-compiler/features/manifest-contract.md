@@ -1,30 +1,31 @@
-# 清单-底模契约
+# 设置-底模契约
 
-`config/rules/index.yaml` 声明的 tag 集合必须与 `config/sing-box/template.json`（底模）声明的规则集一致。用户改了一边忘了另一边时，构建期的校验会直接报出是哪个 tag 漂移
+三份底模由 `config/sing-box/settings.yaml` + `base.yaml` + `platforms/` 生成，规则声明、路由引用与 `-dns` 伴生出自同一次生成，不会漂移。构建期校验会直接报出是哪条规则、哪个名字出了问题
 
 ## Sub-features
 
-- `contract-check`：`rules-compile.ts check` 交叉比对清单与底模，四条不变量：清单 tag 须在 `route.rule_set` 声明、须出现在 `route.rules`、DNS 引用推出的 `-dns` 伴生须已声明且不得被路由、底模不得声明「清单之外且非伴生」的 tag
-- `contract-publish`：发布分支只包含清单产出的产物，底模引用的 URL 必然存在
-- `contract-dns`：校验的是「底模 DNS 引用的 `-dns` 伴生已声明且未参与路由」，不检查伴生产物是否存在或能否域名化
+- `contract-generate`：`scripts/build-config.ts --check` 重算三份产物并与磁盘逐字节比对，不一致时报出首个差异字节
+- `contract-settings`：`settings.yaml` 的校验覆盖规则名重复、去向无效、来源不存在、分组默认值不在候选里、`tag` 与产物名冲突
+- `contract-anchor`：DNS 与 QUIC 规则按名字引用的 7 个锚点改名或改去向时，生成器打印 `WARN` 并省略依赖它的规则（`inactiveAnchors`）
+- `contract-publish`：发布分支只包含 `settings.yaml` 产出的产物，底模引用的 URL 必然存在
 
 ## How to get to it (user POV)
 
-- 改清单：`config/rules/index.yaml`
-- 改底模：`config/sing-box/modules.yaml`（一张表：`services`、`catalog`、每个平台的 `roles` 条目列表；顺序 = 合并顺序）与 `config/sing-box/fragments/`（片段内容），再 `just template-build` 生成三份 template
-- 校验：`just rules-check`（读清单与 `template.json` 双向交叉校验）或 `just verify`（其上再加底模装配、Rust 与模板测试）
+- 改规则与分组：`config/sing-box/settings.yaml`，本地列表在 `config/rules/custom/`
+- 改原生字段：`config/sing-box/base.yaml` 与 `config/sing-box/platforms/`
+- 生成：`just template-build`
+- 校验：`just template-check` 或 `just verify`（其上再加 Rust 与模板结构测试）
 
 ## Driving it with verify.js
 
 Preconditions: 已 `launch`
 
-- 契约通过：`doctor` 会执行 `bun scripts/rules-compile.ts check`，失败即列出漂移的 tag
-- 全量校验：`just verify` = `check-rust-fast` + `check-rust-test` + `check-template`（`template-check` + `check-singbox` + `check-deprecated` + `bun test` 三个模板结构测试）+ `rules-check`；`template-check` 按 `modules.yaml` 重算三份产物并逐字节比对
-- 发布侧核对：`gh api repos/shelken/proxy/contents/singbox?ref=sing-box-rules --jq length` 返回的是**文件数**（`.json` + `.srs` + 伴生，约为 tag 数的数倍），不是 tag 数
+- 契约通过：`doctor` 会执行 `bun scripts/build-config.ts --check`，失败即列出漂移位置
+- 全量校验：`just verify` = `check-rust-fast` + `check-rust-test` + `check-template`（`template-check` + `check-singbox` + `check-deprecated` + `bun test` 三个模板结构测试）+ `check-rules`
+- 发布侧核对：`gh api repos/shelken/proxy/contents/singbox?ref=sing-box-rules --jq length` 返回的是**文件数**（`.json` + `.srs` + 伴生，约为规则数的数倍），不是规则数
 
 ## Gotchas
 
-- `rules-check` 校验 tag 集合的四种越界，但**不比出站去向**（direct / proxy / reject），去向由底模单方面决定，清单不重复声明
-- 三份 template 由 `just template-build`（`scripts/modules-build.ts` 按模块表物化片段，再交给内核 `sing-box merge`）生成；直接手改会在下一次构建被覆盖（`just template-check` 会先报出不一致）
-- 内联规则集（代码里固定的 `zone-internal`）不是清单产物，不参与 DNS 伴生要求；当前公共底模没有使用它
-- 发布 URL 指向 `sing-box-rules` 分支而非 `main`；改底模后必须等 CI 重新发布，否则 URL 仍指向旧产物
+- 生成器不校验出站组是否有节点，空组由 sbtools 装配时处理：整组跳过，直指它的路由规则与 DNS detour 回退 `proxy`
+- 三份 template 是生成产物，直接手改会在下一次构建被覆盖（`just template-check` 会先报出不一致）
+- 发布 URL 指向 `sing-box-rules` 分支而非 `main`；改规则后必须等 CI 重新发布，否则 URL 仍指向旧产物

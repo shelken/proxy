@@ -11,7 +11,7 @@
 
 ## How to get to it (user POV)
 
-- 清单里写 `TagName: geosite:telegram` 或 `TagName: geoip:cn`（`config/rules/index.yaml`）。
+- `config/sing-box/settings.yaml` 的 `rules` 里写 `{ name: Telegram, source: geosite:telegram, to: proxy }` 或 `source: geoip:cn`。
 - 构建：`just rules-build` 或 `just rules-build-one <tag>`。
 - 消费：`template.json` 的 `route.rule_set` 以 `https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/<tag>.srs` 引用。
 - 直接下载：浏览器/`curl` 打开上述 URL。

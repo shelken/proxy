@@ -6,7 +6,7 @@
 
 - 从仓库根运行，工作区干净（`git status --porcelain` 为空）或已知的未提交改动已记录。
 - `proxy-test` VM 处于 Running（`just vm-start`），且能通过 `limactl shell --workdir /work proxy-test` 进入。
-- Launch 会在宿主联网重跑全量构建（33 个 tag），用同一份 `generated/` 供所有功能文件使用。
+- Launch 会在宿主联网重跑全量构建，用同一份 `generated/` 供所有功能文件使用。
 - 产物只以本次 launch 生成的为准；不要复用别的运行留下的 `generated/`。
 - 不要驱动 `just sandbox-loop` 起的服务端，它牵入个人订阅；本地图只用 `verify.js` 在 VM 内直接起 sing-box。
 
@@ -39,6 +39,6 @@
 
 - [外部规则镜像](./external-mirror.md)：`geosite:x` / `geoip:x` 直接镜像 meta-rules-dat 三端原生资产。
 - [内部 YAML AST 编译](./custom-yaml.md)：`custom/*.yaml` → AST → 三端产物（含 logical 树、端口范围、no-resolve）。
-- [清单-底模契约](./manifest-contract.md)：`index.yaml` 的 tag 集合与 `template.json` 声明一致。
+- [设置-底模契约](./manifest-contract.md)：`settings.yaml` 生成的三份底模与磁盘一致，锚点失效有警告。
 - [DNS 伴生产物](./dns-companion.md)：`-dns` 规则集的产出与省略规则。
 - [沙箱内核命中](./sandbox-kernel.md)：VM 内 sing-box 加载 `.srs` 并按规则路由。
