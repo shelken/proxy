@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.2](https://github.com/shelken/proxy/compare/v0.8.1...v0.8.2) - 2026-11-07
+
+### Fixed
+
+- *(ci)* 修复 target 缓存污染导致旧 CPU 上 SIGILL，固定 runner 并精简流水线 ([#161](https://github.com/shelken/proxy/pull/161))
+
 ## [0.8.1](https://github.com/shelken/proxy/compare/v0.8.0...v0.8.1) - 2026-11-07
 
 ### Fixed
