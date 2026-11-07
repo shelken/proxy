@@ -5,8 +5,7 @@ edition = "2024"
 description = "设备侧 sing-box 配置同步 CLI"
 
 [dependencies]
-# 固定 3.4.2：3.5.x 在无 AVX2 的 x86 CPU 上处理 HTTPS 时 SIGILL，见 #157、#158。排查清楚前不得升级
-ureq = "=3.4.2"
+ureq = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 base64 = "0.23"
