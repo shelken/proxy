@@ -42,7 +42,7 @@ env:
 jobs:
   audit:
     name: security audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -54,7 +54,7 @@ jobs:
         run: cargo audit --file Cargo.lock
   quality:
     name: fmt + clippy + test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: scripts/sbtools-rs
@@ -110,7 +110,7 @@ jobs:
   # 每次改动均执行镜像构建以在 CI 提前验证 Dockerfile，不执行推送
   docker:
     name: docker build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 

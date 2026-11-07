@@ -6,7 +6,7 @@
 #   - Linux amd64：服务端容器（amd64 节点，集群 worker 是 Intel）
 #
 # 每平台在对应原生 runner 上构建，不用 QEMU 模拟：macOS 目标在 macos-15，
-# arm64 Linux 在 ubuntu-24.04-arm，amd64 Linux 在 ubuntu-latest。
+# arm64 Linux 在 ubuntu-24.04-arm，amd64 Linux 在 ubuntu-24.04。
 # 原生构建的附带好处是每个产物都能在其构建机上直接跑 version 冒烟，
 # 模拟构建做不到这一点（异架构二进制无法执行）。
 #
@@ -45,7 +45,7 @@ jobs:
   # 版本由版本 PR 统一提交，构建只校验不改写，保持 Cargo.lock 严格一致
   prepare:
     name: verify version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
       # release 发版 / snapshot 只验证 / skip 该版本已发布，无需构建
@@ -127,7 +127,7 @@ jobs:
             runner: ubuntu-24.04-arm
             artifact: sbtools-aarch64-unknown-linux-musl
           - target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             artifact: sbtools-x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v7
@@ -221,7 +221,7 @@ jobs:
     name: publish release
     needs: [prepare, binaries, docker-merge]
     if: needs.prepare.outputs.mode == 'release'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -289,7 +289,7 @@ jobs:
             runner: ubuntu-24.04-arm
             artifact: sbtools-aarch64-unknown-linux-musl
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             artifact: sbtools-x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v7
@@ -380,7 +380,7 @@ jobs:
     name: merge image manifest
     needs: [prepare, docker]
     if: needs.prepare.outputs.mode != 'skip'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
