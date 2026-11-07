@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.1](https://github.com/shelken/proxy/compare/v0.8.0...v0.8.1) - 2026-11-07
+
+### Fixed
+
+- *(deps)* 固定 ureq 为 3.4.2，并禁止 Renovate 升级 ([#159](https://github.com/shelken/proxy/pull/159))
+
 ## [0.8.0](https://github.com/shelken/proxy/compare/v0.7.4...v0.8.0) - 2026-11-06
 
 ### Added
