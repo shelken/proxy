@@ -7,6 +7,10 @@
 #
 # 每平台在对应原生 runner 上构建，不用 QEMU 模拟：macOS 目标在 macos-15，
 # arm64 Linux 在 ubuntu-24.04-arm，amd64 Linux 在 ubuntu-24.04。
+#
+# runner 固定版本，不用 ubuntu-latest：musl 目标的 C 代码（ring）由 runner 上的 gcc 编译，
+# 镜像迁移会悄悄换编译环境。2026-11 发布的 x86_64 二进制混进了旧 CPU 不支持的指令，
+# 在 Ivy Bridge 机器上 SIGILL（#157）。升级 runner 要显式改这里，并过 x86_64 的旧 CPU 冒烟。
 # 原生构建的附带好处是每个产物都能在其构建机上直接跑 version 冒烟，
 # 模拟构建做不到这一点（异架构二进制无法执行）。
 #
@@ -57,17 +61,12 @@ jobs:
       # prepare 只读清单与锁文件、查 Release，不读 git 历史，浅克隆即可
       - uses: actions/checkout@v7
 
-      # 内核版本只写在 .mise.toml。这里解析一次，docker 的两个架构 job 复用，
-      # 不必各自再装一遍 mise
-      - uses: jdx/mise-action@v5
-        with:
-          cache: false
-          install: false
-
+      # 内核版本只写在 .mise.toml。这里解析一次，docker 的两个架构 job 复用。
+      # 用 Python 内置 tomllib 读，不必为一个版本号装 mise
       - id: kernel
         run: |
           set -euo pipefail
-          V=$(mise config get --file .mise.toml tools.sing-box)
+          V=$(python3 -c "import tomllib; print(tomllib.load(open('.mise.toml','rb'))['tools']['sing-box'])")
           test -n "$V" || { echo "无法从 .mise.toml 读取 sing-box 版本"; exit 1; }
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "sing-box 内核版本: $V"
@@ -145,26 +144,17 @@ jobs:
         if: contains(matrix.target, 'linux')
         run: musl-gcc --version
 
-      # 缓存键必须含 target：三平台并行跑，共享键会让不同架构的
-      # 构建产物互相覆盖（cargo 会因架构不符而重编或直接报错）
-      - name: Cache cargo
-        uses: actions/cache@v6
+      # 三平台并行跑，key 必须含 target：共享键会让不同架构的构建产物互相覆盖。
+      # 不用 actions/cache 存整个 target 加 restore-keys 回退：ring 的 C 编译产物版本不变就会
+      # 被一直复用，一次坏产物（换 runner 镜像、换 gcc）会传染之后所有构建，且发版时看不出来。
+      # rust-cache 的键含 rustc 版本与锁文件，换环境即失效
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: sbtools-nocache-exp-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ matrix.target }}
 
-      # e2e 测试执行内核合并，sing-box 版本由 .mise.toml 固定，与本地及 ci-sbtools 同源
-      - uses: jdx/mise-action@v5
-        with:
-          cache: false
-
-      - name: Test
-        working-directory: scripts/sbtools-rs
-        run: cargo test --release --locked --target ${{ matrix.target }}
-
+      # 不在发版时重跑 cargo test：同一份代码已在 PR 上通过 ci-sbtools，
+      # 这里再测一遍要多编一份 release 测试产物（macOS 上 60 秒）。
+      # 发版真正需要证明的是产物本身，见下面的版本、静态链接与旧 CPU 冒烟
       # workspace 化后 target 目录在仓库根，不在 crate 目录
       - name: Build
         working-directory: scripts/sbtools-rs
@@ -201,6 +191,15 @@ jobs:
             echo "Linux 产物存在解释器段（PT_INTERP），非静态链接"; exit 1
           fi
           echo "$FILE_OUT" | grep -qE 'statically linked|static-pie linked'
+
+      # runner 的 CPU 都支持 BMI/AVX2，原生跑测不出「产物混进旧 CPU 不支持的指令」。
+      # 用 qemu 模拟 Ivy Bridge 跑一次服务端的 HTTPS 出站，指令不支持会直接 SIGILL。
+      # 只对 x86_64 做：线上旧机器是 x86，arm64 没有对应的基线问题
+      - name: Smoke on old CPU (IvyBridge)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get install -y -qq qemu-user
+          bash scripts/smoke-old-cpu.sh "${{ matrix.artifact }}"
 
       # overwrite: 重跑失败 job 时同名 artifact 已存在，不覆盖会直接报错
       - uses: actions/upload-artifact@v7

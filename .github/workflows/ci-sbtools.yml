@@ -1,12 +1,18 @@
 # sbtools Rust 门禁：严格 lint、全量测试。格式化由 prek 钩子保证。
 # 严格规则同时写在 src/lib.rs 与 src/main.rs 的 cfg 属性里，本工作流只需 -D warnings。
+#
+# runner 固定 ubuntu-24.04，不用 ubuntu-latest：musl 目标的 C 代码（ring）由 runner 上的
+# gcc 编译，镜像迁移会悄悄换编译环境。2026-11 发布的 x86_64 二进制混进了旧 CPU 不支持的
+# 指令，在 Ivy Bridge 机器上 SIGILL（#157）。升级 runner 要显式改这里，并过 docker job 的旧 CPU 冒烟。
 name: ci-sbtools
 
 on:
+  # push 只管 main：功能分支有 PR 时 pull_request 已经覆盖，两边都触发会白跑一遍
   push:
-    branches: ["**"]
+    branches: [main]
     paths:
       - "scripts/sbtools-rs/**"
+      - "scripts/smoke-old-cpu.sh"
       - "Cargo.toml"
       - "Cargo.lock"
       - "config/sing-box/template.json"
@@ -36,6 +42,11 @@ on:
 permissions:
   contents: read
 
+# 同一分支连续推送时只保留最新一次：旧的结果没人看
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -52,12 +63,10 @@ jobs:
       # RustSec 通告库每次运行实时拉取；检测有无已知漏洞
       - name: cargo audit
         run: cargo audit --file Cargo.lock
-  quality:
-    name: fmt + clippy + test
+
+  rust:
+    name: clippy + test
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: scripts/sbtools-rs
     steps:
       - uses: actions/checkout@v7
 
@@ -66,9 +75,11 @@ jobs:
         with:
           components: clippy
 
+      # workspace 清单在仓库根，target 也在根：不要给 rust-cache 写 workspaces，
+      # 旧写法指向 scripts/sbtools-rs/target，那里不存在，缓存只剩 30MB 的 registry，
+      # 每次都从零编译依赖
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: scripts/sbtools-rs -> target
+
       # 严格 lint 规则在 crate 属性中声明；此处统一把警告升级为错误
       - name: cargo clippy
         run: cargo clippy --all-targets --locked -- -D warnings
@@ -80,7 +91,22 @@ jobs:
           cache: true
           install_args: sing-box
 
-      # 结构测试与底模一致性校验都要 bun：先装好再跑
+      # release 配置的编译由 docker job 的 musl 构建覆盖，这里不再重复编一遍 release
+      - name: cargo test
+        run: cargo test --locked --all-targets
+
+  # 底模与规则的 bun 测试与 Rust 门禁互不依赖，单独一个 job 并行跑
+  templates:
+    name: template + rules tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v5
+        with:
+          cache: true
+          install_args: sing-box
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -90,23 +116,15 @@ jobs:
         env:
           SING_BOX: sing-box
         run: bun scripts/build-config.ts --check
-        working-directory: .
 
       # 结构测试：本地 just check-template 只跑这几个 .test.ts，CI 同语义。
       # kernel-routing.test.js 需要真实 tun0 设备，只能在 Lima 跑。
       - name: run template structural tests
         run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
-        working-directory: .
 
       - name: run config and rule compiler tests
         run: SING_BOX=$(which sing-box) bun test scripts/build-config.test.ts scripts/rules-compile.test.ts scripts/sandbox-loop.test.ts scripts/rule-set-local.test.ts
-        working-directory: .
 
-      - name: cargo test
-        run: cargo test --locked --all-targets
-
-      - name: cargo build (release)
-        run: cargo build --release --locked
   # 每次改动均执行镜像构建以在 CI 提前验证 Dockerfile，不执行推送
   docker:
     name: docker build
@@ -120,14 +138,15 @@ jobs:
           # "executable file not found" 静默退出，端口根本不会监听
           targets: x86_64-unknown-linux-musl
 
-      # ring（经 rustls）走 cc-rs 编 C 代码，musl 目标需要 musl-gcc
-      - name: Install musl toolchain
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      # ring（经 rustls）走 cc-rs 编 C 代码，musl 目标需要 musl-gcc；
+      # qemu-user 给下面的旧 CPU 冒烟用
+      - name: Install musl toolchain and qemu
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools qemu-user
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: scripts/sbtools-rs -> target
           shared-key: musl
+
       # 镜像已改为 COPY 预编译二进制，构建上下文里必须先有它。
       # 这里与 release 工作流同源同目标，避免「CI 绿但发版炸」。
       # workspace 化后 target 目录在仓库根，不在 crate 目录
@@ -136,6 +155,11 @@ jobs:
         run: |
           cargo build --release --locked --target x86_64-unknown-linux-musl
           cp ../../target/x86_64-unknown-linux-musl/release/sbtools ../../sbtools
+
+      # runner 的 CPU 都支持 BMI/AVX2，原生跑测不出「二进制混进旧 CPU 不支持的指令」。
+      # 用 qemu 模拟 Ivy Bridge 跑一次服务端的 HTTPS 出站，指令不支持会直接 SIGILL
+      - name: Smoke on old CPU (IvyBridge)
+        run: bash scripts/smoke-old-cpu.sh sbtools
 
       - uses: docker/setup-buildx-action@v4
 
@@ -148,14 +172,14 @@ jobs:
           test -n "$V" || { echo "无法从 .mise.toml 读取 sing-box 版本"; exit 1; }
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
+      # 镜像只有 alpine + 两个文件，构建不到 10 秒：不接 gha 缓存，
+      # 缓存的导入导出与它占用的 10GB 配额都比重建更贵
       - name: Build image (no push)
         uses: docker/build-push-action@v7
         with:
           context: .
           push: false
           build-args: SING_BOX_VERSION=${{ steps.kernel.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           load: true
           tags: sbtools-server:ci
 
