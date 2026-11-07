@@ -154,8 +154,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: sbtools-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: sbtools-${{ matrix.target }}-
+          key: sbtools-nocache-exp-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
 
       # e2e 测试执行内核合并，sing-box 版本由 .mise.toml 固定，与本地及 ci-sbtools 同源
       - uses: jdx/mise-action@v5
