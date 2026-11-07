@@ -23,5 +23,11 @@
       matchUpdateTypes: ["minor", "patch"],
       groupName: "cargo dependencies (non-major)",
     },
+    {
+      description: "ureq 3.5.x 在无 AVX2 的 x86 CPU 上 SIGILL，固定在 3.4.2（#157、#158），排查清楚前不升级；须排在 Cargo 分组规则之后才能覆盖它",
+      matchManagers: ["cargo"],
+      matchPackageNames: ["ureq"],
+      enabled: false,
+    },
   ],
 }
