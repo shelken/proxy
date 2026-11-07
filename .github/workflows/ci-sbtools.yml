@@ -53,7 +53,7 @@ env:
 jobs:
   audit:
     name: security audit
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -66,7 +66,7 @@ jobs:
 
   rust:
     name: clippy + test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -98,7 +98,7 @@ jobs:
   # 底模与规则的 bun 测试与 Rust 门禁互不依赖，单独一个 job 并行跑
   templates:
     name: template + rules tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -128,7 +128,7 @@ jobs:
   # 每次改动均执行镜像构建以在 CI 提前验证 Dockerfile，不执行推送
   docker:
     name: docker build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 

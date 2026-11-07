@@ -49,7 +49,7 @@ jobs:
   # 版本由版本 PR 统一提交，构建只校验不改写，保持 Cargo.lock 严格一致
   prepare:
     name: verify version
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.check.outputs.version }}
       # release 发版 / snapshot 只验证 / skip 该版本已发布，无需构建
@@ -219,7 +219,7 @@ jobs:
     name: publish release
     needs: [prepare, binaries, docker-merge]
     if: needs.prepare.outputs.mode == 'release'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -378,7 +378,7 @@ jobs:
     name: merge image manifest
     needs: [prepare, docker]
     if: needs.prepare.outputs.mode != 'skip'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: write
