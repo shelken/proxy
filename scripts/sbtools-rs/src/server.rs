@@ -103,16 +103,27 @@ fn assemble_base(
     Ok((tpl, direct_layer, source))
 }
 
+/// 网络层失败的错误前缀，见 `template::MSG_FETCH_FAILED`。
+const MSG_SUB_FETCH_FAILED: &str = "订阅拉取失败";
+const MSG_SUB_READ_FAILED: &str = "订阅读取失败";
+
 /// 订阅抓取：带 5MB 上限，防止机场响应过大拖垮服务。
 fn fetch_subscription_bounded(url: &str) -> Result<String, String> {
-    let res = crate::clashapi::agent_with_timeout(std::time::Duration::from_secs(10))
+    fetch_subscription_with_timeout(url, std::time::Duration::from_secs(10))
+}
+
+fn fetch_subscription_with_timeout(
+    url: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    let res = crate::clashapi::agent_with_timeout(timeout)
         .get(url)
         .call()
-        .map_err(|e| format!("订阅拉取失败: {e}"))?;
+        .map_err(|e| format!("{MSG_SUB_FETCH_FAILED}: {e}"))?;
     let mut body = String::new();
     std::io::Read::take(res.into_body().into_reader(), MAX_SUB_BODY as u64 + 1)
         .read_to_string(&mut body)
-        .map_err(|e| format!("订阅读取失败: {e}"))?;
+        .map_err(|e| format!("{MSG_SUB_READ_FAILED}: {e}"))?;
     if body.len() > MAX_SUB_BODY {
         return Err(format!(
             "订阅响应超过 {}MB 上限",
@@ -182,10 +193,25 @@ fn log_request(method: &str, path: &str, status: StatusCode, started: Instant, d
 
 /// 失败的状态码与对外原因。原因同时写进日志与响应体，因此先脱敏：
 /// 错误文本可能夹带订阅地址。
+///
+/// 解密失败 403；订阅或底模的网络层失败是上游故障：超时 504，其余 502；
+/// 载荷与内容校验类错误是 400。
 fn sub_failure(e: &str) -> (StatusCode, String) {
+    let upstream = [
+        MSG_SUB_FETCH_FAILED,
+        MSG_SUB_READ_FAILED,
+        template::MSG_FETCH_FAILED,
+        template::MSG_READ_FAILED,
+    ]
+    .iter()
+    .any(|m| e.contains(m));
     let status = if e.contains("解密失败") || e.contains("Base64URL") || e.contains("载荷长度")
     {
         StatusCode::FORBIDDEN
+    } else if upstream && (e.contains("timeout") || e.contains("timed out")) {
+        StatusCode::GATEWAY_TIMEOUT
+    } else if upstream {
+        StatusCode::BAD_GATEWAY
     } else {
         StatusCode::BAD_REQUEST
     };
@@ -340,14 +366,14 @@ mod tests {
         let e =
             "节点解析失败: 订阅拉取失败: timeout: global (https://airport.example/s?token=SECRET)";
         let (status, reason) = sub_failure(e);
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
         let line = logging::format_line(
             std::time::SystemTime::UNIX_EPOCH,
             Level::Warn,
             &request_message("GET", "/sub", status, 10196, &format!(" 原因: {reason}")),
         );
         for want in [
-            "GET /sub -> 400",
+            "GET /sub -> 504",
             "(10196ms)",
             "订阅拉取失败",
             "timeout: global",
@@ -359,6 +385,58 @@ mod tests {
                 !line.contains(leak) && !reason.contains(leak),
                 "泄漏 {leak}"
             );
+        }
+    }
+
+    /// 上游超时是 504，不是 400：用真实的 ureq 超时文本做分类，不手写错误串。
+    #[test]
+    fn upstream_timeout_maps_to_504() {
+        // 只接受连接、永不回应的上游
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/sub", listener.local_addr().unwrap());
+        let err = fetch_subscription_with_timeout(&url, std::time::Duration::from_millis(300))
+            .unwrap_err();
+        let (status, reason) = sub_failure(&format!("节点解析失败: {err}"));
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "实际原因: {reason}");
+    }
+
+    #[test]
+    fn unreachable_upstream_maps_to_502() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let err = fetch_subscription_with_timeout(
+            &format!("http://127.0.0.1:{port}/sub"),
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap_err();
+        let (status, reason) = sub_failure(&format!("节点解析失败: {err}"));
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "实际原因: {reason}");
+    }
+
+    #[test]
+    fn template_fetch_failure_maps_to_upstream_status() {
+        assert_eq!(
+            sub_failure("底模加载失败: 底模拉取失败 https://h.example/t.json: timeout: global").0,
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            sub_failure("底模加载失败: 底模拉取失败 https://h.example/t.json: http status: 503").0,
+            StatusCode::BAD_GATEWAY
+        );
+    }
+
+    /// 载荷与内容校验类错误仍是 400。
+    #[test]
+    fn validation_failures_stay_400() {
+        for e in [
+            "底模加载失败: 底模不是合法 JSON: expected value",
+            "节点解析失败: 未解析出任何节点：请检查源列表内容",
+            "template_url 仅支持 https，当前: http",
+        ] {
+            assert_eq!(sub_failure(e).0, StatusCode::BAD_REQUEST, "{e}");
         }
     }
 

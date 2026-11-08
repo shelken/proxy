@@ -4,12 +4,24 @@
 //! 下载内容要进入 `sing-box merge`，因此必须比订阅更严格地校验。
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::io::Read;
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 /// 底模响应体上限。生产底模约 16KB，1MB 足够且能挡住超大响应。
 const MAX_TEMPLATE_BODY: usize = 1024 * 1024;
 const TEMPLATE_TIMEOUT_SECS: u64 = 10;
+/// 远程底模的新鲜期：期内不重复下载。raw.githubusercontent.com 自身的 CDN 缓存也是 5 分钟，
+/// 更短的新鲜期换不来更新的内容。
+const TEMPLATE_FRESH: Duration = Duration::from_secs(300);
+/// 缓存条目上限：`template_url` 由请求方指定，不设限等于让请求方撑大服务端内存。
+const MAX_CACHED_TEMPLATES: usize = 8;
+
+/// 网络层失败的错误前缀。`server::sub_failure` 按它把失败归为 502/504，
+/// 与产生错误的位置共用同一份常量，改文案时分类不会悄悄失效。
+pub const MSG_FETCH_FAILED: &str = "底模拉取失败";
+pub const MSG_READ_FAILED: &str = "底模读取失败";
 
 /// HTTP GET（ureq，走系统 DNS 栈）。非 2xx 或网络错误返回 Err 文本。
 pub fn http_get(url: &str) -> Result<String, String> {
@@ -30,8 +42,12 @@ pub fn http_get(url: &str) -> Result<String, String> {
 /// 底模实际来源，用于日志。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateSource {
-    /// 客户端配置的 `template_url` 下载所得
+    /// 客户端配置的 `template_url` 刚下载所得
     Dynamic,
+    /// 同一 `template_url` 新鲜期内的缓存，未下载
+    Cache,
+    /// 下载失败，使用同一 `template_url` 上次成功的底模
+    Stale,
     /// 编译期内嵌底模
     Embedded,
 }
@@ -40,6 +56,8 @@ impl TemplateSource {
     pub fn as_str(self) -> &'static str {
         match self {
             TemplateSource::Dynamic => "dynamic",
+            TemplateSource::Cache => "cache",
+            TemplateSource::Stale => "stale",
             TemplateSource::Embedded => "embedded",
         }
     }
@@ -64,28 +82,109 @@ pub fn embedded_template() -> Result<Value, String> {
         .map_err(|e| format!("内嵌底模损坏（编译期产物错误）: {e}"))
 }
 
-/// 按需加载底模：给了 URL 就下载（失败即请求失败，不静默回退），否则用内嵌底模。
+struct CachedTemplate {
+    value: Value,
+    fetched_at: Instant,
+}
+
+/// 远程底模缓存，按 URL 区分。
+#[derive(Default)]
+pub struct TemplateCache {
+    entries: Mutex<HashMap<String, CachedTemplate>>,
+}
+
+impl TemplateCache {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, CachedTemplate>> {
+        // 持锁期间没有会 panic 的代码；即便被毒化，缓存内容仍是完整的 Value
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    /// 新鲜期内直接返回缓存；否则下载。下载失败时用同一 URL 上次成功的底模（`Stale`），
+    /// 从未成功过则报错：不换成内嵌底模或别的 URL 的缓存，那样节点与策略组会对不上。
+    ///
+    /// 下载期间不持锁，一个慢上游不会堵住其他请求。
+    pub fn get_or_fetch(
+        &self,
+        url: &str,
+        now: Instant,
+        fetch: impl FnOnce(&str) -> Result<Value, String>,
+    ) -> Result<(Value, TemplateSource), String> {
+        let stale = {
+            let entries = self.lock();
+            match entries.get(url) {
+                Some(c) if now.saturating_duration_since(c.fetched_at) < TEMPLATE_FRESH => {
+                    return Ok((c.value.clone(), TemplateSource::Cache));
+                }
+                other => other.map(|c| c.value.clone()),
+            }
+        };
+        match fetch(url) {
+            Ok(value) => {
+                let mut entries = self.lock();
+                if !entries.contains_key(url)
+                    && entries.len() >= MAX_CACHED_TEMPLATES
+                    && let Some(oldest) = entries
+                        .iter()
+                        .min_by_key(|(_, c)| c.fetched_at)
+                        .map(|(k, _)| k.clone())
+                {
+                    entries.remove(&oldest);
+                }
+                entries.insert(
+                    url.to_string(),
+                    CachedTemplate {
+                        value: value.clone(),
+                        fetched_at: now,
+                    },
+                );
+                Ok((value, TemplateSource::Dynamic))
+            }
+            Err(e) => match stale {
+                Some(value) => {
+                    crate::logging::warn(&format!(
+                        "底模下载失败，改用上次成功的同一 URL 底模: {e}"
+                    ));
+                    Ok((value, TemplateSource::Stale))
+                }
+                None => Err(e),
+            },
+        }
+    }
+}
+
+static TEMPLATE_CACHE: LazyLock<TemplateCache> = LazyLock::new(TemplateCache::default);
+
+/// 按需加载底模：给了 URL 就用远程底模（带缓存，见 [`TemplateCache`]），否则用内嵌底模。
 ///
-/// 不回退是有意的：用户显式指定了底模，静默换成另一份会让节点与策略组对不上，
+/// 不回退到内嵌底模是有意的：用户显式指定了底模，静默换成另一份会让节点与策略组对不上，
 /// 那种「看起来成功」比直接报错更难排查。
 pub fn load_template(template_url: Option<&str>) -> Result<(Value, TemplateSource), String> {
     match template_url {
         None => Ok((embedded_template()?, TemplateSource::Embedded)),
-        Some(url) => Ok((fetch_template(url)?, TemplateSource::Dynamic)),
+        Some(raw) => {
+            let url = validate_template_url(raw)?;
+            TEMPLATE_CACHE.get_or_fetch(url.as_str(), Instant::now(), fetch_template)
+        }
     }
 }
 
-/// 下载并严格校验远端底模。
-fn fetch_template(raw_url: &str) -> Result<Value, String> {
-    let url = validate_template_url(raw_url)?;
+/// 下载并严格校验远端底模（URL 已通过 `validate_template_url`）。
+fn fetch_template(url: &str) -> Result<Value, String> {
     let res = crate::clashapi::agent_with_timeout(Duration::from_secs(TEMPLATE_TIMEOUT_SECS))
-        .get(url.as_str())
+        .get(url)
         .call()
-        .map_err(|e| format!("底模拉取失败 {url}: {e}"))?;
+        .map_err(|e| format!("{MSG_FETCH_FAILED} {url}: {e}"))?;
     let mut body = String::new();
     std::io::Read::take(res.into_body().into_reader(), MAX_TEMPLATE_BODY as u64 + 1)
         .read_to_string(&mut body)
-        .map_err(|e| format!("底模读取失败: {e}"))?;
+        .map_err(|e| format!("{MSG_READ_FAILED}: {e}"))?;
     if body.len() > MAX_TEMPLATE_BODY {
         return Err(format!("底模响应超过 {}KB 上限", MAX_TEMPLATE_BODY / 1024));
     }
@@ -197,5 +296,101 @@ mod tests {
         assert!(validate_template_url("https://example.com/t.json").is_ok());
         assert!(validate_template_url("  https://raw.githubusercontent.com/a/b.json  ").is_ok());
         assert!(validate_template_url("https://93.184.216.34/t.json").is_ok());
+    }
+
+    fn tpl(tag: &str) -> Value {
+        serde_json::json!({ "marker": tag })
+    }
+
+    /// 新鲜期内不再下载：上游变慢时，只有每个新鲜期的第一次请求受影响。
+    #[test]
+    fn fresh_cache_skips_download() {
+        let cache = TemplateCache::default();
+        let t0 = Instant::now();
+        let calls = std::cell::Cell::new(0);
+        let fetch = |_: &str| {
+            calls.set(calls.get() + 1);
+            Ok(tpl("v1"))
+        };
+        let (_, first) = cache
+            .get_or_fetch("https://a.example/t.json", t0, fetch)
+            .unwrap();
+        let (v, second) = cache
+            .get_or_fetch(
+                "https://a.example/t.json",
+                t0 + Duration::from_secs(60),
+                fetch,
+            )
+            .unwrap();
+        assert_eq!(
+            (first, second),
+            (TemplateSource::Dynamic, TemplateSource::Cache)
+        );
+        assert_eq!(v["marker"], "v1");
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn expired_cache_downloads_again() {
+        let cache = TemplateCache::default();
+        let t0 = Instant::now();
+        cache
+            .get_or_fetch("https://a.example/t.json", t0, |_| Ok(tpl("v1")))
+            .unwrap();
+        let (v, src) = cache
+            .get_or_fetch("https://a.example/t.json", t0 + TEMPLATE_FRESH, |_| {
+                Ok(tpl("v2"))
+            })
+            .unwrap();
+        assert_eq!(src, TemplateSource::Dynamic);
+        assert_eq!(v["marker"], "v2");
+    }
+
+    /// 过期后重新下载失败：用同一 URL 上次成功的底模，来源标 stale，调用方据此告警。
+    #[test]
+    fn failed_refresh_falls_back_to_stale_copy_of_same_url() {
+        let cache = TemplateCache::default();
+        let t0 = Instant::now();
+        cache
+            .get_or_fetch("https://a.example/t.json", t0, |_| Ok(tpl("v1")))
+            .unwrap();
+        let (v, src) = cache
+            .get_or_fetch("https://a.example/t.json", t0 + TEMPLATE_FRESH, |_| {
+                Err("底模拉取失败: timeout: global".into())
+            })
+            .unwrap();
+        assert_eq!(src, TemplateSource::Stale);
+        assert_eq!(v["marker"], "v1");
+    }
+
+    /// 从未成功过就必须报错：不能换成别的底模（内嵌底模或别的 URL 的缓存）。
+    #[test]
+    fn failure_without_cached_copy_is_an_error() {
+        let cache = TemplateCache::default();
+        let t0 = Instant::now();
+        cache
+            .get_or_fetch("https://a.example/t.json", t0, |_| Ok(tpl("a")))
+            .unwrap();
+        let err = cache
+            .get_or_fetch("https://b.example/t.json", t0, |_| {
+                Err("底模拉取失败: x".into())
+            })
+            .unwrap_err();
+        assert!(err.contains("底模拉取失败"), "实际: {err}");
+    }
+
+    /// template_url 由请求方指定，缓存条目必须有上限。
+    #[test]
+    fn cache_entries_are_bounded() {
+        let cache = TemplateCache::default();
+        let t0 = Instant::now();
+        for i in 0..MAX_CACHED_TEMPLATES + 5 {
+            cache
+                .get_or_fetch(&format!("https://h{i}.example/t.json"), t0, |_| {
+                    Ok(tpl("x"))
+                })
+                .unwrap();
+        }
+        assert_eq!(cache.len(), MAX_CACHED_TEMPLATES);
     }
 }
