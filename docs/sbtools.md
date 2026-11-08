@@ -131,7 +131,9 @@ sequenceDiagram
 | 码 | 触发 |
 | :--- | :--- |
 | 403 | 密文 Base64URL 非法、长度不足、GCM 校验失败（错误公钥加密或篡改） |
-| 400 | 缺少 `d`、载荷结构非法、订阅抓取失败、CLI 合并失败 |
+| 400 | 缺少 `d`、载荷结构非法、底模内容校验失败、节点解析失败、CLI 合并失败 |
+| 502 | 订阅或远程底模的网络层失败（拒绝连接、非 2xx、读取出错） |
+| 504 | 订阅或远程底模的网络层超时（各 10 秒） |
 | 404 | 未匹配的路径或非 GET 方法 |
 | 414 | HTTP 服务拒绝超长 URL |
 
@@ -140,8 +142,8 @@ sequenceDiagram
 日志**不含 query string**，所有正文输出前把 `scheme://…` 整段替换为 `[链接已隐藏]`，订阅地址、token 与节点 URI 不会进入日志与响应体；节点参数提示只输出参数名，不输出参数值
 
 ```text
-2026-11-08T10:11:12.345Z INFO GET /sub -> 200 (1258ms) 底模: remote
-2026-11-08T10:11:22.540Z WARN GET /sub -> 400 (10196ms) 原因: 节点解析失败: 订阅拉取失败: timeout: global
+2026-11-08T10:11:12.345Z INFO GET /sub -> 200 (1258ms) 底模: dynamic
+2026-11-08T10:11:22.540Z ERROR GET /sub -> 504 (10001ms) 原因: 节点解析失败: 订阅拉取失败: timeout: global
 ```
 
 ### 反回环直连规则
@@ -268,6 +270,16 @@ flowchart LR
 
 不给 URL 时用内嵌底模，这是默认路径。配置了 `template_url` 就改用下载的底模，此时失败**不会**回退到内嵌版：用户显式指定了底模，静默换成另一份会让节点与策略组对不上，比直接报错更难排查
 
+远程底模按 URL 缓存在服务端内存里（`template.rs::TemplateCache`）：
+
+- 5 分钟内同一 URL 不重复下载，日志的底模来源为 `cache`
+- 过期后重新下载（`dynamic`）。下载失败时使用**同一 URL** 上次成功的底模，来源为 `stale`，并写一条 `WARN`。这不属于「换成另一份底模」
+- 该 URL 从未成功过则仍然报错
+- 最多缓存 8 个 URL，超过时淘汰最旧的：`template_url` 由请求方指定，不设限就能擑大服务端内存
+- 容器重启后缓存为空
+
+改了远程底模后要立即生效，需等最多 5 分钟或重启容器；`raw.githubusercontent.com` 自己的 CDN 缓存也是 5 分钟
+
 下载内容的校验（`template.rs::fetch_template`）：
 
 | 校验 | 原因 |
@@ -337,7 +349,7 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | `scripts/sbtools-rs/src/server.rs` | HTTP 路由、载荷解析、装配编排 |
 | `scripts/sbtools-rs/src/kernel.rs` | 内核 CLI：定位 `sing-box`、各层 merge、离线 check |
 | `scripts/sbtools-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
-| `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载）、URL 安全校验、HTTP GET |
+| `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载，含缓存）、URL 安全校验、HTTP GET |
 | `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
 | `scripts/sbtools-rs/src/trace/` | 真机全链路探测：日志捕获（log）、连接与探针（probe）、网段判定（net）、报告（report，事实与渲染分离） |
 | `scripts/sbtools-rs/src/clashapi.rs` | controller 统一决议与 Clash API 请求 |
