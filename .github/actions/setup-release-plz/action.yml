@@ -1,0 +1,43 @@
+name: setup-release-plz
+description: 安装 release-plz 预编译二进制。命中 Actions 缓存时不访问 GitHub release 下载接口；未命中时带重试下载，失败即报错，不回退到源码编译
+
+inputs:
+  version:
+    description: release-plz 版本（X.Y.Z）
+    default: "0.3.169"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore release-plz cache
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.local/release-plz/bin
+        key: release-plz-${{ inputs.version }}-x86_64-unknown-linux-gnu
+
+    # release-plz/action 的安装器在下载失败时会编译约 590 个包（8 分钟以上），
+    # 所以不用它：这里只下载，重试耗尽就失败。
+    - name: Download release-plz
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        url="https://github.com/release-plz/release-plz/releases/download/release-plz-v${VERSION}/release-plz-x86_64-unknown-linux-gnu.tar.gz"
+        tmp="$(mktemp -d)"
+        curl --fail --silent --show-error --location \
+          --retry 12 --retry-all-errors --retry-delay 10 --retry-max-time 300 \
+          --connect-timeout 20 --max-time 120 \
+          --output "$tmp/release-plz.tar.gz" "$url"
+        tar -xzf "$tmp/release-plz.tar.gz" -C "$tmp"
+        bin="$(find "$tmp" -type f -name release-plz | head -n 1)"
+        test -n "$bin"
+        install -D -m 755 "$bin" "$HOME/.local/release-plz/bin/release-plz"
+
+    - name: Add release-plz to PATH
+      shell: bash
+      run: |
+        echo "$HOME/.local/release-plz/bin" >> "$GITHUB_PATH"
+        "$HOME/.local/release-plz/bin/release-plz" --version

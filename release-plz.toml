@@ -11,3 +11,7 @@
 # workspace 清单与 .git 都在根目录，放子目录会让 release-plz 找不到仓库。
 [workspace]
 git_only = true
+
+# sbtools 是应用，lib 目标只服务于自身与测试，不对外发布；API 兼容性检查没有读者，
+# 还要多下载一个 cargo-semver-checks 二进制。
+semver_check = false
