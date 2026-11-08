@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.4](https://github.com/shelken/proxy/compare/v0.8.3...v0.8.4) - 2026-11-08
+
+### Fixed
+
+- *(sbtools)* 上游超时返回 504/502，远程底模按 URL 缓存 ([#175](https://github.com/shelken/proxy/pull/175))
+
 ## [0.8.3](https://github.com/shelken/proxy/compare/v0.8.2...v0.8.3) - 2026-11-08
 
 ### Fixed
