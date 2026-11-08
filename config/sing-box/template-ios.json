@@ -130,10 +130,7 @@
     {
       "type": "tun",
       "tag": "tun-in",
-      "address": [
-        "198.51.100.1/30",
-        "fdfe:dcba:9876::1/126"
-      ],
+      "address": "198.51.100.1/30",
       "dns_mode": "hijack",
       "auto_route": true,
       "loopback_address": "10.7.0.1",

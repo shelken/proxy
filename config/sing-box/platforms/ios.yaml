@@ -7,7 +7,9 @@ log: { $include: log }
 inbounds:
   - type: tun
     tag: tun-in
-    address: [198.51.100.1/30, "fdfe:dcba:9876::1/126"]
+    # 只配 IPv4：SideStore 的 minimuxer 会丢弃带 IPv6 的 utun，探测前就淘汰了回环接口（#167）。
+    # Mac 与路由器保持双栈，见 docs/adr/0016
+    address: [198.51.100.1/30]
     auto_route: true
     dns_mode: hijack
     loopback_address: ["10.7.0.1"] # for sidestore
