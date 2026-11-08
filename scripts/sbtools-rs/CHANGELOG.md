@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.3](https://github.com/shelken/proxy/compare/v0.8.2...v0.8.3) - 2026-11-08
+
+### Fixed
+
+- *(sbtools)* endpoint 不再被当成无节点分组回退；server 日志带时间与失败原因 ([#170](https://github.com/shelken/proxy/pull/170))
+
 ## [0.8.2](https://github.com/shelken/proxy/compare/v0.8.1...v0.8.2) - 2026-11-07
 
 ### Fixed
