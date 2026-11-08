@@ -3,6 +3,7 @@
 use crate::assemble::{self, AssembleInput};
 use crate::crypto;
 use crate::kernel;
+use crate::logging::{self, Level};
 use crate::template;
 use axum::{
     Router,
@@ -91,12 +92,14 @@ fn assemble_base(
         sources: sources.join("|"),
         fetch_subscription: Some(Box::new(fetch_subscription_bounded)),
     };
-    let nodes = assemble::collect_nodes(&input.sources, &input)?;
+    let nodes = assemble::collect_nodes(&input.sources, &input)
+        .map_err(|e| format!("节点解析失败: {e}"))?;
 
-    let (mut tpl, source) = template::load_template(payload.template_url.as_deref())?;
+    let (mut tpl, source) = template::load_template(payload.template_url.as_deref())
+        .map_err(|e| format!("底模加载失败: {e}"))?;
     let direct_layer =
         assemble::generate_node_direct_rule(&nodes).map(|rule| json!({"route": {"rules": [rule]}}));
-    assemble::finalize(&mut tpl, nodes)?;
+    assemble::finalize(&mut tpl, nodes).map_err(|e| format!("策略组装配失败: {e}"))?;
     Ok((tpl, direct_layer, source))
 }
 
@@ -136,7 +139,7 @@ fn handle_sub(
         layers.push((kernel::LAYER_OVERLAY, overlay));
     }
     layers.push((kernel::LAYER_BASE, &base));
-    let merged = kernel::merge_layers(&layers)?;
+    let merged = kernel::merge_layers(&layers).map_err(|e| format!("配置合并失败: {e}"))?;
     Ok((merged, source))
 }
 
@@ -151,17 +154,53 @@ struct SubQuery {
     d: Option<String>,
 }
 
+/// 一行请求日志：方法、路径、状态码、耗时；失败时带原因。
+fn request_message(
+    method: &str,
+    path: &str,
+    status: StatusCode,
+    elapsed_ms: u128,
+    detail: &str,
+) -> String {
+    format!(
+        "{method} {path} -> {} ({elapsed_ms}ms){detail}",
+        status.as_u16()
+    )
+}
+
+fn log_request(method: &str, path: &str, status: StatusCode, started: Instant, detail: &str) {
+    let level = if status.is_server_error() {
+        Level::Error
+    } else if status.is_client_error() {
+        Level::Warn
+    } else {
+        Level::Info
+    };
+    let msg = request_message(method, path, status, started.elapsed().as_millis(), detail);
+    logging::log(level, &msg);
+}
+
+/// 失败的状态码与对外原因。原因同时写进日志与响应体，因此先脱敏：
+/// 错误文本可能夹带订阅地址。
+fn sub_failure(e: &str) -> (StatusCode, String) {
+    let status = if e.contains("解密失败") || e.contains("Base64URL") || e.contains("载荷长度")
+    {
+        StatusCode::FORBIDDEN
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (status, logging::scrub(e))
+}
+
 async fn handle_healthz() -> impl IntoResponse {
     let started = Instant::now();
-    let elapsed = started.elapsed().as_millis();
-    eprintln!("[sbtools server] GET /healthz -> 200 ({elapsed}ms)");
+    log_request("GET", "/healthz", StatusCode::OK, started, "");
     (StatusCode::OK, "ok")
 }
 
 async fn handle_pubkey(State(state): State<Arc<ServerState>>) -> impl IntoResponse {
     let started = Instant::now();
-    let elapsed = started.elapsed().as_millis();
-    eprintln!("[sbtools server] GET /pubkey -> 200 ({elapsed}ms)");
+    log_request("GET", "/pubkey", StatusCode::OK, started, "");
     (StatusCode::OK, state.pk_hex.clone())
 }
 
@@ -171,14 +210,25 @@ async fn handle_sub_route(
 ) -> Response {
     let started = Instant::now();
     let Some(d) = query.d.filter(|s| !s.is_empty()) else {
-        let elapsed = started.elapsed().as_millis();
-        eprintln!("[sbtools server] GET /sub -> 400 ({elapsed}ms)");
-        return (StatusCode::BAD_REQUEST, "缺少 d 参数").into_response();
+        let reason = "缺少 d 参数";
+        log_request(
+            "GET",
+            "/sub",
+            StatusCode::BAD_REQUEST,
+            started,
+            &format!(" 原因: {reason}"),
+        );
+        return (StatusCode::BAD_REQUEST, reason).into_response();
     };
 
     let Ok(permit) = state.merge_semaphore.clone().try_acquire_owned() else {
-        let elapsed = started.elapsed().as_millis();
-        eprintln!("[sbtools server] GET /sub -> 503 ({elapsed}ms, 队列已满)");
+        log_request(
+            "GET",
+            "/sub",
+            StatusCode::SERVICE_UNAVAILABLE,
+            started,
+            " 原因: 并发合并队列已满",
+        );
         return (StatusCode::SERVICE_UNAVAILABLE, "服务繁忙，请稍后重试").into_response();
     };
 
@@ -188,12 +238,14 @@ async fn handle_sub_route(
         handle_sub(&sk, &d)
     })
     .await;
-    let elapsed = started.elapsed().as_millis();
     match res {
         Ok(Ok((json, src))) => {
-            eprintln!(
-                "[sbtools server] GET /sub -> 200 ({elapsed}ms, 底模: {})",
-                src.as_str()
+            log_request(
+                "GET",
+                "/sub",
+                StatusCode::OK,
+                started,
+                &format!(" 底模: {}", src.as_str()),
             );
             (
                 StatusCode::OK,
@@ -203,21 +255,18 @@ async fn handle_sub_route(
                 .into_response()
         }
         Ok(Err(e)) => {
-            let status =
-                if e.contains("解密失败") || e.contains("Base64URL") || e.contains("载荷长度")
-                {
-                    StatusCode::FORBIDDEN
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-            eprintln!(
-                "[sbtools server] GET /sub -> {} ({elapsed}ms)",
-                status.as_u16()
-            );
-            (status, e).into_response()
+            let (status, reason) = sub_failure(&e);
+            log_request("GET", "/sub", status, started, &format!(" 原因: {reason}"));
+            (status, reason).into_response()
         }
         Err(e) => {
-            eprintln!("[sbtools server] GET /sub -> 500 ({elapsed}ms)");
+            log_request(
+                "GET",
+                "/sub",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                started,
+                &format!(" 原因: 合并任务异常退出: {e}"),
+            );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("任务调度失败: {e}"),
@@ -229,10 +278,13 @@ async fn handle_sub_route(
 
 async fn handle_fallback(req: axum::extract::Request) -> impl IntoResponse {
     let started = Instant::now();
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-    let elapsed = started.elapsed().as_millis();
-    eprintln!("[sbtools server] {method} {path} -> 404 ({elapsed}ms)");
+    log_request(
+        req.method().as_str(),
+        req.uri().path(),
+        StatusCode::NOT_FOUND,
+        started,
+        "",
+    );
     (StatusCode::NOT_FOUND, "not found")
 }
 
@@ -266,11 +318,11 @@ pub fn run(port: u16) -> Result<(), String> {
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
                 .await
                 .map_err(|e| format!("监听 {port} 失败: {e}"))?;
-            eprintln!("[sbtools server] listening on 0.0.0.0:{port}");
+            logging::info(&format!("sbtools server 监听 0.0.0.0:{port}"));
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = tokio::signal::ctrl_c().await;
-                    eprintln!("[sbtools server] 收到中断信号，开始优雅停机");
+                    logging::info("收到中断信号，开始优雅停机");
                 })
                 .await
                 .map_err(|e| format!("服务异常退出: {e}"))
@@ -281,6 +333,39 @@ pub fn run(port: u16) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::kernel::kernel_unavailable_reason;
+
+    /// 失败请求的日志必须带路径、状态码、耗时与原因；订阅地址不得进入日志与响应。
+    #[test]
+    fn failed_request_log_has_path_status_elapsed_and_reason() {
+        let e =
+            "节点解析失败: 订阅拉取失败: timeout: global (https://airport.example/s?token=SECRET)";
+        let (status, reason) = sub_failure(e);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let line = logging::format_line(
+            std::time::SystemTime::UNIX_EPOCH,
+            Level::Warn,
+            &request_message("GET", "/sub", status, 10196, &format!(" 原因: {reason}")),
+        );
+        for want in [
+            "GET /sub -> 400",
+            "(10196ms)",
+            "订阅拉取失败",
+            "timeout: global",
+        ] {
+            assert!(line.contains(want), "缺少 {want}: {line}");
+        }
+        for leak in ["SECRET", "airport.example"] {
+            assert!(
+                !line.contains(leak) && !reason.contains(leak),
+                "泄漏 {leak}"
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_failures_map_to_403() {
+        assert_eq!(sub_failure("解密失败: x").0, StatusCode::FORBIDDEN);
+    }
 
     #[test]
     fn parse_payload_roundtrip() {

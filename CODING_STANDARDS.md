@@ -24,7 +24,7 @@
 - 三条顺序策略：**拦截 > 模式开关 > 服务分流**。reject 早于 QUIC 守卫，QUIC 的国内豁免会把同属 `ChinaMax` 的统计域名判成直连（实测 `hm.baidu.com` 同属 `Advertising`、`loggw-ex.alipay.com` 同属 `MyReject`，见 `docs/adr/0008`）；reject 早于 `clash_mode` 与全部服务规则，否则 `global` 模式会连同广告与黑名单一起放行；自有清单排在外部清单之前，避免宽泛的上游清单抢占自有域名，`MyDirect`、`MySelfhost`、`MyProxy` 排在所有服务规则之前，理由见 `docs/adr/0007-order-service-rules-own-lists-first.md`
 - 顺序契约由 `config/sing-box/tests/lib/contracts.ts` 的断言守护，三份模板测试复用同一组断言
 - `route-policy` 与 `dns-rules` 按名字引用 `settings.yaml` 的规则（如 `MyProxy`、`ChinaMax`、`Lan`），删除或改名这些规则时构建报错并点名规则集，要同时改 `shared.yaml`。`rule_set` 里写去向名（`reject`、`download`、`direct`）表示引入去向落在它的全部规则
-- 路由规则的出站指向的分组可能因订阅无匹配节点被整组跳过，sbtools 装配时会把这类规则回退到 `proxy`（再回退 `direct`）。新增直指某个节点分组的规则时，先确认它走这条回退
+- 路由规则的出站指向的分组可能因订阅无匹配节点被整组跳过，sbtools 装配时会把这类规则回退到 `proxy`（再回退 `direct`）。新增直指某个节点分组的规则时，先确认它走这条回退。`endpoints` 里的标签（如 iOS 的 `ts-ep`）是底模自带的出站目标，不属于「无节点的分组」，不回退
 - 平台差异只改该平台自己的模板：入站、Tailscale、DNS 入口、`dns-in` 等。iOS 的 `preferred_by` 夹在 `route-intake` 与 `route-policy` 之间，因为它必须晚于 DNS 劫持、早于私网直连
 - BT 直连经 `torrent` 策略组下发（默认 `direct`，候选含 `selfhost` / `proxy`），识别只按协议嗅探（`protocol: bittorrent`），不依赖清单、端口与进程名；tracker 域名不单独建组，落 `final: proxy`，理由见 `docs/adr/0009`
 - QUIC 守卫（UDP 443/80 `reject`）必须自带国内直连豁免（`ChinaMax`、`Lan`、`cftunnel`、`geoip-cn` 走 `direct`，名单写在 `shared.yaml` 的 `route-policy`，其他直连规则不在其中）并置 `no_drop: true`：豁免靠 `matchRule` 在匹配前调 `prepareMatchMetadata` 把 fakeip 还原为域名，`no_drop` 避免 30 秒内超过 50 次后从 ICMP 不可达退化为静默丢包
