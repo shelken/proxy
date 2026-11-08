@@ -93,6 +93,15 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
     expect(routes.filter((cidr) => cidr.includes(":"))).toEqual([]);
   });
 
+  // minimuxer 的 resolveCandidateTunnels 只接受「有 IPv4 且没有 IPv6」的 utun，带 IPv6 的接口在探测前就被丢弃（#167）。
+  // Mac 与路由器模板仍保持双栈，只有 iOS 要给 SideStore 留回环。
+  test("tun 只配 IPv4，SideStore 才会把它当作回环接口", () => {
+    const tun = ios.inbounds.find((i) => i.type === "tun");
+    const addresses = asArray<string>(tun.address);
+    expect(addresses.length).toBeGreaterThan(0);
+    expect(addresses.filter((addr) => addr.includes(":"))).toEqual([]);
+  });
+
   test("tailscale endpoint 只接收子网路由，不做 exit node，不开系统接口", () => {
     const [ep] = ios.endpoints;
     expect(ep.type).toBe("tailscale");
