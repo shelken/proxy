@@ -94,3 +94,20 @@ fn node_named_like_endpoint_is_renamed() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// `ts-ep` 是底模自带的 Tailscale endpoint，不是订阅节点：
+/// 指向它的路由规则不得被当成「无节点的分组」剔除并改写成 `proxy`。
+#[test]
+fn route_rule_to_endpoint_is_kept() {
+    let mut tpl: Value =
+        serde_json::from_str(include_str!("../../../config/sing-box/template-ios.json"))
+            .expect("iOS 底模应为合法 JSON");
+    finalize(&mut tpl, vec![ss("HK-01", "192.0.2.10")]).expect("装配应成功");
+    let rules = tpl["route"]["rules"].as_array().expect("rules 为数组");
+    assert!(
+        rules
+            .iter()
+            .any(|r| r["preferred_by"] == json!("ts-ep") && r["outbound"] == json!("ts-ep")),
+        "preferred_by → ts-ep 应保持原样，实际: {rules:?}"
+    );
+}

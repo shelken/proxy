@@ -22,6 +22,7 @@ mod clashapi;
 mod config;
 mod crypto;
 mod kernel;
+mod logging;
 mod node;
 mod paths;
 mod redact;

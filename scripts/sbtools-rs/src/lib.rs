@@ -24,6 +24,7 @@ pub mod clashapi;
 pub mod config;
 pub mod crypto;
 pub mod kernel;
+pub mod logging;
 pub mod node;
 pub mod paths;
 pub mod redact;

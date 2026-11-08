@@ -215,9 +215,9 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
                 .unwrap_or_default();
             if kept.is_empty() {
                 // 空组(订阅无匹配节点)会让 sing-box FATAL,整体跳过;引用它的组已在上面被剪掉。
-                eprintln!(
-                    "[sbtools] 策略组 '{tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)"
-                );
+                crate::logging::warn(&format!(
+                    "策略组 '{tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)"
+                ));
                 return None;
             }
             let mut out = (*sel).clone();
@@ -277,7 +277,7 @@ pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>,
         return Err("未解析出任何节点：请检查源列表内容".into());
     }
     for (name, count) in unsupported_queries {
-        eprintln!("[sbtools] 节点 URL 参数 {name} 未应用（{count} 个节点）");
+        crate::logging::warn(&format!("节点 URL 参数 {name} 未应用（{count} 个节点）"));
     }
     Ok(nodes)
 }
@@ -307,15 +307,14 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
 
     // 组可能因订阅无匹配节点被整组跳过；DNS detour 与路由规则直指它时悬空，内核会 FATAL。
     // 回退链：proxy → direct（direct 由装配必插入，兜底恒存在）。
-    let available: std::collections::HashSet<String> = template["outbounds"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|o| o["tag"].as_str())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    // endpoint（如 iOS 的 ts-ep）与 outbound 共用标签空间，同样是合法出站目标，不能算「无节点」。
+    let available: std::collections::HashSet<String> = ["outbounds", "endpoints"]
+        .iter()
+        .filter_map(|k| template[*k].as_array())
+        .flatten()
+        .filter_map(|o| o["tag"].as_str())
+        .map(str::to_string)
+        .collect();
     let fallback = if available.contains("proxy") {
         "proxy"
     } else {
@@ -331,9 +330,9 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
             && detour.as_str().is_some_and(|t| !available.contains(t))
         {
             let orig = detour.as_str().unwrap_or_default().to_string();
-            eprintln!(
-                "[sbtools] dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
-            );
+            crate::logging::warn(&format!(
+                "dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
+            ));
             *detour = Value::from(fallback);
         }
     }
@@ -346,9 +345,9 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
             && outbound.as_str().is_some_and(|t| !available.contains(t))
         {
             let orig = outbound.as_str().unwrap_or_default().to_string();
-            eprintln!(
-                "[sbtools] 路由规则的出站 '{orig}' 无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
-            );
+            crate::logging::warn(&format!(
+                "路由规则的出站 '{orig}' 无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
+            ));
             *outbound = Value::from(fallback);
         }
     }
