@@ -108,19 +108,21 @@ sequenceDiagram
 仓库根 `Cargo.toml` 是 workspace 清单，必须留在根目录：release-plz 的 `git_only` 模式要求清单与 `.git` 同目录；cargo 的 `target/` 同样属于 workspace 根
 
 ```text
-每次改动 (scripts/sbtools-rs/**、根 Cargo.toml/Cargo.lock 或 template.json) → ci-sbtools.yml
-  → cargo fmt --check → cargo clippy（严格规则在 crate 属性中声明）
-  → mise 装 .mise.toml 里的 sing-box → cargo test → cargo build --release
-  → docker build（--build-arg 内核版本，不推送）
+PR 与 main 上的改动 (scripts/sbtools-rs/**、根 Cargo.toml/Cargo.lock、底模或规则) → ci-sbtools.yml，四个 job 并行
+  security audit
+  clippy + test：cargo clippy（严格规则在 crate 属性中声明）→ mise 装 .mise.toml 里的 sing-box → cargo test
+  template + rules tests：底模一致性校验与 bun 测试
+  docker build：musl release 构建 → 旧 CPU 冒烟 → docker build（--build-arg 内核版本，不推送）
     + 起容器验 /healthz 与 /pubkey
 
 合并 Release PR → main 的清单版本变化被 release-sbtools.yml 检测到
   → prepare 校验 tag ↔ 清单 ↔ 锁文件，创建 tag（GITHUB_TOKEN，同一次 run 内）
-  三平台各自在原生 runner 上 cargo test --release → cargo build --release
+  三平台各自在原生 runner 上 cargo build --release，不重跑 cargo test（PR 已测同一份代码）
     aarch64-apple-darwin      (macos-15)          客户端
     aarch64-unknown-linux-musl (ubuntu-24.04-arm) 沙箱 VM 与 arm64 节点
-    x86_64-unknown-linux-musl  (ubuntu-latest)    amd64 节点
+    x86_64-unknown-linux-musl  (ubuntu-24.04)     amd64 节点
   → 每个产物在构建机上原生跑 version 冒烟并断言等于清单版本；Linux 断言静态链接
+  → x86_64 产物在 qemu 模拟的 Ivy Bridge 上跑一次服务端 HTTPS 出站
   → 每平台取本架构二进制就地 load 起容器冒烟，再按 digest 推送镜像
   → imagetools create 合并为 manifest list（断言恰为 arm64 + amd64）
   → 三份二进制 + SHA256SUMS 上传 GitHub Release（说明取 CHANGELOG 段）
@@ -128,6 +130,8 @@ sequenceDiagram
 ```
 
 触发点是 `push: main` 而非 tag：使用 `GITHUB_TOKEN` 创建 tag 不会触发 `on.push.tags` 工作流，tag 作为同一次 run 内的产物创建；是否已发布以 GitHub Release 是否存在为准，构建失败留下的 tag 会被复用
+
+runner 固定具体版本，不用 ubuntu-latest：musl 目标的 C 代码由 runner 上的 gcc 编译，镜像迁移会换编译环境。ubuntu-26.04 编出的 x86_64 二进制含旧 CPU 不支持的指令，线上 SIGILL（#157）。旧 CPU 冒烟见 `scripts/smoke-old-cpu.sh`，升级 runner 前先过它
 
 构建期不改写任何文件：版本由 Release PR 统一提交，CI 仅校验并保持 Cargo.lock 一致
 
