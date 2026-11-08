@@ -11,6 +11,10 @@ inbounds:
     auto_route: true
     dns_mode: hijack
     loopback_address: ["10.7.0.1"] # for sidestore
+    # SideStore 的 minimuxer 只在 utun 路由表里找设备地址，被 0.0.0.0/0 吞掉的 10.7.0.1 找不到。
+    # iOS 客户端把 route_address 原样交给系统（不合并），所以 /32 会成为独立路由；
+    # 写了 route_address 就不再有默认路由，必须自己补 0.0.0.0/0。IPv6 不写，保持默认。
+    route_address: [0.0.0.0/0, 10.7.0.1/32]
     route_exclude_address:
       - 224.0.0.0/4
       - 255.255.255.255/32

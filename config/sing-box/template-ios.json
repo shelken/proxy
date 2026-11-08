@@ -137,6 +137,10 @@
       "dns_mode": "hijack",
       "auto_route": true,
       "loopback_address": "10.7.0.1",
+      "route_address": [
+        "0.0.0.0/0",
+        "10.7.0.1/32"
+      ],
       "route_exclude_address": [
         "224.0.0.0/4",
         "255.255.255.255/32",

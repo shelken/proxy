@@ -82,6 +82,17 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
     }
   });
 
+  // SideStore 的 minimuxer 只在 utun 路由表里找设备地址；没有独立的 10.7.0.1/32 路由就找不到。
+  // 写了 route_address 即失去默认路由，所以 0.0.0.0/0 必须保留；不写 IPv6，v6 沿用默认。
+  test("tun 为 SideStore 回环地址留独立路由，且不丢全量 IPv4 路由", () => {
+    const tun = ios.inbounds.find((i) => i.type === "tun");
+    expect(asArray(tun.loopback_address)).toContain("10.7.0.1");
+    const routes = asArray<string>(tun.route_address);
+    expect(routes).toContain("10.7.0.1/32");
+    expect(routes).toContain("0.0.0.0/0");
+    expect(routes.filter((cidr) => cidr.includes(":"))).toEqual([]);
+  });
+
   test("tailscale endpoint 只接收子网路由，不做 exit node，不开系统接口", () => {
     const [ep] = ios.endpoints;
     expect(ep.type).toBe("tailscale");
