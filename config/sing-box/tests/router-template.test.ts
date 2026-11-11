@@ -142,12 +142,9 @@ describe("DNS 归属契约：底模与 overlay 的分界", () => {
     expect(router.dns.servers.some((s: any) => s.tag === "dns-lan")).toBe(false);
   });
 
-  test("RFC 保留后缀与局域网清单指向 overlay 提供的 dns-lan", () => {
-    const suffix = router.dns.rules.find((r: any) =>
-      asArray(r.domain_suffix).includes("home.arpa"),
-    );
-    expect(asArray(suffix.domain_suffix)).toEqual(["local", "lan", "home.arpa"]);
-    expect(suffix.server).toBe("dns-lan");
+  test("自有直连域与局域网清单指向 overlay 提供的 dns-lan", () => {
+    const mine = router.dns.rules.find((r: any) => asArray(r.rule_set).includes("MyDirect-dns"));
+    expect(mine.server).toBe("dns-lan");
     const lan = router.dns.rules.find((r: any) =>
       asArray(r.rule_set).includes("Lan-dns"),
     );
