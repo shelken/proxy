@@ -100,13 +100,16 @@ async function withDNS(run, source = template) {
     }))];
     group.url = health.url.href;
     const dnsTags = [...new Set((dns.rules ?? []).flatMap(r => Array.isArray(r.rule_set) ? r.rule_set : (r.rule_set ? [r.rule_set] : [])))];
-    const mine = await readFile(new URL("../../rules/custom/MyDirect.yaml", import.meta.url), "utf8");
-    const myDirectDns = JSON.parse(emitSingboxDns(parseYamlAst(mine))).rules;
+    const localDns = {};
+    for (const name of ["Lan", "MyDirect"]) {
+      const source = await readFile(new URL(`../../rules/custom/${name}.yaml`, import.meta.url), "utf8");
+      localDns[`${name}-dns`] = JSON.parse(emitSingboxDns(parseYamlAst(source))).rules;
+    }
     const config = {
       log: { level: "debug" }, dns,
       inbounds: [{ type: "direct", tag: "dns-test", listen: "127.0.0.1", listen_port: 15353 }],
       outbounds: [{ type: "direct", tag: "direct" }, ...nodes, group],
-      route: { default_domain_resolver: "dns-lan", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: tag === "MyDirect-dns" ? myDirectDns : [{ domain: ["nonmatching.invalid"] }] })) },
+      route: { default_domain_resolver: "dns-lan", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: localDns[tag] ?? [{ domain: ["nonmatching.invalid"] }] })) },
       experimental: { cache_file: { ...source.experimental.cache_file, path: "cache.db" }, clash_api: { external_controller: "127.0.0.1:19090" } },
     };
     const startCore = async () => {
@@ -142,7 +145,7 @@ for (const file of ["template.json", "template-ios.json", "template-router.json"
         expect(packet.readUInt16BE(6)).toBe(0);
       }
       expect(f.queries()).toEqual(before);
-      for (const name of ["probe.local", "probe.lan", "probe.home.arpa"]) {
+      for (const name of ["probe.local", "probe.lan", "probe.home.arpa", "probe.tplinkwifi.net"]) {
         const packet = await query(name, 1);
         expect(packet.readUInt16BE(6)).toBe(1);
         expect(packet.subarray(-4).join(".")).toBe("192.0.2.10");

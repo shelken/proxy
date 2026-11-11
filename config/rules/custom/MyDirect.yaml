@@ -5,18 +5,14 @@ rules:
   - domain_suffix:
       - kelee.one
       - q1w2d3.org
-      - amazon.com.cn
-      - amazonaws.com.cn
       - zajourney.com
       - za.group
       - hsbc.com.hk
       - hdslb.com
       - bochk.com
-      - cup.com.cn
       - 95516.com
       - store.epicgames.com
       - steamserver.net
-      - icloud.com.cn
       - ipinfo.io
       - ip.im
       - ip.sb
@@ -25,7 +21,6 @@ rules:
       - ipapi.co
       - ip-api.com
       - ipwho.is
-      - ipw.cn
       - hotmail.com
       - 139.com
       - live.com
@@ -33,7 +28,6 @@ rules:
       - ooooo.space
       - yoooo.xyz
       - mirrorify.net
-      - m.daocloud.io
       - daocloud.io
       - gh-proxy.org
       - ghproxy.link
@@ -66,3 +60,7 @@ rules:
       - 240e::/18,no-resolve
       - 2409:8000::/20,no-resolve
       - 2408:8000::/20,no-resolve
+
+  # 由 icloud 关键词和 cn 后缀覆盖；收窄匹配时可恢复。
+  # - domain_suffix:
+  #     - icloud.com.cn

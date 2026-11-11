@@ -15,7 +15,6 @@ rules:
       - gemini.google
       - generativeai.google
       - makersuite.google.com
-      - cloudcode-pa.googleapis.com
       - notebooklm.google
       - notebooklm.google.com
       - nanobanana.ai
@@ -28,11 +27,17 @@ rules:
       - alkalimakersuite-pa.clients6.google.com
       - webchannel-alkalimakersuite-pa.clients6.google.com
       - cloudaicompanion.googleapis.com
-      - daily-cloudcode-pa.googleapis.com
       - notebooklm-pa.googleapis.com
       - notebooklm.googleapis.com
       - antigravity-pa.googleapis.com
       - antigravity.googleapis.com
   - domain_keyword:
       - cloudcode-pa
-      - daily-cloudcode-pa
+
+  # 由 cloudcode-pa 覆盖；移除关键词时可恢复。
+  # - domain_suffix:
+  #     - cloudcode-pa.googleapis.com
+  # - domain:
+  #     - daily-cloudcode-pa.googleapis.com
+  # - domain_keyword:
+  #     - daily-cloudcode-pa
