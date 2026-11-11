@@ -87,6 +87,9 @@ rules:
   - name: Privacy
     source: ../rules/custom/Privacy.yaml
     to: reject
+  - name: OculusTelemetry
+    source: ../rules/custom/OculusTelemetry.yaml
+    to: reject
 
   - name: Download
     source: ../rules/custom/Download.yaml

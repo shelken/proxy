@@ -1,0 +1,116 @@
+# Oculus / Meta Quest 遥测与数据上报封禁
+#
+# 目标：拦截后台遥测、事件上报与第三方追踪，保留商店下载（securecdn/oculuscdn）、
+# 账号登录（facebook.com）与设备鉴权（graph.facebook-hardware.com）正常工作。
+#
+# 来源聚合（去重 89 条，按证据强度分两组）：
+#   - Nuvido/Quest2_Research：Quest 2 固件逆向，端点与上报字段直接来自系统应用代码
+#   - hagezi/dns-blocklists share/facebook.txt：22 条，附用途注释
+#   - micahsellis/Meta-Quest-Adgard-DNS-Blocklist：54 条 AdGuard 格式
+#   - ibrah3m/pihole-meta-quest-blocklist：66 条 Pi-hole 格式（与 micahsellis 高度重叠）
+#   - v2fly/domain-list-community data/oculus：17 条 Oculus 品牌域名
+
+rules:
+  # --- 确定遥测 / 数据上报 / 追踪端点（精确匹配） ---
+  - domain:
+      # graph.* — Meta Graph API 系列，承载事件上报与遥测
+      - graph.facebook.com        # Nuvido: /logging_client_events — Unified Telemetry，上报设备状态/电池/位置/应用列表
+      - graph.oculus.com           # Nuvido: /report_bug + /facebook_access_token_generate — 双重用途，出问题摘这一条
+      - graph.fbpigeon.com         # hagezi: pigeon 是 Meta 遥测传输协议
+      - b-graph.facebook.com       # hagezi: Graph API 变体
+      - b-graph-fallback.facebook.com
+      - graph-fallback.facebook.com
+      - z-m-graph.facebook.com
+      - graph.m-freeway.com
+      - meta.graph.meta.com        # micahsellis: Meta graph 遥测
+      - realitylabs-graph.facebook.com  # micahsellis: Reality Labs graph
+
+      # MQTT / 信令 — 事件推送与通知通道
+      - edge-mqtt.facebook.com     # micahsellis: MQTT 遥测传输
+      - mqtt-mini.facebook.com     # hagezi: 通知/MQTT
+
+      # 上报网关 / 上传
+      - portal.fb.com              # micahsellis: 数据上报门户
+      - gateway.facebook.com       # micahsellis: 网关
+      - rupload.facebook.com       # micahsellis: 可复用上传（媒体/数据）
+      - shortwave.facebook.com     # ibrah3m: 固件级阻断清单
+
+      # ep1-9 — hagezi 标注第三方追踪，用途不明但确认非功能性
+      - ep1.facebook.com
+      - ep2.facebook.com
+      - ep6.facebook.com
+      - ep7.facebook.com
+      - ep8.facebook.com
+      - ep9.facebook.com
+
+      # Google beacons — 遥测信标
+      - beacons.gvt2.com
+      - beacons.gcp.gvt2.com
+      - beacons5.gvt2.com
+
+  # --- 确定 Oculus 品牌域名（后缀匹配，来自 v2fly geosite:oculus） ---
+  # 排除 oculus.com（含 securecdn.* 商店下载、www.* 登录）与 oculuscdn.com（内容 CDN）
+  - domain_suffix:
+      - binoculus.com
+      - buyoculus.com
+      - ocul.us
+      - oculus-china.com
+      - oculus2014.com
+      - oculus3d.com
+      - oculusblog.com
+      - oculusbrand.com
+      - oculuscasino.net
+      - oculusconnect.com
+      - oculusdiving.com
+      - oculusforbusiness.com
+      - oculusrift.com
+      - oculusvr.com
+      - powersunitedvr.com
+
+# ---------------------------------------------------------------------------
+# 以下域名出现在来源清单中但未纳入封禁，按用途分组留档：
+#
+# 内容 CDN（商店下载、系统更新、用户媒体）—— 封了会断下载
+#   securecdn.oculus.com, securecdn-ams4-1.oculus.com
+#   scontent-ams4-1.oculuscdn.com, scontent-ams2-1.oculuscdn.com, ugc.oculuscdn.com
+#   oculuscdn.com
+#   static.xx.fbcdn.net, scontent.xx.fbcdn.net
+#   scontent-ams4-1.xx.fbcdn.net, scontent-ams2-1.xx.fbcdn.net
+#   scontent-ord5-2.xx.fbcdn.net, scontent-ord5-1.xx.fbcdn.net
+#   scontent-man2-1.xx.fbcdn.net, scontent-lhr6-2.xx.fbcdn.net
+#   scontent-lga3-3.xx.fbcdn.net, scontent-lax3-1.xx.fbcdn.net
+#   scontent.fluk1-1.fna.fbcdn.net, scontent.fcps3-1.fna.fbcdn.net
+#   scontent.fagc3-2.fna.fbcdn.net, scontent.fagc3-1.fna.fbcdn.net
+#   scontent-dfw5-3.xx.fbcdn.net, scontent-det1-1.xx.fbcdn.net
+#   scontent-atl3-1.xx.fbcdn.net
+#   cdn.fbsbx.com
+#
+# Facebook 账号 / 社交（登录、个人主页）—— 封了断登录
+#   facebook.com, www.facebook.com, b-www.facebook.com
+#   web.facebook.com, web-fallback.facebook.com
+#   lookaside.facebook.com, lookaside.fbsbx.com
+#   fbcdn.net, fbsbx.com
+#
+# Messenger（消息收发）—— 封了断通讯
+#   messenger.com, www.messenger.com, familycenter.messenger.com
+#   msngr.com, www.msngr.com, m.me, www.m.me
+#
+# Meta / Horizon（社交平台与 AR/AI 功能）
+#   www.meta.com, horizon.meta.com, graph.meta.com, graph.meta.ai
+#
+# 设备鉴权（功能端点）—— 封了设备无法获取 token
+#   graph.facebook-hardware.com  (Nuvido: Device Auth Server)
+#
+# 第三方追踪 / 登录（Reels 嵌入与 OAuth，功能与追踪混杂）
+#   connect.facebook.com, connect.facebook.net
+#
+# WhatsApp（与 Quest 无关）
+#   graph.whatsapp.com, graph.whatsapp.net
+#
+# Oculus 根域（后缀匹配会误伤 securecdn 商店下载）
+#   oculus.com, www.oculus.com
+#
+# Nuvido 网络配置中列出的其他域名（ onion / Instagram / Workplace 等）
+#   facebookcorewwwi.onion, fbcdn23dssr3jqnq.onion, fbsbx2q4mvcl63pw.onion
+#   instagram.com, cdninstagram.com, workplace.com
+#   facebookvirtualassistant.com, discoverapp.com, freebasics.com, internet.org

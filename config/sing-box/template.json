@@ -45,6 +45,10 @@
         "action": "reject"
       },
       {
+        "rule_set": "OculusTelemetry-dns",
+        "action": "reject"
+      },
+      {
         "rule_set": "Lan-dns",
         "server": "dns-lan",
         "disable_optimistic_cache": true
@@ -466,7 +470,8 @@
           "Advertising",
           "Hijacking",
           "MyReject",
-          "Privacy"
+          "Privacy",
+          "OculusTelemetry"
         ],
         "action": "reject"
       },
@@ -661,6 +666,12 @@
       },
       {
         "type": "remote",
+        "tag": "OculusTelemetry-dns",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/OculusTelemetry-dns.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
         "tag": "Lan-dns",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Lan-dns.srs",
         "update_interval": "24h0m0s"
@@ -705,6 +716,12 @@
         "type": "remote",
         "tag": "Privacy",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Privacy.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "OculusTelemetry",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/OculusTelemetry.srs",
         "update_interval": "24h0m0s"
       },
       {
