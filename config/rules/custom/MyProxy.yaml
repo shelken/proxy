@@ -48,3 +48,8 @@ rules:
       - 1.1.1.1/32,no-resolve
       - 8.8.8.8/32,no-resolve
       - 8.8.4.4/32,no-resolve
+
+  # 由 bybit 覆盖；移除关键词时可恢复。
+  # - domain_suffix:
+  #     - bybits.org
+  #     - bybit.biz

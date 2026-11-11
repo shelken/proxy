@@ -60,3 +60,7 @@ rules:
       - 240e::/18,no-resolve
       - 2409:8000::/20,no-resolve
       - 2408:8000::/20,no-resolve
+
+  # 由 icloud 关键词和 cn 后缀覆盖；收窄匹配时可恢复。
+  # - domain_suffix:
+  #     - icloud.com.cn

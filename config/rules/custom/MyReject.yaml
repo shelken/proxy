@@ -26,3 +26,8 @@ rules:
       - analytics-api
       - datadoghq
       - tmfmazu4
+
+  # 由 datadoghq 覆盖；移除关键词时可恢复。
+  # - domain:
+  #     - browser-intake-us5-datadoghq.com
+  #     - http-intake.logs.us5.datadoghq.com

@@ -79,3 +79,22 @@ rules:
             rules:
               - domain_keyword: radiantflow
               - domain_keyword: clear-water
+
+  # 由 jav、porn、xvideo、surrit、skyearth 覆盖；移除关键词时可恢复。
+  # - domain_suffix:
+  #     - javdb.com
+  #     - njav.tv
+  #     - javlibrary.com
+  #     - javbus.com
+  #     - javplayer.me
+  #     - javtrailers.com
+  #     - ggjav.com
+  #     - skyearth.xyz
+  #     - surrit.com
+  #     - xvideos-cdn.com
+  #     - pornhub.com
+  #     - xvideos.com
+  #     - pornolab.net
+  # - domain_keyword:
+  #     - javmost
+  #     - javdh

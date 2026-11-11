@@ -33,3 +33,11 @@ rules:
       - antigravity.googleapis.com
   - domain_keyword:
       - cloudcode-pa
+
+  # 由 cloudcode-pa 覆盖；移除关键词时可恢复。
+  # - domain_suffix:
+  #     - cloudcode-pa.googleapis.com
+  # - domain:
+  #     - daily-cloudcode-pa.googleapis.com
+  # - domain_keyword:
+  #     - daily-cloudcode-pa
