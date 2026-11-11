@@ -124,17 +124,11 @@ describe("template.json structural verification", () => {
     expect(tun.address[0]).not.toBe("198.18.0.1/30");
   });
 
-  test("routes Lan, local domain suffixes, and PTR queries to local system DNS", () => {
+  test("routes Lan and PTR queries to local system DNS", () => {
     const rules = template.dns?.rules ?? [];
     const lanRule = rules.find((r) => r.rule_set?.includes("Lan-dns"));
     // shared.yaml 固定引用 Lan-dns，settings 里没有 Lan 时构建本身就会失败
     expect(lanRule?.server).toBe("dns-lan");
-
-    const suffixRule = rules.find((r) => r.domain_suffix?.includes("local"));
-    expect(suffixRule).toBeDefined();
-    expect(suffixRule.domain_suffix).toContain("lan");
-    expect(suffixRule.domain_suffix).toContain("home.arpa");
-    expect(suffixRule.server).toBe("dns-lan");
 
     const ptrRule = rules.find((r) => r.query_type?.includes("PTR"));
     expect(ptrRule).toBeDefined();

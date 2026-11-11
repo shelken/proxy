@@ -35,16 +35,11 @@
         "action": "reject"
       },
       {
-        "rule_set": "Lan-dns",
-        "server": "dns-lan",
-        "disable_optimistic_cache": true
+        "domain": "local",
+        "action": "predefined"
       },
       {
-        "domain_suffix": [
-          "local",
-          "lan",
-          "home.arpa"
-        ],
+        "rule_set": "Lan-dns",
         "server": "dns-lan",
         "disable_optimistic_cache": true
       },

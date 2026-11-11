@@ -4,6 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SING_BOX } from "./lib/sandbox.ts";
+import { emitSingboxDns, parseYamlAst } from "../../../scripts/rules-compile.ts";
 
 const template = JSON.parse(await readFile(new URL("../template.json", import.meta.url), "utf8"));
 
@@ -14,17 +15,17 @@ function question(name, type) {
   header.writeUInt16BE(1, 4);
   return Buffer.concat([header, ...name.split(".").map(label => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)])), Buffer.from([0, type >> 8, type & 255, 0, 1])]);
 }
-function response(packet) {
+function response(packet, address = "192.0.2.10", ttl = 30) {
   let end = 12;
   while (packet[end]) end += packet[end] + 1;
   end++;
   const type = packet.readUInt16BE(end);
   const header = Buffer.from(packet.subarray(0, 12));
   header.writeUInt16BE(0x8180, 2);
-  const data = type === 65 ? Buffer.from([0, 1, 0, 0, 1, 0, 3, 2, 104, 50]) : null;
+  const data = type === 1 ? Buffer.from(address.split(".").map(Number)) : type === 65 ? Buffer.from([0, 1, 0, 0, 1, 0, 3, 2, 104, 50]) : null;
   header.writeUInt16BE(data ? 1 : 0, 6);
   const rr = Buffer.alloc(12);
-  rr.writeUInt16BE(0xc00c); rr.writeUInt16BE(type, 2); rr.writeUInt16BE(1, 4); rr.writeUInt32BE(30, 6); rr.writeUInt16BE(data?.length ?? 0, 10);
+  rr.writeUInt16BE(0xc00c); rr.writeUInt16BE(type, 2); rr.writeUInt16BE(1, 4); rr.writeUInt32BE(ttl, 6); rr.writeUInt16BE(data?.length ?? 0, 10);
   return Buffer.concat([header, packet.subarray(12, end + 4), ...(data ? [rr, data] : [])]);
 }
 function query(name, type, timeoutMs = 3000) {
@@ -52,7 +53,7 @@ async function start(config, dir) {
   throw new Error(`Kernel startup failed: ${log}`);
 }
 
-async function withDNS(run) {
+async function withDNS(run, source = template) {
   const dir = await mkdtemp(join(tmpdir(), "sb-dns-behavior-"));
   const processes = [];
   const relays = {};
@@ -85,13 +86,13 @@ async function withDNS(run) {
       relays[tag] = relay;
     };
     for (const node of nodes) await startRelay(node.tag);
-    const dns = structuredClone(template.dns);
+    const dns = structuredClone(source.dns);
     for (const server of dns.servers) {
       if (server.type === "https") { server.server = "127.0.0.1"; server.server_port = doh.port; server.tls = { enabled: true, server_name: "localhost", certificate: await readFile(cert, "utf8") }; }
       if (server.type === "udp") { server.server = "127.0.0.1"; server.server_port = 15354; }
     }
     const detour = dns.servers.find(server => server.tag === "dns-proxy").detour;
-    const group = structuredClone(template.outbounds.find(outbound => outbound.tag === detour));
+    const group = structuredClone(source.outbounds.find(outbound => outbound.tag === detour));
     group.outbounds = [...new Set(group.outbounds.flatMap(pattern => {
       const insensitive = pattern.startsWith("(?i)");
       const regex = new RegExp(insensitive ? pattern.slice(4) : pattern, insensitive ? "i" : "");
@@ -99,12 +100,14 @@ async function withDNS(run) {
     }))];
     group.url = health.url.href;
     const dnsTags = [...new Set((dns.rules ?? []).flatMap(r => Array.isArray(r.rule_set) ? r.rule_set : (r.rule_set ? [r.rule_set] : [])))];
+    const mine = await readFile(new URL("../../rules/custom/MyDirect.yaml", import.meta.url), "utf8");
+    const myDirectDns = JSON.parse(emitSingboxDns(parseYamlAst(mine))).rules;
     const config = {
       log: { level: "debug" }, dns,
       inbounds: [{ type: "direct", tag: "dns-test", listen: "127.0.0.1", listen_port: 15353 }],
       outbounds: [{ type: "direct", tag: "direct" }, ...nodes, group],
-      route: { default_domain_resolver: "dns-lan", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })) },
-      experimental: { cache_file: { ...template.experimental.cache_file, path: "cache.db" }, clash_api: { external_controller: "127.0.0.1:19090" } },
+      route: { default_domain_resolver: "dns-lan", rules: [{ inbound: ["dns-test"], action: "hijack-dns" }], rule_set: dnsTags.map(tag => ({ type: "inline", tag, rules: tag === "MyDirect-dns" ? myDirectDns : [{ domain: ["nonmatching.invalid"] }] })) },
+      experimental: { cache_file: { ...source.experimental.cache_file, path: "cache.db" }, clash_api: { external_controller: "127.0.0.1:19090" } },
     };
     const startCore = async () => {
       const core = await start(config, dir);
@@ -119,6 +122,34 @@ async function withDNS(run) {
     udp.close();
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+for (const file of ["template.json", "template-ios.json", "template-router.json"]) {
+  test(`${file}: local 根名立即空应答，子域与 LAN 仍由本网解析器应答`, async () => {
+    const source = JSON.parse(await readFile(new URL(`../${file}`, import.meta.url), "utf8"));
+    await withDNS(async f => {
+      // 用可控上游验证规则边界，避免依赖沙箱所在链路上的 mDNS 设备。
+      const lan = { type: "udp", tag: "dns-lan", server: "127.0.0.1", server_port: 15354 };
+      f.config.dns.servers = f.config.dns.servers.filter(s => s.type !== "tailscale")
+        .map(s => s.type === "local" ? lan : s);
+      f.config.dns.rules = f.config.dns.rules.filter(r => ![r.preferred_by].flat().includes("dns-ts"));
+      if (!f.config.dns.servers.some(s => s.tag === "dns-lan")) f.config.dns.servers.push(lan);
+      const core = await f.startCore();
+      const before = f.queries();
+      for (const type of [65, 1, 28, 2, 6, 12, 16]) {
+        const packet = await query("local", type, 1000);
+        expect(packet.readUInt16BE(2) & 15).toBe(0);
+        expect(packet.readUInt16BE(6)).toBe(0);
+      }
+      expect(f.queries()).toEqual(before);
+      for (const name of ["probe.local", "probe.lan", "probe.home.arpa"]) {
+        const packet = await query(name, 1);
+        expect(packet.readUInt16BE(6)).toBe(1);
+        expect(packet.subarray(-4).join(".")).toBe("192.0.2.10");
+      }
+      expect(core.log()).not.toContain("process DNS packet:");
+    }, source);
+  }, 15000);
 }
 
 async function eventuallyQuery(name, timeoutMs) {
@@ -196,20 +227,7 @@ test("LAN 域名 TTL 过期后返回上游新地址而非过期缓存", () => wi
   const lan = createSocket("udp4");
   let address = "192.0.2.10";
   try {
-    const aRecord = (packet, ip) => {
-      let end = 12;
-      while (packet[end]) end += packet[end] + 1;
-      end++;
-      const header = Buffer.from(packet.subarray(0, 12));
-      header.writeUInt16BE(0x8180, 2);
-      header.writeUInt16BE(1, 6);
-      const rr = Buffer.alloc(16);
-      rr.writeUInt16BE(0xc00c); rr.writeUInt16BE(1, 2); rr.writeUInt16BE(1, 4);
-      rr.writeUInt32BE(1, 6); rr.writeUInt16BE(4, 10);
-      Buffer.from(ip.split(".").map(Number)).copy(rr, 12);
-      return Buffer.concat([header, packet.subarray(12, end + 4), rr]);
-    };
-    lan.on("message", (packet, peer) => lan.send(aRecord(packet, address), peer.port, peer.address));
+    lan.on("message", (packet, peer) => lan.send(response(packet, address, 1), peer.port, peer.address));
     await new Promise(resolve => lan.bind(15357, "127.0.0.1", resolve));
     // dns-lan(type local) 跟随 VM 系统解析器，答案不可控；
     // 换成可控 UDP 上游后，LAN 规则本身的路由行为不变

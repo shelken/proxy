@@ -22,8 +22,9 @@ dns-options: { strategy: prefer_ipv4, optimistic: true, final: dns-proxy }
 dns-rules:
   - { rule_set: [MyReject-dns], action: reject }
   - { rule_set: [OculusTelemetry-dns], action: reject }
+  # local. 本身没有设备记录；精确空应答保留 *.local 的 mDNS 与服务发现。
+  - { domain: [local], action: predefined }
   - { rule_set: [Lan-dns], server: dns-lan, disable_optimistic_cache: true }
-  - { domain_suffix: [local, lan, home.arpa], server: dns-lan, disable_optimistic_cache: true }
   - { rule_set: [MyDirect-dns], server: dns-lan, disable_optimistic_cache: true }
   - { clash_mode: direct, server: dns-lan }
   - { query_type: [PTR], server: dns-lan }
