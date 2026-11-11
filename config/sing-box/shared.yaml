@@ -21,6 +21,7 @@ dns-options: { strategy: prefer_ipv4, optimistic: true, final: dns-proxy }
 # DNS 规则的顺序即匹配顺序；rule_set 里写 settings.yaml 的规则名，-dns 是它的域名版伴生，自动声明
 dns-rules:
   - { rule_set: [MyReject-dns], action: reject }
+  - { rule_set: [OculusTelemetry-dns], action: reject }
   - { rule_set: [Lan-dns], server: dns-lan, disable_optimistic_cache: true }
   - { domain_suffix: [local, lan, home.arpa], server: dns-lan, disable_optimistic_cache: true }
   - { rule_set: [MyDirect-dns], server: dns-lan, disable_optimistic_cache: true }
