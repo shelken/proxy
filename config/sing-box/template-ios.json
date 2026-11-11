@@ -56,11 +56,10 @@
         "action": "predefined"
       },
       {
-        "rule_set": "MyReject-dns",
-        "action": "reject"
-      },
-      {
-        "rule_set": "OculusTelemetry-dns",
+        "rule_set": [
+          "MyReject-dns",
+          "OculusTelemetry-dns"
+        ],
         "action": "reject"
       },
       {
@@ -68,12 +67,10 @@
         "action": "predefined"
       },
       {
-        "rule_set": "Lan-dns",
-        "server": "dns-lan",
-        "disable_optimistic_cache": true
-      },
-      {
-        "rule_set": "MyDirect-dns",
+        "rule_set": [
+          "Lan-dns",
+          "MyDirect-dns"
+        ],
         "server": "dns-lan",
         "disable_optimistic_cache": true
       },

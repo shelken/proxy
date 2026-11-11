@@ -22,8 +22,6 @@ rules:
       - immersivetranslate.com
   - domain:
       - msmp.abchina.com.cn
-      - browser-intake-us5-datadoghq.com
-      - http-intake.logs.us5.datadoghq.com
   - domain_keyword:
       - analytics-api
       - datadoghq
