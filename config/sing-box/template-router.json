@@ -514,22 +514,6 @@
         "outbound": "download"
       },
       {
-        "rule_set": [
-          "MyDirect",
-          "Microsoft",
-          "PayPal",
-          "Apple",
-          "ChinaMax",
-          "Lan",
-          "cftunnel",
-          "geoip-cn"
-        ],
-        "invert": true,
-        "action": "resolve",
-        "server": "dns-proxy",
-        "strategy": "ipv4_only"
-      },
-      {
         "rule_set": "MyDirect",
         "outbound": "direct"
       },

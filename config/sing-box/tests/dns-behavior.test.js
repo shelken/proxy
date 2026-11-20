@@ -252,3 +252,118 @@ test("LAN 域名 TTL 过期后返回上游新地址而非过期缓存", () => wi
     lan.close();
   }
 }), 15000);
+
+// 极简 SOCKS5 捕获节点：只记录客户端 CONNECT 请求的 ATYP 与目标地址（不实际外联），
+// 用来区分 sing-box 是把域名原样交给节点（ATYP=3），还是先本机 resolve 成 IP 再拨号（ATYP=1）。
+function startSocksCapture() {
+  let waitResolve;
+  const first = new Promise(resolve => { waitResolve = resolve; });
+  const server = Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      open(sock) { sock.data = { step: 0, buf: Buffer.alloc(0) }; },
+      data(sock, chunk) {
+        sock.data.buf = Buffer.concat([sock.data.buf, Buffer.from(chunk)]);
+        if (sock.data.step === 0) {
+          if (sock.data.buf.length < 2) return;
+          const n = sock.data.buf[1];
+          if (sock.data.buf.length < 2 + n) return;
+          sock.data.buf = sock.data.buf.subarray(2 + n);
+          sock.data.step = 1;
+          sock.write(Buffer.from([5, 0]));
+        }
+        if (sock.data.step === 1 && sock.data.buf.length >= 5) {
+          const b = sock.data.buf;
+          const atyp = b[3];
+          let target;
+          if (atyp === 1 && b.length >= 10) target = Array.from(b.subarray(4, 8)).join(".");
+          else if (atyp === 3 && b.length >= 7 + b[4]) target = b.subarray(5, 5 + b[4]).toString("utf8");
+          else if (atyp === 4 && b.length >= 22) target = "ipv6";
+          else return;
+          waitResolve?.({ atyp, target });
+          waitResolve = null;
+          sock.write(Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]));
+          sock.end();
+        }
+      },
+    },
+  });
+  return { port: server.port, first, stop: () => server.stop(true) };
+}
+
+async function connectViaMixed(port, host) {
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("mixed CONNECT timeout")), 3000);
+    Bun.connect({
+      hostname: "127.0.0.1",
+      port,
+      socket: {
+        open(sock) { sock.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n\r\n`); },
+        data(sock) { clearTimeout(timer); sock.end(); resolve(); },
+        close() { clearTimeout(timer); resolve(); },
+        error(_s, err) { clearTimeout(timer); reject(err); },
+        connectError(_s, err) { clearTimeout(timer); reject(err); },
+      },
+    });
+  });
+}
+
+test("代理流量直接携带域名发往节点，不触发本机 DoH 解析（附反向对照）", () => withDNS(async f => {
+  const runCase = async (extraRouteRules = []) => {
+    const capture = startSocksCapture();
+    const mixedPort = 15360 + Math.floor(Math.random() * 200);
+    try {
+      const routeRules = [...structuredClone(template.route.rules), ...extraRouteRules];
+      const ruleSetTags = [...new Set([
+        ...(f.config.route.rule_set ?? []).map(r => r.tag),
+        ...routeRules.flatMap(r => Array.isArray(r.rule_set) ? r.rule_set : (r.rule_set ? [r.rule_set] : [])),
+      ])];
+      const outboundTags = [...new Set([
+        template.route.final,
+        ...routeRules.map(r => r.outbound).filter(Boolean),
+      ])];
+      const existing = new Set(f.config.outbounds.map(o => o.tag));
+      const extraOutbounds = outboundTags
+        .filter(tag => !existing.has(tag))
+        .map(tag => ({ type: "socks", tag, server: "127.0.0.1", server_port: capture.port }));
+      const caseConfig = {
+        ...structuredClone(f.config),
+        inbounds: [{ type: "mixed", tag: "mixed-test", listen: "127.0.0.1", listen_port: mixedPort }],
+        outbounds: [...structuredClone(f.config.outbounds), ...extraOutbounds],
+        route: {
+          default_domain_resolver: "dns-lan",
+          final: template.route.final,
+          rules: routeRules,
+          rule_set: ruleSetTags.map(tag => ({ type: "inline", tag, rules: [{ domain: ["nonmatching.invalid"] }] })),
+        },
+      };
+      const dir = await mkdtemp(join(tmpdir(), "sb-proxy-dns-"));
+      const core = await start(caseConfig, dir);
+      try {
+        const before = f.queries();
+        await connectViaMixed(mixedPort, "proxy-target.test");
+        const seen = await capture.first;
+        const after = f.queries();
+        return { seen, dohDelta: after.doh - before.doh, udpDelta: after.udp - before.udp };
+      } finally {
+        await core.stop();
+        await rm(dir, { recursive: true, force: true });
+      }
+    } finally {
+      capture.stop();
+    }
+  };
+
+  // 正向：生产底模直接把域名交给节点（ATYP=3），零本机 DoH / UDP 查询
+  const prod = await runCase();
+  expect(prod.seen).toEqual({ atyp: 3, target: "proxy-target.test" });
+  expect(prod.dohDelta).toBe(0);
+  expect(prod.udpDelta).toBe(0);
+
+  // 反向对照：若加回 action: resolve，本机先发 DoH 解析再把 IPv4（ATYP=1）发给节点
+  const withResolve = await runCase([{ action: "resolve", server: "dns-proxy", strategy: "ipv4_only" }]);
+  expect(withResolve.seen).toEqual({ atyp: 1, target: "192.0.2.10" });
+  expect(withResolve.dohDelta).toBe(1);
+}), 20000);
+
