@@ -159,7 +159,7 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 
 ### 实例复用
 
-服务端直接复用客户端的装配管线（`collect_nodes` / `finalize` / `populate_selectors`），因此「节点标签分配、策略组展开、空组跳过」在两个形态下语义一致。策略组匹配不到节点时整组跳过并告警，同时剪掉其它组对它的引用（含 `default`），避免产物留下悬空 tag 触发 sing-box `dependency[...] not found` 致命错误
+服务端直接复用客户端的装配管线（`collect_nodes` / `finalize` / `populate_selectors`），因此「节点标签分配、策略组展开、空组跳过」在两个形态下语义一致。策略组匹配不到节点时整组跳过并告警，同时剪掉其它组对它的引用（含 `default`），并将指向该组的路由规则与 DNS detour 回退到 `proxy`（再回退 `direct`），避免产物留下悬空 tag 触发 sing-box `dependency[...] not found` 致命错误；底模自带的 `endpoints`（如 iOS 的 `ts-ep`）与出站共用标签空间但不属于无节点分组，保持原样不回退
 
 ## 6. 合并机制
 

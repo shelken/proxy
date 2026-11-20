@@ -130,7 +130,7 @@ describe("template-ios.json 结构契约（ADR-0010）", () => {
   });
 });
 
-// 共享片段的顺序约束在 iOS 侧同样成立（CODING_STANDARDS：拦截 > 模式开关 > 服务分流，
+// 共享片段的顺序约束在 iOS 侧同样成立（ADR-0007 / ADR-0008：拦截 > 模式开关 > 服务分流，
 // MyDirect/MyProxy 排在所有服务规则之前）。设置更新只跑 Mac 测试时，
 // 违反顺序的改动对 iOS 不可见，这里补上同口径断言。
 describe("共享顺序契约（iOS 侧）", () => {
