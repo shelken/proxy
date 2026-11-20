@@ -36,3 +36,7 @@ QUIC 守卫本身是 `e9ea4c3` 的有意设计——机场节点 UDP 承载差�
 - 排序策略补上第三条：**拦截 > 模式开关 > 服务分流**。新增服务时若需排在拦截之前，必须显式说明理由
 - `direct` 模式下境外 QUIC 从「全放行」变为「拒绝并降级 TCP」；国内 QUIC 不受影响，这是有意的取舍而非副作用
 - 回滚：`33-quic-guard.json` 并回 `30`、`34-clash-mode.json` 并回 `30`，恢复 `reject` 到 `36` 号段，再 `just template-build`
+
+## 后续（2026-11-20）：移除路由层 `action: resolve`
+
+`config/sing-box/shared.yaml` 移除路由层 `action: resolve` 后，原第 5 条中「早于首条 `resolve` 规则」的前置条件已不再存在。`template.test.ts` 与 `config/sing-box/tests/lib/contracts.ts` 保留全部 `reject` 规则早于首条 `clash_mode` 与服务规则、以及 QUIC 豁免早于 `reject` 的契约，并新增路由规则不含 `action: resolve` 的断言

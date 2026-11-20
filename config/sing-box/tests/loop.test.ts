@@ -26,7 +26,7 @@ const UPSTREAM_PORT = 15356;
 const UPSTREAM_IP = Buffer.from([203, 0, 113, 7]);
 
 /**
- * 应答任意 A 查询，AAAA 返回空。`resolve` 用 `strategy: ipv4_only`，只查 A。
+ * 应答任意 A 查询，AAAA 返回空。沙箱夹具域名不需要 IPv6 应答。
  */
 function buildResponse(query: Buffer): Buffer {
   let end = 12;

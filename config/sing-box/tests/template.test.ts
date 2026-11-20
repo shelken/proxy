@@ -261,49 +261,10 @@ describe("template.json structural verification", () => {
     expect(fakeip?.inet6_range).toBeUndefined();
   });
 
-  test("代理流量在路由阶段按 v4 解析后再交给节点", () => {
+  test("代理流量把域名交给节点解析，路由阶段不做本机解析", () => {
+    // 本机 resolve 会让每个新域名多一次经 dns-auto 的 DoH 往返，且解析地区与出口节点不一致
     const rules = template.route?.rules ?? [];
-    const resolveRule = rules.find((r) => r.action === "resolve");
-    expect(resolveRule).toBeDefined();
-    // 必须显式指定 dns-proxy：否则内部查询被 dns.rules 的 fakeip 接住，返回假 IP
-    expect(resolveRule.server).toBe("dns-proxy");
-    expect(resolveRule.strategy).toBe("ipv4_only");
-  });
-
-  test("v4 解析规则排除了所有默认直连的规则集", () => {
-    const rules = template.route?.rules ?? [];
-    const resolveRule = rules.find((r) => r.action === "resolve");
-    expect(resolveRule.invert).toBe(true);
-    const excluded: Record<string, true> = {};
-    for (const tag of asArray(resolveRule.rule_set)) excluded[tag] = true;
-
-    // 「默认直连」= 规则的出站就是 direct，或出站是默认 direct 的策略组。漏掉一个，该组流量会
-    // 先被 dns-proxy 解析成海外 IP 再直连（国内/就近站点拿到海外 CDN 地址）。清单从底模推导：
-    // 新增直连规则集、或把某个组改成默认 direct，都会在这里被拦住。
-    const directDefaults = new Set<string>(
-      (template.outbounds ?? [])
-        .filter((o: { default?: string }) => o.default === "direct")
-        .map((o: { tag: string }) => o.tag),
-    );
-    const directRuleSets = rules
-      .filter((r) => r.outbound === "direct" || directDefaults.has(r.outbound as string))
-      .flatMap((r) => asArray(r.rule_set));
-    expect(directRuleSets.length).toBeGreaterThan(0);
-    expect(directRuleSets.filter((tag) => !excluded[tag])).toEqual([]);
-  });
-
-  test("所有 action: reject 规则必须排在首个 action: resolve 规则之前", () => {
-    const rules = template.route?.rules ?? [];
-    const firstResolveIndex = rules.findIndex(
-      (r: { action?: string }) => r.action === "resolve",
-    );
-    expect(firstResolveIndex).toBeGreaterThan(-1);
-
-    for (let i = 0; i < rules.length; i++) {
-      if (rules[i].action === "reject") {
-        expect(i).toBeLessThan(firstResolveIndex);
-      }
-    }
+    expect(rules.filter((r: { action?: string }) => r.action === "resolve")).toEqual([]);
   });
 
   test("拦截规则先于 clash_mode（ADR-0008）", () => {
@@ -363,7 +324,7 @@ describe("template.json structural verification", () => {
 });
 
 // settings.yaml 是底模的唯一登记处：规则声明、匹配引用、分组与 DNS 伴生都从它生成。
-// 这里守生成的产物与 settings/shared 一致，以及固定机制（拦截/解析/QUIC）没有被改坏。
+// 这里守生成的产物与 settings/shared 一致，以及固定机制（拦截/QUIC）没有被改坏。
 describe("settings.yaml → template.json 生成契约", () => {
   test("log 级别为 info", () => {
     expect(template.log).toEqual({ level: "info" });

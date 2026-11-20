@@ -81,4 +81,3 @@ route-policy:
   - { clash_mode: global, action: route, outbound: proxy }
   - { protocol: bittorrent, action: route, outbound: torrent }
   - { rule_set: [download], action: route, outbound: download }
-  - { rule_set: [direct], invert: true, action: resolve, server: dns-proxy, strategy: ipv4_only }

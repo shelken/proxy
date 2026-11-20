@@ -107,14 +107,17 @@ describe("默认设置：生成结构", () => {
   });
 });
 
-describe("默认直连链：resolve 排除", () => {
-  const resolveSet = (settings: Settings) => {
-    const rule = policy(settings).route.rules.find((r) => r.action === "resolve");
+describe("默认直连链：去向名展开", () => {
+  const directSet = (settings: Settings) => {
+    // 借一条测试用规则观察 rule_set: ["direct"] 沿去向链的展开结果，不依赖生产 shared.yaml 是否含该规则
+    const probe = { rule_set: ["direct"], invert: true, action: "resolve", server: "dns-proxy" };
+    const cfg = assemble(settings, { ...shared, "route-policy": [...(shared["route-policy"] as any[]), probe] } as any, platforms.mac);
+    const rule = cfg.route.rules.find((r: any) => r.action === "resolve");
     return new Set(rule.rule_set ?? []);
   };
 
   test("默认包含直接直连、默认直连分组与 shared 默认直连出站", () => {
-    const set = resolveSet(defaults);
+    const set = directSet(defaults);
     for (const name of ["MyDirect", "ChinaMax", "Lan", "cftunnel", "geoip-cn"]) expect(set.has(name)).toBe(true);
     const microsoft = defaults.rules.find((r) => r.to === "microsoft")!.name;
     expect(set.has(microsoft)).toBe(true);
@@ -127,14 +130,14 @@ describe("默认直连链：resolve 排除", () => {
       d.groups = { ...d.groups, app: { options: ["lan"], default: "lan" }, lan: { options: ["direct"], default: "direct" } };
       d.rules.find((r: any) => r.name === "MyProxy").to = "app";
     });
-    expect(resolveSet(loadSettings(shared, path)).has("MyProxy")).toBe(true);
+    expect(directSet(loadSettings(shared, path)).has("MyProxy")).toBe(true);
   });
 
   test("shared 内默认 direct 的 selector（torrent）解析为直连", () => {
     const path = tempSettings((d) => {
       d.rules.push({ name: "Internal", source: localSource, to: "torrent" });
     });
-    expect(resolveSet(loadSettings(shared, path)).has("Internal")).toBe(true);
+    expect(directSet(loadSettings(shared, path)).has("Internal")).toBe(true);
   });
 
   test("默认链成环在配置期报错", () => {
@@ -142,7 +145,7 @@ describe("默认直连链：resolve 排除", () => {
       d.groups = { ...d.groups, a: { options: ["b"], default: "b" }, b: { options: ["a"], default: "a" } };
       d.rules.push({ name: "Loop", source: localSource, to: "a" });
     });
-    expect(() => policy(loadSettings(shared, path))).toThrow(/成环/);
+    expect(() => directSet(loadSettings(shared, path))).toThrow(/成环/);
   });
 });
 
@@ -202,13 +205,14 @@ describe("骨架与 settings 的关系", () => {
   });
 
   test("规则名与去向名同名时报歧义，不静默改变引入范围", () => {
-    const settings = mutate((d) => { d.rules.push({ name: "direct", source: localSource, to: "direct" }); });
+    const settings = mutate((d) => { d.rules.push({ name: "reject", source: localSource, to: "reject" }); });
     expect(() => assemble(settings, shared, platforms.mac)).toThrow(/既是规则名又是去向名/);
   });
 
   test("selector 没写 default：沿首个候选解析去向链", () => {
     const settings = mutate((d) => { delete d.groups.paypal.default; });
-    const cfg = assemble(settings, shared, platforms.mac);
+    const probe = { rule_set: ["direct"], invert: true, action: "resolve", server: "dns-proxy" };
+    const cfg = withShared({ "route-policy": [...policyRules(), probe] }, settings);
     const resolve = cfg.route.rules.find((r: any) => r.action === "resolve");
     expect(resolve.rule_set).toContain(settings.rules.find((r) => r.to === "paypal")!.name);
   });
