@@ -1,20 +1,15 @@
 #!name=Google One 优惠档改写
-#!desc=将 Google One iOS 商品目录里的 20TB 月付与 30TB AI Pro 月付内购档替换为限时优惠档。优惠档必须真实出现在目录响应里才替换，主档(90p)缺失时自动降级备用档(75p)，每次命中输出目录探测日志，以日志为准增删 promo.js 中的 SKU_MAP。需要 Loon 开启 MITM 并信任证书。
+#!desc=改写 Google One /ai 商品目录响应：将 20TB 月付与 30TB AI Pro 月付 iOS 内购档直接替换为限时优惠档。请求侧同步删除 Accept-Encoding，避免压缩响应无法改写。需要 Loon 开启 MITM 并信任证书。
 #!author=shelken
 #!system=iOS, iPadOS, macOS
-#!loon_version=3.5.1(978)
+#!loon_version=3.2.3(749)
 #!homepage=https://github.com/shelken/proxy/blob/main/config/loon/plugins/google-one-promo/README.md
 #!icon=https://raw.githubusercontent.com/luestr/IconResource/main/App_icon/120px/Google.png
 #!tag=改写
 
-[Argument]
-enabled=switch,true,tag=启用改写,desc=关闭后不再改写商品目录响应
-
 [Rewrite]
-request if ${url} ~= /^https:\/\/one\.google\.com\/ai(?:\?.*)?$/ then request.header.del("Accept-Encoding")
-
-[Script]
-http-response ^https:\/\/one\.google\.com\/ai(?:\?.*)?$ script-path=https://raw.githubusercontent.com/shelken/proxy/main/config/loon/plugins/google-one-promo/promo.js, requires-body=true, enable={enabled}, tag=Google One 优惠档改写
+^https:\/\/one\.google\.com\/ai(?:\?.*)?$ header-del Accept-Encoding
+^https:\/\/one\.google\.com\/ai(?:\?.*)?$ response-body-replace-regex g1\.ios\.20tb\.m\.v2 g1.20tb.3months_ip_90p.acq g1\.ios\.30tb\.ai\.pro\.m g1.ai.ultra.3months_ip_90p.acq
 
 [MITM]
 hostname=one.google.com
