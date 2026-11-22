@@ -109,7 +109,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.4
+          bun-version: 1.4.5
 
       # 校验三份底模与 settings.yaml + shared.yaml + platforms/ 一致，口径与 just template-check 保持一致
       - name: verify template build consistency

@@ -37,22 +37,16 @@ fn parse_payload(plaintext: &[u8]) -> Result<Payload, String> {
     if !v.is_object() {
         return Err("载荷顶层必须是 JSON Object".into());
     }
-    let subs: Vec<String> = v["subs"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|s| s.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    let nodes: Vec<String> = v["nodes"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|s| s.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+    let subs: Vec<String> = v["subs"].as_array().map_or_default(|a| {
+        a.iter()
+            .filter_map(|s| s.as_str().map(str::to_string))
+            .collect()
+    });
+    let nodes: Vec<String> = v["nodes"].as_array().map_or_default(|a| {
+        a.iter()
+            .filter_map(|s| s.as_str().map(str::to_string))
+            .collect()
+    });
     let overlay = match &v["overlay"] {
         Value::Null => None,
         ov if ov.is_object() => Some(ov.clone()),

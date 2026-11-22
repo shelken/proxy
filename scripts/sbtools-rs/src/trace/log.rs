@@ -231,7 +231,7 @@ pub(super) fn capture_decisions(controller: &str, domain: &str) -> KernelDecisio
     // stop 置位后线程自行退出，进程结束即回收。
     drop(handle);
 
-    decisions.lock().map(|g| g.clone()).unwrap_or_default()
+    decisions.lock().map_or_default(|g| g.clone())
 }
 
 #[cfg(test)]
