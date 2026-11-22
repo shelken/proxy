@@ -25,7 +25,8 @@ async function start(config, dir) {
   await mkdir(dir, { recursive: true });
   const path = join(dir, "config.json");
   await writeFile(path, JSON.stringify(config));
-  const proc = Bun.spawn(["sudo", "-n", SING_BOX, "run", "-D", WORK, "-c", path], {
+  const prefix = process.getuid?.() === 0 ? [] : ["sudo", "-n"];
+  const proc = Bun.spawn([...prefix, SING_BOX, "run", "-D", WORK, "-c", path], {
     stdout: "pipe",
     stderr: "pipe",
   });

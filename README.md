@@ -99,7 +99,7 @@ just template-check    # 校验底模与输入一致
 just rules-build       # 全量编译各端产物
 ```
 
-规则集装载与路由裁决的断言在 `config/sing-box/tests/loop.test.ts`，会创建 TUN、改写路由表，**不在宿主机运行**，入口与沙箱 VM 生命周期见 justfile 的 `vm-*` 与 `test-sandbox` 命令
+规则集装载与路由裁决的断言在 `config/sing-box/tests/loop.test.ts`，会创建 TUN、改写路由表，**不在宿主机运行**，需在隔离沙箱容器执行，入口见 justfile 的 `sandbox-loop` 与 `test-sandbox` 命令
 改动 `scripts/sbtools-rs/` 后的编译校验由 CI 统一执行
 
 ## 许可证

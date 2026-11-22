@@ -265,6 +265,53 @@ pub fn parse_shadowsocks(
     }))
 }
 
+/// socks:// 或 socks5:// → sing-box socks5 出站。
+pub fn parse_socks(
+    raw: &str,
+    unsupported_queries: &mut BTreeMap<String, usize>,
+) -> Result<Value, String> {
+    let u = parse_url(raw)?;
+    record_unsupported_queries(
+        u.query().unwrap_or(""),
+        &["detour", "network"],
+        unsupported_queries,
+    );
+    let host = u
+        .host_str()
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']'))
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| format!("socks URI 缺少服务器地址：{raw}"))?;
+    let port: u16 = u.port().unwrap_or(1080);
+    let default_tag = format!("SOCKS {host}:{port}");
+    let tag = tag_from_hash(&u, &default_tag);
+
+    let mut outbound = json!({
+        "type": "socks",
+        "tag": tag,
+        "server": host,
+        "server_port": port,
+        "version": "5",
+    });
+    if !u.username().is_empty() {
+        outbound["username"] = json!(percent_decode(u.username()));
+    }
+    if let Some(password) = u.password() {
+        outbound["password"] = json!(percent_decode(password));
+    }
+    if let Some(detour) = query_get(&u, "detour").filter(|d| !d.is_empty()) {
+        outbound["detour"] = json!(detour);
+    }
+    if let Some(network) = query_get(&u, "network") {
+        if network != "tcp" && network != "udp" {
+            return Err(format!(
+                "socks URI 非法 network 参数 '{network}'（仅支持 tcp/udp）"
+            ));
+        }
+        outbound["network"] = json!(network);
+    }
+    Ok(outbound)
+}
+
 /// 入口分发：按 scheme 分派到具体解析器。
 pub fn parse_node_uri(
     uri: &str,
@@ -280,9 +327,12 @@ pub fn parse_node_uri(
     if trimmed.starts_with("ss://") {
         return parse_shadowsocks(trimmed, unsupported_queries);
     }
+    if trimmed.starts_with("socks://") || trimmed.starts_with("socks5://") {
+        return parse_socks(trimmed, unsupported_queries);
+    }
     let scheme = trimmed.split("://").next().unwrap_or(trimmed);
     Err(format!(
-        "不支持的节点协议：{scheme}（只支持 ss/hysteria2/hy2/anytls）"
+        "不支持的节点协议：{scheme}（只支持 ss/hysteria2/hy2/anytls/socks/socks5）"
     ))
 }
 
@@ -433,5 +483,43 @@ mod tests {
         let ss = "ss://YWVzLTEyOC1nY206Zng=@192.0.2.10:8388?plugin=obfs#tag3";
         let node3 = parse_node_uri(ss, &mut BTreeMap::new()).expect("ss 解析应该成功");
         assert_eq!(node3["type"], json!("shadowsocks"));
+    }
+
+    #[test]
+    fn socks_uri_maps_credentials_detour_and_network() {
+        let uri = "socks://acct-region-TR:p%40ss%3A1@socks.example.invalid:3000?detour=1024proxy&network=tcp#1024-tr";
+        let node = parse_node_uri(uri, &mut BTreeMap::new()).expect("socks 解析失败");
+        assert_eq!(node["type"], json!("socks"));
+        assert_eq!(node["version"], json!("5"));
+        assert_eq!(node["tag"], json!("1024-tr"));
+        assert_eq!(node["server"], json!("socks.example.invalid"));
+        assert_eq!(node["server_port"], json!(3000));
+        assert_eq!(node["username"], json!("acct-region-TR"));
+        assert_eq!(node["password"], json!("p@ss:1"));
+        assert_eq!(node["detour"], json!("1024proxy"));
+        assert_eq!(node["network"], json!("tcp"));
+    }
+
+    #[test]
+    fn socks5_defaults_and_rejects_invalid_inputs() {
+        let node = parse_node_uri("socks5://[2001:db8::5]", &mut BTreeMap::new())
+            .expect("无认证 socks5 IPv6 解析失败");
+        assert_eq!(node["server"], json!("2001:db8::5"));
+        assert_eq!(node["server_port"], json!(1080));
+        assert_eq!(node["tag"], json!("SOCKS 2001:db8::5:1080"));
+        assert!(node.get("username").is_none());
+        assert!(node.get("password").is_none());
+        assert!(node.get("detour").is_none());
+
+        let err_net = parse_node_uri("socks://192.0.2.1:1080?network=quic", &mut BTreeMap::new())
+            .expect_err("非法 network 应报错");
+        assert!(err_net.contains("network"), "实际: {err_net}");
+
+        let err_host =
+            parse_node_uri("socks://:1080", &mut BTreeMap::new()).expect_err("缺少主机名应报错");
+        assert!(
+            err_host.contains("empty host") || err_host.contains("缺少服务器地址"),
+            "实际: {err_host}"
+        );
     }
 }

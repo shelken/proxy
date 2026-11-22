@@ -42,6 +42,6 @@ gh workflow run release-sbtools.yml --ref <分支或 tag>
 - 发布完成的判据是 release job 成功且 GitHub Release 产出三份二进制与 `SHA256SUMS`，GHCR 镜像标签指向双架构 digest
 ## 其他
 
-- 沙箱 VM 内核始终对齐 `.mise.toml`：`sandbox-loop`、`test-sandbox`、`test-loop`、`test-dns`、`trace`、`dns-observe` 进入前自动核对，版本不符就从宿主下载对应 linux-arm64 包替换；也可手动 `just vm-kernel-sync`
+- 沙箱容器镜像始终对齐 `.mise.toml`：`scripts/sandbox.ts` 按 `.mise.toml` 的 `tools.sing-box` 与 `Dockerfile.sandbox` 哈希打 tag，版本变更时自动重建镜像并拉取对应官方版本
 - 客户端已安装的二进制不随发版自动升级，`latest` 仅为镜像便利标签，升级命令见 `docs/user-guide/00-cli-sync.md`
 - 服务端部署由 home-ops 的 VPS Docker Compose 完成，本仓库只负责产出产物

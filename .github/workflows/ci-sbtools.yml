@@ -31,7 +31,9 @@ on:
       - "Dockerfile"
       - ".dockerignore"
       - "justfile"
-      - "config/sing-box/lima.yaml"
+      - "config/sing-box/Dockerfile.sandbox"
+      - "scripts/Dockerfile.builder"
+      - "scripts/sandbox.ts"
       - ".github/workflows/ci-sbtools.yml"
       - ".github/workflows/release-sbtools.yml"
   # pull_request 不按路径过滤：版本 PR 与只改构建文件的 PR 也要拿到确定终态，
@@ -118,7 +120,7 @@ jobs:
         run: bun scripts/build-config.ts --check
 
       # 结构测试：本地 just check-template 只跑这几个 .test.ts，CI 同语义。
-      # kernel-routing.test.js 需要真实 tun0 设备，只能在 Lima 跑。
+      # kernel-routing.test.js 需要真实 tun0 设备，只能在 Linux 沙箱容器跑。
       - name: run template structural tests
         run: SING_BOX=$(which sing-box) bun test config/sing-box/tests/template.test.ts config/sing-box/tests/ios-template.test.ts config/sing-box/tests/router-template.test.ts
 

@@ -2,12 +2,11 @@
 /**
  * verify-rules-compiler 入口（宿主侧）。
  *
- * 验证 PR #91 引入的规则编译双路径：
+ * 验证规则编译管道：
  *   - 外部镜像：geosite:x / geoip:x → 直接镜像 meta-rules-dat 三端原生资产
  *   - 内部 AST：custom/*.yaml → parseYamlAst → 三端产物
  *
- * 编译在宿主完成（联网拉上游清单），内核行为断言在 proxy-test VM 内完成
- * （宿主机跑 sing-box run 需要 TUN 与 sudo，会破坏在用的网络）。
+ * 编译在宿主完成（联网拉上游清单），内核行为断言在隔离沙箱容器内完成。
  *
  * 用法：
  *   RUN=".sandbox-artifacts/verification/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -16,27 +15,23 @@
  *   bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js drive   --out "$RUN"
  *   bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js cleanup --out "$RUN"
  *   bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js all
- *
- * 不读取任何个人配置，不启动 sbtools 服务端，不修改本机在用的网络规则。
  */
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { localizeRuleSets, planRuleSets, stageRuleSets } from "../../../../scripts/rule-set-local.ts";
+import { ensureSandboxImage, withSandbox } from "../../../../scripts/sandbox.ts";
 
 const REPO = resolve(import.meta.dir, "../../../..");
 const ARTIFACTS_ROOT = join(REPO, ".sandbox-artifacts/verification");
 const GENERATED = join(REPO, "config/rules/generated");
-const VM = "proxy-test";
-const GUEST_REPO = "/host-home" + REPO.replace(process.env.HOME ?? "", "");
-const GUEST_SB = "/opt/proxy-test/bin/sing-box";
-const GUEST_WORKDIR = "/work/rule-verify";
+const GUEST_REPO = "/repo";
+const GUEST_SB = "sing-box";
 
 const SUFFIX = { singbox: ".srs", clash: ".yaml", plain: ".list" };
 
-/** 抽查样本：覆盖外部镜像、内部 AST、一次性转换三类来源。 */
 const PROBES = [
   {
     tag: "Adult",
@@ -65,12 +60,6 @@ function fail(msg) {
 
 function host(cmd, args, opts = {}) {
   const p = spawnSync(cmd, args, { encoding: "utf8", cwd: REPO, ...opts });
-  return { code: p.status ?? 1, out: p.stdout ?? "", err: p.stderr ?? "" };
-}
-
-/** 在 VM 内执行命令。 */
-function guest(script) {
-  const p = spawnSync("limactl", ["shell", "--workdir", "/work", VM, "sh", "-c", script], { encoding: "utf8" });
   return { code: p.status ?? 1, out: p.stdout ?? "", err: p.stderr ?? "" };
 }
 
@@ -114,7 +103,7 @@ export function launch(outDir) {
     files,
   };
   writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-  log(`[launch] built=${manifest.builtTags} tags / ${files.length} files → ${outDir}`);
+  log(`[launch] built=${manifest.builtTags} tags，${files.length} 个产物写入 ${outDir}/manifest.json`);
 }
 
 // ---------------------------------------------------------------- doctor
@@ -139,13 +128,10 @@ export function doctor(outDir) {
   const check = host("bun", ["scripts/build-config.ts", "--check"]);
   if (check.code !== 0) problems.push(`底模与 settings/shared/platforms 不一致：\n${check.out}${check.err}`);
 
-  const vm = guest("echo ok");
-  if (vm.code !== 0) problems.push(`VM ${VM} 不可达：${vm.err.trim()}（just vm-start）`);
-  else {
-    const ver = guest(`${GUEST_SB} version`);
-    if (ver.code !== 0) problems.push("VM 内 sing-box 不可用");
-    const repo = guest("test -d " + GUEST_REPO + " && echo ok");
-    if (repo.code !== 0) problems.push(`VM 内看不到仓库 ${GUEST_REPO}`);
+  try {
+    ensureSandboxImage();
+  } catch (e) {
+    problems.push(`沙箱容器不可用：${String(e)}`);
   }
 
   writeFileSync(join(outDir, "doctor.log"), problems.join("\n") || "OK\n");
@@ -155,8 +141,7 @@ export function doctor(outDir) {
 
 // ---------------------------------------------------------------- drive
 
-/** D1 三端产物形态 + D2 sing-box 语义（VM 内 decompile）。 */
-export function driveArtifacts(outDir) {
+export function driveArtifacts(box, outDir) {
   const results = [];
   const add = (id, ok, detail) => {
     results.push({ id, ok, detail });
@@ -177,7 +162,7 @@ export function driveArtifacts(outDir) {
   const decomp = join(outDir, "decompiled");
   mkdirSync(decomp, { recursive: true });
   for (const p of PROBES) {
-    const r = guest(
+    const r = box.exec(
       `${GUEST_SB} rule-set decompile ${GUEST_REPO}/config/rules/generated/singbox/${p.tag}.srs -o /tmp/vrc-${p.tag}.json && cat /tmp/vrc-${p.tag}.json`,
     );
     if (r.code !== 0) {
@@ -191,8 +176,7 @@ export function driveArtifacts(outDir) {
   return results;
 }
 
-/** D3 VM 内真实内核命中：加载生成的 .srs，断言命中与未命中两条路径。 */
-export function driveKernel(outDir) {
+export function driveKernel(box, outDir) {
   const ruleSet = (tag) =>
     `{ "type": "local", "tag": "${tag}", "format": "binary", "path": "${GUEST_REPO}/config/rules/generated/singbox/${tag}.srs" }`;
   const cfg = {
@@ -210,13 +194,14 @@ export function driveKernel(outDir) {
     },
   };
   const script = `
-D=${GUEST_WORKDIR}; rm -rf $D; mkdir -p $D
+D=/work/rule-verify; rm -rf $D; mkdir -p $D
 cat > $D/config.json <<'JSON'
 ${JSON.stringify(cfg, null, 2)}
 JSON
-sudo -n ${GUEST_SB} check -c $D/config.json || { echo "CHECK_FAILED"; exit 1; }
+${GUEST_SB} check -D $D -c $D/config.json || { echo "CHECK_FAILED"; exit 1; }
 echo "CHECK_OK"
-sudo -n ${GUEST_SB} run -D $D -c $D/config.json > $D/sb.log 2>&1 &
+${GUEST_SB} run -D $D -c $D/config.json > $D/sb.log 2>&1 &
+PID=$!
 for i in $(seq 1 60); do grep -q "sing-box started" $D/sb.log && break; sleep 0.2; done
 grep -q "sing-box started" $D/sb.log && echo "READY" || { echo "NOT_READY"; tail -8 $D/sb.log; }
 echo "--- 命中路径：javdb.com 属于 Adult（domain_suffix）---"
@@ -225,10 +210,10 @@ echo "--- 未命中路径：example.com 应走 final=direct ---"
 curl -s -m 6 --proxy http://127.0.0.1:18181 https://example.com/ -o /dev/null -w "MISS_HTTP=%{http_code}\\n"; echo "MISS_EXIT=$?"
 echo "--- 内核裁决日志 ---"
 grep -oE "match\\[[0-9]+\\] rule_set=[A-Za-z0-9_-]+" $D/sb.log | head -6
-echo "--- 清理本次实例 ---"
-sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo NO_PROC
+kill $PID 2>/dev/null || true
+wait $PID 2>/dev/null || true
 `;
-  const r = guest(script);
+  const r = box.exec(script);
   writeFileSync(join(outDir, "kernel.log"), r.out + r.err);
 
   const results = [];
@@ -244,11 +229,7 @@ sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null && echo KILLED || echo 
   return results;
 }
 
-/**
- * D5 外部 .srs 完整消费：走 scripts/rule-set-local.ts 的同一准备链（planRuleSets →
- * stageRuleSets → localizeRuleSets），再由 VM 内核加载命中。默认底模不启用小米，不反编译、不伪造其他客户端。
- */
-export function driveXiaomi(outDir) {
+export function driveXiaomi(box, outDir) {
   const results = [];
   const add = (id, ok, detail) => {
     results.push({ id, ok, detail });
@@ -259,16 +240,16 @@ export function driveXiaomi(outDir) {
     route: { rule_set: [{ type: "remote", tag: "小米追踪", format: "binary", url, update_interval: "1d" }] },
   };
   const staging = join(resolve(outDir), "xiaomi-staging");
-  const guestStaging = `${GUEST_REPO}/${relative(REPO, staging)}`;
   let map;
   try {
-    map = stageRuleSets(planRuleSets(template), staging, guestStaging);
+    map = stageRuleSets(planRuleSets(template), staging, "/work/xiaomi-staging");
   } catch (e) {
     add("D5/stage", false, String(e));
     return results;
   }
   const srs = join(staging, "external/0.srs");
   add("D5/stage", existsSync(srs) && statSync(srs).size > 0, `经 plan+staging 得到 ${existsSync(srs) ? statSync(srs).size : 0}B`);
+  box.cpTo(staging, "/work/xiaomi-staging");
 
   const cfg = localizeRuleSets(
     {
@@ -284,31 +265,29 @@ export function driveXiaomi(outDir) {
     map,
   );
   const script = `
-D=${GUEST_WORKDIR}-xiaomi; rm -rf $D; mkdir -p $D
+D=/work/rule-verify-xiaomi; rm -rf $D; mkdir -p $D
 cat > $D/config.json <<'JSON'
 ${JSON.stringify(cfg, null, 2)}
 JSON
-sudo -n ${GUEST_SB} check -c $D/config.json || { echo CHECK_FAILED; exit 1; }
+${GUEST_SB} check -D $D -c $D/config.json || { echo CHECK_FAILED; exit 1; }
 echo CHECK_OK
-sudo -n ${GUEST_SB} run -D $D -c $D/config.json > $D/sb.log 2>&1 &
+${GUEST_SB} run -D $D -c $D/config.json > $D/sb.log 2>&1 &
+PID=$!
 for i in $(seq 1 60); do grep -q "sing-box started" $D/sb.log && break; sleep 0.2; done
 grep -q "sing-box started" $D/sb.log && echo READY || { echo NOT_READY; tail -8 $D/sb.log; }
 curl -s -m 6 --proxy http://127.0.0.1:18182 https://api.xmpush.xiaomi.com/ -o /dev/null -w "HIT_HTTP=%{http_code}\\n"; echo HIT_EXIT=$?
 grep -oE "match\\[[0-9]+\\] rule_set=[^ ]+" $D/sb.log | head -4
-sudo -n pkill -f "rule-verif[y]-xiaomi/config.json" 2>/dev/null && echo KILLED || echo NO_PROC
+kill $PID 2>/dev/null || true
+wait $PID 2>/dev/null || true
 `;
-  const r = guest(script);
+  const r = box.exec(script);
   writeFileSync(join(outDir, "xiaomi-kernel.log"), r.out + r.err);
   add("D5/check", /CHECK_OK/.test(r.out), "经准备链本地化的配置通过 sing-box check");
   add("D5/hit", /match\[\d+\] rule_set=小米追踪/.test(r.out), "api.xmpush.xiaomi.com 命中小米规则集");
   return results;
 }
 
-/**
- * D4 DNS 伴生产物：internal 先发射域名版 JSON 再编译；geosite 直接复用主产物字节；
- * geoip 不产伴生；域名版只含 domain 类字段（Lan 作对照，主产物确含 ip_cidr）。
- */
-export function driveDns(outDir) {
+export function driveDns(box, outDir) {
   const results = [];
   const add = (id, ok, detail) => {
     results.push({ id, ok, detail });
@@ -344,7 +323,7 @@ export function driveDns(outDir) {
   const decomp = join(outDir, "decompiled");
   mkdirSync(decomp, { recursive: true });
   for (const tag of ["Lan-dns", "Lan"]) {
-    const r = guest(`${GUEST_SB} rule-set decompile ${GUEST_REPO}/config/rules/generated/singbox/${tag}.srs -o /tmp/vrc-${tag}.json && cat /tmp/vrc-${tag}.json`);
+    const r = box.exec(`${GUEST_SB} rule-set decompile ${GUEST_REPO}/config/rules/generated/singbox/${tag}.srs -o /tmp/vrc-${tag}.json && cat /tmp/vrc-${tag}.json`);
     if (r.code !== 0) {
       add(`D4/${tag}`, false, `decompile 失败：${r.err.trim().slice(0, 160)}`);
       continue;
@@ -358,8 +337,13 @@ export function driveDns(outDir) {
   return results;
 }
 
-export function drive(outDir) {
-  const results = [...driveArtifacts(outDir), ...driveDns(outDir), ...driveKernel(outDir), ...driveXiaomi(outDir)];
+export async function drive(outDir) {
+  const results = await withSandbox((box) => [
+    ...driveArtifacts(box, outDir),
+    ...driveDns(box, outDir),
+    ...driveKernel(box, outDir),
+    ...driveXiaomi(box, outDir),
+  ], "vrc-sandbox");
   writeFileSync(join(outDir, "results.json"), JSON.stringify({ results }, null, 2));
   const failed = results.filter((r) => !r.ok);
   log(`[drive] ${results.length - failed.length}/${results.length} 通过`);
@@ -368,11 +352,9 @@ export function drive(outDir) {
 
 // ---------------------------------------------------------------- cleanup
 
-export function cleanup() {
-  // 只终止本次验证启动的实例（按自己的配置路径匹配），并清除 VM 临时目录。
-  // 用 rule-verif[y] 正则避免 pkill -f 匹配到本命令自身的命令行。
-  const r = guest(`sudo -n pkill -f "rule-verif[y]/config.json" 2>/dev/null; rm -rf ${GUEST_WORKDIR}; echo CLEANED`);
-  log(r.out.includes("CLEANED") ? "[cleanup] VM 临时目录已清除，证据保留" : `[cleanup] 未确认清理结果：${r.err.trim()}`);
+export function cleanup(outDir) {
+  rmSync(join(resolve(outDir), "xiaomi-staging"), { recursive: true, force: true });
+  log("[cleanup] 临时 staging 已清除，证据保留");
 }
 
 // ---------------------------------------------------------------- CLI
@@ -388,17 +370,16 @@ switch (cmd) {
     break;
   case "doctor":
     process.exit(doctor(outDir) ? 0 : 1);
-  // eslint-disable-next-line no-fallthrough -- 上一行是 never，不会落入下一 case
   case "drive":
-    process.exit(drive(outDir) ? 0 : 1);
+    process.exit((await drive(outDir)) ? 0 : 1);
   case "cleanup":
-    cleanup();
+    cleanup(outDir);
     break;
   case "all": {
     launch(outDir);
     if (!doctor(outDir)) fail("[all] doctor 未通过");
-    const ok = drive(outDir);
-    cleanup();
+    const ok = await drive(outDir);
+    cleanup(outDir);
     process.exit(ok ? 0 : 1);
   }
   default:

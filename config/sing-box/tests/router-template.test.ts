@@ -57,7 +57,7 @@ const mergeLayers = (layers: Array<[string, unknown]>) => {
     expect(merge.exitCode).toBe(0);
     const out = join(d, "result.json");
     // auto_redirect 等项只有 Linux 内核认得，macOS 上本地 check 必然失败；
-    // 合并结果的内核校验由 CI（ubuntu）与 `just kernel-check-vm router` 覆盖，这里仍校验结构
+    // 合并结果的内核校验由 CI（ubuntu）与 `just kernel-check-linux router` 覆盖，这里仍校验结构
     if (process.platform === "linux") {
       const check = Bun.spawnSync([SING_BOX, "check", "-D", d, "-c", out]);
       expect(check.exitCode).toBe(0);
@@ -82,7 +82,7 @@ describe("template-router.json 结构契约（ADR-0012）", () => {
 
   // 单份底模不做内核 check：它引用不到只有 overlay 才有的 dns-lan（ADR-0014），内核在
   // check 阶段直接报 default domain resolver not found。装配终态后的内核 check 在
-  // 「overlay 夹具」那组（Linux 上跑，CI 同口径），macOS 宿主交给 `just kernel-check-vm router`
+  // 「overlay 夹具」那组（Linux 上跑，CI 同口径），macOS 宿主交给 `just kernel-check-linux router`
   test("tun 开启 auto_route 与 auto_redirect", () => {
     assertGatewayTun(router.inbounds);
   });
@@ -174,7 +174,7 @@ describe("DNS 归属契约：底模与 overlay 的分界", () => {
 describe("overlay 夹具：底模 + 最小 overlay 装成可运行终态", () => {
   // 底模引用不到只有 overlay 才有的 dns-lan（本网解析器地址归设备），单份不完整，
   // 装配出终态才是能跑起来的配置：这里在 Linux 上顺带跑内核 check（CI 同口径），
-  // macOS 宿主的内核不支持 auto_redirect，交给 `just kernel-check-vm router` 转沙箱 VM
+  // macOS 宿主的内核不支持 auto_redirect，交给 `just kernel-check-linux router` 转沙箱容器
   const merged = mergeLayers([
     ["00-overlay.json", OVERLAY_FIXTURE],
     ["01-base.json", router],
