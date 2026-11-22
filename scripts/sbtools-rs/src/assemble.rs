@@ -138,14 +138,11 @@ fn compile_pattern(item: &str) -> Result<regex::Regex, String> {
 /// 判活是「能否传递地落到具体节点」：只有直接含节点 / direct，或引用到已判活的组，才算活。
 /// 迭代到不再变化（最小不动点），保证剔除空组后不留悬空引用。
 fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, String> {
-    let declared: Vec<&Value> = template["outbounds"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
-                .collect()
-        })
-        .unwrap_or_default();
+    let declared: Vec<&Value> = template["outbounds"].as_array().map_or_default(|a| {
+        a.iter()
+            .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
+            .collect()
+    });
     let is_node_or_direct = |item: &str| item == "direct" || tags.iter().any(|t| t == item);
     // 组间引用需要在判活阶段识别：占位项里若不是节点也不是 direct，就是组引用或模式。
     let group_tags: std::collections::HashSet<&str> =
@@ -156,11 +153,7 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
         .iter()
         .map(|sel| -> Result<(String, Vec<String>), String> {
             let mut expanded: Vec<String> = Vec::new();
-            for item in sel["outbounds"]
-                .as_array()
-                .map(|a| a.iter())
-                .unwrap_or_default()
-            {
+            for item in sel["outbounds"].as_array().map_or_default(|a| a.iter()) {
                 let Some(item_str) = item.as_str() else {
                     continue;
                 };
@@ -203,16 +196,16 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
         .iter()
         .filter_map(|sel| {
             let tag = sel["tag"].as_str().unwrap_or("");
-            let kept: Vec<String> = pools
-                .iter()
-                .find(|(t, _)| t == tag)
-                .map(|(_, refs)| {
-                    refs.iter()
-                        .filter(|r| is_node_or_direct(r) || alive.contains(*r))
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
+            let kept: Vec<String> =
+                pools
+                    .iter()
+                    .find(|(t, _)| t == tag)
+                    .map_or_default(|(_, refs)| {
+                        refs.iter()
+                            .filter(|r| is_node_or_direct(r) || alive.contains(*r))
+                            .cloned()
+                            .collect()
+                    });
             if kept.is_empty() {
                 // 空组(订阅无匹配节点)会让 sing-box FATAL,整体跳过;引用它的组已在上面被剪掉。
                 crate::logging::warn(&format!(
@@ -971,8 +964,7 @@ mod tests {
         let tpl = crate::template::embedded_template().expect("内嵌底模");
         let dns_tags: Vec<&str> = tpl["dns"]["servers"]
             .as_array()
-            .map(|a| a.iter().filter_map(|s| s["tag"].as_str()).collect())
-            .unwrap_or_default();
+            .map_or_default(|a| a.iter().filter_map(|s| s["tag"].as_str()).collect());
         assert!(
             !dns_tags.contains(&"dns-internal"),
             "公共底模不应含 dns-internal，实际: {dns_tags:?}"
@@ -980,8 +972,7 @@ mod tests {
 
         let rule_set_tags: Vec<&str> = tpl["route"]["rule_set"]
             .as_array()
-            .map(|a| a.iter().filter_map(|s| s["tag"].as_str()).collect())
-            .unwrap_or_default();
+            .map_or_default(|a| a.iter().filter_map(|s| s["tag"].as_str()).collect());
         assert!(
             !rule_set_tags.contains(&"zone-internal"),
             "公共底模不应含 zone-internal"

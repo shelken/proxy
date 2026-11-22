@@ -83,32 +83,26 @@ static EXCLUDE_ADDRESS: std::sync::LazyLock<Vec<Ipv4Cidr>> = std::sync::LazyLock
             return from_cfg;
         }
     }
-    template::load_template(None)
-        .ok()
-        .map(|(t, _)| exclude_ranges_in(&t))
-        .unwrap_or_default()
+    template::load_template(None).map_or_default(|(t, _)| exclude_ranges_in(&t))
 });
 
 /// 从配置树收集 tun 入站的 `route_exclude_address`。纯函数，单测与 LazyLock 共用，
 /// 测试不得走 LazyLock（那会读本机 $HOME，随宿主配置漂移）。
 fn exclude_ranges_in(root: &Value) -> Vec<Ipv4Cidr> {
-    root["inbounds"]
-        .as_array()
-        .map(|inbounds| {
-            inbounds
-                .iter()
-                .filter(|ib| ib["type"].as_str() == Some("tun"))
-                .flat_map(|ib| {
-                    ib["route_exclude_address"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|v| v.as_str())
-                })
-                .filter_map(parse_cidr4)
-                .collect()
-        })
-        .unwrap_or_default()
+    root["inbounds"].as_array().map_or_default(|inbounds| {
+        inbounds
+            .iter()
+            .filter(|ib| ib["type"].as_str() == Some("tun"))
+            .flat_map(|ib| {
+                ib["route_exclude_address"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str())
+            })
+            .filter_map(parse_cidr4)
+            .collect()
+    })
 }
 
 pub(super) fn is_excluded(ip: &str) -> bool {

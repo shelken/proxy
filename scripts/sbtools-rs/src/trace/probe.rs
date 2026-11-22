@@ -47,15 +47,12 @@ fn parse_conn_match(v: &Value, domain: &str) -> Option<ConnMatch> {
             continue;
         }
         // 内核 /connections 的 chains 是末端节点在前、策略组在后；反转成「组 → 节点」
-        let chains: Vec<String> = c["chains"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .rev()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let chains: Vec<String> = c["chains"].as_array().map_or_default(|a| {
+            a.iter()
+                .rev()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        });
         if chains.is_empty() {
             continue;
         }
