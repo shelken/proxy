@@ -50,7 +50,10 @@ groups:
     options: [proxy, selfhost, ".*"]
     default: proxy
   "1024proxy":
-    options: [proxy, selfhost, "(?i)1024"]
+    options: [proxy, selfhost, us, jp, hk, sg, tw, kr, ".*"]
+    default: proxy
+  tr:
+    options: [selfhost, proxy, "1024-tr"]
     default: proxy
   dev:
     options: [selfhost, proxy, "(?i)(港|HK|Hong)"]
@@ -112,10 +115,10 @@ rules:
   - { name: opencode, source: ../rules/custom/opencode.yaml, to: opencode }
   - { name: zai, source: ../rules/custom/zai.yaml, to: zai }
   - { name: grok, source: ../rules/custom/grok.yaml, to: grok }
-  - { name: 1024proxy, source: ../rules/custom/1024proxy.yaml, to: 1024proxy }
   - { name: dev, source: ../rules/custom/dev.yaml, to: dev }
   - { name: ptcg, source: ../rules/custom/ptcg.yaml, to: ptcg }
   - { name: Japan, source: ../rules/custom/Japan.yaml, to: japansite }
+  - { name: tr, source: ../rules/custom/tr.yaml, to: tr }
   - { name: Adult, source: ../rules/custom/Adult.yaml, to: adultnsfw }
 
   - { name: "Microsoft", source: geosite:microsoft, to: microsoft }

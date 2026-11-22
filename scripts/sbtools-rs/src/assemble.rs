@@ -74,11 +74,23 @@ fn assign_tags(nodes: &mut [Value], reserved: &[String]) {
     }
 }
 
+/// 节点是否经上游出站二跳拨号（带非空 detour）。
+/// 二跳节点不直接连物理网卡，也不属于一跳基础节点通配池。
+fn is_detoured_node(node: &Value) -> bool {
+    node.get("detour")
+        .and_then(Value::as_str)
+        .is_some_and(|d| !d.is_empty())
+}
+
 /// 节点全集 → 反回环直连规则：域名保持原样，IP 字面量生成对应 CIDR。
+/// 带 detour 的二跳节点通过上游代理拨号，跳过直连规则，避免把中继服务器强制直连。
 pub fn generate_node_direct_rule(nodes: &[Value]) -> Option<Value> {
     let mut domains: Vec<String> = Vec::new();
     let mut cidrs: Vec<String> = Vec::new();
     for node in nodes {
+        if is_detoured_node(node) {
+            continue;
+        }
         let Some(server) = node["server"].as_str() else {
             continue;
         };
@@ -129,49 +141,70 @@ fn compile_pattern(item: &str) -> Result<regex::Regex, String> {
     .map_err(|e| format!("策略组过滤模式 '{item}' 不是合法正则: {e}"))
 }
 
+/// 展开单个策略组的占位成员列表：组引用与精确节点 tag 原样保留，正则仅匹配一跳节点。
+fn expand_selector_pool(
+    sel: &Value,
+    direct_tags: &[&str],
+    all_node_tags: &std::collections::HashSet<&str>,
+    group_tags: &std::collections::HashSet<&str>,
+) -> Result<(String, Vec<String>), String> {
+    let self_tag = sel["tag"].as_str().unwrap_or("");
+    let mut expanded: Vec<String> = Vec::new();
+    for item in sel["outbounds"].as_array().into_iter().flatten() {
+        let Some(item_str) = item.as_str() else {
+            continue;
+        };
+        if item_str == "direct" || all_node_tags.contains(item_str) || group_tags.contains(item_str)
+        {
+            expanded.push(item_str.to_string());
+            continue;
+        }
+        let re = compile_pattern(item_str)?;
+        expanded.extend(
+            direct_tags
+                .iter()
+                .filter(|t| re.is_match(t))
+                .map(|t| (*t).to_string()),
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    expanded.retain(|t| t != self_tag && seen.insert(t.clone()));
+    Ok((self_tag.to_string(), expanded))
+}
+
 /// 策略组填充：底模声明 selector/urltest 的 outbounds 占位项展开为真实节点标签。
 ///
 /// 组之间可以互相引用（如 anthropic → openai）。订阅里没有某个组对应的节点时该组会被
 /// 剔除，此时任何引用它的组都必须同步剪掉这个引用，否则产物留下悬空 tag，
 /// 内核启动直接 FATAL `dependency[xxx] not found`。
 ///
+/// 一跳节点参与正则展开（如 `.*`、地区正则）与精确引用；二跳节点（带 `detour`）
+/// 仅能通过精确 tag 显式引入，避免被 `.*` 拉进通用出口或上游分组造成成环。
+///
 /// 判活是「能否传递地落到具体节点」：只有直接含节点 / direct，或引用到已判活的组，才算活。
 /// 迭代到不再变化（最小不动点），保证剔除空组后不留悬空引用。
-fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, String> {
+fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, String> {
     let declared: Vec<&Value> = template["outbounds"].as_array().map_or_default(|a| {
         a.iter()
             .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
             .collect()
     });
-    let is_node_or_direct = |item: &str| item == "direct" || tags.iter().any(|t| t == item);
-    // 组间引用需要在判活阶段识别：占位项里若不是节点也不是 direct，就是组引用或模式。
+    let all_node_tags: std::collections::HashSet<&str> =
+        nodes.iter().filter_map(|n| n["tag"].as_str()).collect();
+    let direct_tags: Vec<&str> = nodes
+        .iter()
+        .filter(|n| !is_detoured_node(n))
+        .filter_map(|n| n["tag"].as_str())
+        .collect();
+    let is_node_or_direct = |item: &str| item == "direct" || all_node_tags.contains(item);
     let group_tags: std::collections::HashSet<&str> =
         declared.iter().filter_map(|s| s["tag"].as_str()).collect();
 
-    // 展开候选池：节点/direct 直接落地；对其它组的引用保留 tag；模式就地展开成节点。
     let pools: Vec<(String, Vec<String>)> = declared
         .iter()
-        .map(|sel| -> Result<(String, Vec<String>), String> {
-            let mut expanded: Vec<String> = Vec::new();
-            for item in sel["outbounds"].as_array().map_or_default(|a| a.iter()) {
-                let Some(item_str) = item.as_str() else {
-                    continue;
-                };
-                if is_node_or_direct(item_str) || group_tags.contains(item_str) {
-                    expanded.push(item_str.to_string());
-                    continue;
-                }
-                let re = compile_pattern(item_str)?;
-                expanded.extend(tags.iter().filter(|t| re.is_match(t)).cloned());
-            }
-            // 去重 + 排除自身
-            let mut seen = std::collections::HashSet::new();
-            expanded.retain(|t| t != sel["tag"].as_str().unwrap_or("") && seen.insert(t.clone()));
-            Ok((sel["tag"].as_str().unwrap_or("").to_string(), expanded))
-        })
+        .map(|sel| expand_selector_pool(sel, &direct_tags, &all_node_tags, &group_tags))
         .collect::<Result<Vec<_>, String>>()?;
 
-    // 判活：某组只要能落到 具体节点 / direct / 已判活的组，就算活。迭代求最小不动点。
     let mut alive: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         let mut changed = false;
@@ -207,7 +240,6 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
                             .collect()
                     });
             if kept.is_empty() {
-                // 空组(订阅无匹配节点)会让 sing-box FATAL,整体跳过;引用它的组已在上面被剪掉。
                 crate::logging::warn(&format!(
                     "策略组 '{tag}' 无匹配节点,已跳过(订阅缺少该地区节点或模式失效)"
                 ));
@@ -215,7 +247,6 @@ fn populate_selectors(template: &Value, tags: &[String]) -> Result<Vec<Value>, S
             }
             let mut out = (*sel).clone();
             out["outbounds"] = json!(kept);
-            // default 指向被剔除的组时移除,否则同样是悬空引用。
             if let Some(default) = out.get("default").and_then(|d| d.as_str())
                 && !kept.iter().any(|k| k == default)
                 && let Some(obj) = out.as_object_mut()
@@ -275,6 +306,79 @@ pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>,
     Ok(nodes)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VisitState {
+    Visiting,
+    Visited,
+}
+
+fn dfs_outbound_cycle<'a>(
+    node: &'a str,
+    edges: &std::collections::HashMap<&'a str, Vec<&'a str>>,
+    state: &mut std::collections::HashMap<&'a str, VisitState>,
+    stack: &mut Vec<&'a str>,
+) -> Result<(), String> {
+    state.insert(node, VisitState::Visiting);
+    stack.push(node);
+    if let Some(deps) = edges.get(node) {
+        for &next in deps {
+            match state.get(next) {
+                Some(VisitState::Visiting) => {
+                    let start = stack.iter().position(|&n| n == next).unwrap_or(0);
+                    let mut cycle: Vec<&str> = stack[start..].to_vec();
+                    cycle.push(next);
+                    return Err(format!("出站依赖成环: {}", cycle.join(" -> ")));
+                }
+                Some(VisitState::Visited) => {}
+                None => dfs_outbound_cycle(next, edges, state, stack)?,
+            }
+        }
+    }
+    stack.pop();
+    state.insert(node, VisitState::Visited);
+    Ok(())
+}
+
+/// 校验所有出站的 `detour` 目标存在且整个出站依赖图无环（selector/urltest 成员 + node.detour）。
+fn validate_outbound_graph(
+    outbounds: &[Value],
+    available: &std::collections::HashSet<String>,
+) -> Result<(), String> {
+    let mut edges: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+    for ob in outbounds {
+        let Some(tag) = ob["tag"].as_str() else {
+            continue;
+        };
+        let deps = edges.entry(tag).or_default();
+        if let Some(detour) = ob.get("detour").and_then(Value::as_str)
+            && !detour.is_empty()
+        {
+            if !available.contains(detour) {
+                return Err(format!("出站 '{tag}' 的 detour 目标 '{detour}' 不存在"));
+            }
+            deps.push(detour);
+        }
+        if matches!(ob["type"].as_str(), Some("selector" | "urltest"))
+            && let Some(members) = ob["outbounds"].as_array()
+        {
+            for member in members.iter().filter_map(Value::as_str) {
+                deps.push(member);
+            }
+        }
+    }
+
+    let mut state = std::collections::HashMap::new();
+    let mut stack = Vec::new();
+    let mut roots: Vec<&str> = edges.keys().copied().collect();
+    roots.sort_unstable();
+    for root in roots {
+        if !state.contains_key(root) {
+            dfs_outbound_cycle(root, &edges, &mut state, &mut stack)?;
+        }
+    }
+    Ok(())
+}
+
 /// 节点全集 + 底模 → 填充完 outbounds 的完整配置（纯内存，零网络）。
 pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
     // 远程底模可能缺这一层；缺失时直接报错，避免产出的配置静默丢掉全部策略组
@@ -285,13 +389,8 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
     let reserved = reserved_tags(template);
     let mut nodes = nodes;
     assign_tags(&mut nodes, &reserved);
-    let tags: Vec<String> = nodes
-        .iter()
-        .filter_map(|n| n["tag"].as_str())
-        .map(str::to_string)
-        .collect();
 
-    let selectors = populate_selectors(template, &tags)?;
+    let selectors = populate_selectors(template, &nodes)?;
 
     let mut outbounds = vec![json!({"type": "direct", "tag": "direct"})];
     outbounds.extend(nodes);
@@ -308,6 +407,9 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
         .filter_map(|o| o["tag"].as_str())
         .map(str::to_string)
         .collect();
+    if let Some(all_outbounds) = template["outbounds"].as_array() {
+        validate_outbound_graph(all_outbounds, &available)?;
+    }
     let fallback = if available.contains("proxy") {
         "proxy"
     } else {
@@ -977,5 +1079,94 @@ mod tests {
             !rule_set_tags.contains(&"zone-internal"),
             "公共底模不应含 zone-internal"
         );
+    }
+
+    /// 二跳节点（带 detour）：不进 00-direct 反回环、不被 .* 通配吸入、仅由精确 tag 绑定。
+    #[test]
+    fn detoured_node_skips_direct_rule_and_wildcard_expansion() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = AssembleInput {
+            sources: "hy2://pass@192.0.2.1:8388#us-01|\
+                      socks://user:pass@socks.example.invalid:3000?detour=1024proxy#1024-tr"
+                .into(),
+            fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
+        };
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+
+        let direct_rule = generate_node_direct_rule(&nodes).expect("一跳节点应生成反回环规则");
+        assert!(
+            direct_rule.get("domain").is_none(),
+            "带 detour 的节点域名不得进 00-direct，实际: {direct_rule}"
+        );
+        assert_eq!(direct_rule["ip_cidr"], json!(["192.0.2.1/32"]));
+
+        finalize(&mut tpl, nodes).expect("装配");
+        let outbounds = tpl["outbounds"].as_array().expect("outbounds");
+        let members = |tag: &str| -> Vec<String> {
+            outbounds
+                .iter()
+                .find(|o| o["tag"] == tag)
+                .unwrap_or_else(|| panic!("{tag} 缺失"))["outbounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        };
+
+        assert!(members("tr").contains(&"1024-tr".to_string()));
+        assert!(!members("proxy").contains(&"1024-tr".to_string()));
+        assert!(!members("1024proxy").contains(&"1024-tr".to_string()));
+        assert!(!members("download").contains(&"1024-tr".to_string()));
+    }
+
+    /// 不含 1024-tr 节点（如 Mac/Router）时，tr 分组自动省略该成员且保留 selfhost/proxy。
+    #[test]
+    fn tr_group_omits_absent_1024_tr_node() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#vps-01|hy2://pass@192.0.2.2:8388#hk-01",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+        let tr = tpl["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["tag"] == "tr")
+            .expect("tr 组缺失");
+        assert_eq!(tr["outbounds"], json!(["selfhost", "proxy"]));
+        assert_eq!(tr["default"], json!("proxy"));
+    }
+
+    /// 缺失 detour 目标或组与 node.detour 形成环路时，finalize 必须 fail-fast。
+    #[test]
+    fn finalize_rejects_missing_detour_and_dependency_cycles() {
+        let mut tpl = crate::template::embedded_template().expect("内嵌底模");
+        let input = input_with_fetcher(
+            "hy2://pass@192.0.2.1:8388#hk-01|\
+             socks://u:p@socks.example.invalid:3000?detour=missing-group#1024-tr",
+            "",
+        );
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        let err = finalize(&mut tpl, nodes).expect_err("缺失 detour 必须报错");
+        assert!(err.contains("missing-group"), "实际: {err}");
+
+        let mut cycle_tpl = json!({
+            "outbounds": [
+                {"type": "direct", "tag": "direct"},
+                {"type": "selector", "tag": "upstream", "outbounds": ["1024-tr"]},
+            ],
+            "dns": {"servers": []},
+            "route": {"rules": []}
+        });
+        let cycle_input = input_with_fetcher(
+            "socks://u:p@socks.example.invalid:3000?detour=upstream#1024-tr",
+            "",
+        );
+        let cycle_nodes = collect_nodes(&cycle_input.sources, &cycle_input).expect("节点解析");
+        let err = finalize(&mut cycle_tpl, cycle_nodes).expect_err("依赖成环必须报错");
+        assert!(err.contains("出站依赖成环"), "实际: {err}");
     }
 }

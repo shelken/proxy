@@ -342,7 +342,24 @@
       "outbounds": [
         "proxy",
         "selfhost",
-        "(?i)1024"
+        "us",
+        "jp",
+        "hk",
+        "sg",
+        "tw",
+        "kr",
+        ".*"
+      ],
+      "default": "proxy",
+      "interrupt_exist_connections": true
+    },
+    {
+      "type": "selector",
+      "tag": "tr",
+      "outbounds": [
+        "selfhost",
+        "proxy",
+        "1024-tr"
       ],
       "default": "proxy",
       "interrupt_exist_connections": true
@@ -554,10 +571,6 @@
         "outbound": "grok"
       },
       {
-        "rule_set": "1024proxy",
-        "outbound": "1024proxy"
-      },
-      {
         "rule_set": "dev",
         "outbound": "dev"
       },
@@ -568,6 +581,10 @@
       {
         "rule_set": "Japan",
         "outbound": "japansite"
+      },
+      {
+        "rule_set": "tr",
+        "outbound": "tr"
       },
       {
         "rule_set": "Adult",
@@ -765,12 +782,6 @@
       },
       {
         "type": "remote",
-        "tag": "1024proxy",
-        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/1024proxy.srs",
-        "update_interval": "24h0m0s"
-      },
-      {
-        "type": "remote",
         "tag": "dev",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/dev.srs",
         "update_interval": "24h0m0s"
@@ -785,6 +796,12 @@
         "type": "remote",
         "tag": "Japan",
         "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/Japan.srs",
+        "update_interval": "24h0m0s"
+      },
+      {
+        "type": "remote",
+        "tag": "tr",
+        "url": "https://raw.githubusercontent.com/shelken/proxy/sing-box-rules/singbox/tr.srs",
         "update_interval": "24h0m0s"
       },
       {

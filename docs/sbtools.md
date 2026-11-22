@@ -210,7 +210,7 @@ mise exec -- sing-box check -c "$d/result.json"   # 1.14.3 起在此 FATAL
 | 字段 | 必填 | 说明 |
 | :--- | :--- | :--- |
 | `subs` | 二选一 | 机场订阅 URL 列表，逐项须 `http(s)://` |
-| `nodes` | 二选一 | 私有节点 URI 列表，支持 `ss` / `hysteria2` / `hy2` / `anytls` |
+| `nodes` | 二选一 | 私有节点 URI 列表，支持 `ss` / `hysteria2` / `hy2` / `anytls` / `socks` / `socks5`（带 `?detour=...` 时视为二跳节点，不写进直连反回环规则且仅由精确 tag 绑定） |
 | `overlay` | 否 | 原生 sing-box JSON 文本，须为 Object |
 | `template_url` | 否 | 远程底模 URL，仅 `https`，配置后替代内嵌底模 |
 
@@ -350,7 +350,7 @@ Dockerfile                     内核基底 + alpine 运行层（COPY 预编译 
 | `scripts/sbtools-rs/src/kernel.rs` | 内核 CLI：定位 `sing-box`、各层 merge、离线 check |
 | `scripts/sbtools-rs/src/assemble.rs` | 节点解析、策略组展开、反回环规则生成 |
 | `scripts/sbtools-rs/src/template.rs` | 底模来源（内嵌或 template_url 下载，含缓存）、URL 安全校验、HTTP GET |
-| `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls） |
+| `scripts/sbtools-rs/src/node.rs` | 节点 URI 解析（ss / hysteria2 / anytls / socks） |
 | `scripts/sbtools-rs/src/trace/` | 真机全链路探测：日志捕获（log）、连接与探针（probe）、网段判定（net）、报告（report，事实与渲染分离） |
 | `scripts/sbtools-rs/src/clashapi.rs` | controller 统一决议与 Clash API 请求 |
 | `scripts/sbtools-rs/src/paths.rs` | 本地观测配置路径发现，YAML 优先于旧 JSON |

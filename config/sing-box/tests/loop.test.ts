@@ -9,10 +9,8 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { createSocket, type Socket } from "node:dgram";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { startSandbox, type SandboxHandle } from "./lib/sandbox.ts";
+import { SING_BOX as SB, WORK, startSandbox, type SandboxHandle } from "./lib/sandbox.ts";
 
-const SB = "/opt/proxy-test/bin/sing-box";
-const WORK = "/work/sing-box";
 const CONFIG = `${WORK}/config.json`;
 
 /**
@@ -89,7 +87,7 @@ function useLocalUpstream(config: Record<string, any>): void {
  * 域名仍须命中对应规则集：这是断言的真实约束，取自仓库自有清单。
  */
 const HITS: { value: string; ruleSet: string; outbound: string }[] = [
-  { value: "1024proxy.net", ruleSet: "1024proxy", outbound: "1024proxy" },
+  { value: "example.com.tr", ruleSet: "tr", outbound: "tr" },
   { value: "api.anthropic.com", ruleSet: "Anthropic", outbound: "anthropic" },
   { value: "s.dsqcjk.com", ruleSet: "Adult", outbound: "adultnsfw" },
   { value: "guzzoni.apple.com", ruleSet: "Apple-AI", outbound: "appleai" },
