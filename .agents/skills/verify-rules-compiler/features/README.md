@@ -5,17 +5,17 @@
 ## Baseline preconditions
 
 - 从仓库根运行，工作区干净（`git status --porcelain` 为空）或已知的未提交改动已记录。
-- `proxy-test` VM 处于 Running（`just vm-start`），且能通过 `limactl shell --workdir /work proxy-test` 进入。
+- OrbStack/Docker 可用（由 `scripts/sandbox.ts` 按需拉起并创建隔离容器）。
 - Launch 会在宿主联网重跑全量构建，用同一份 `generated/` 供所有功能文件使用。
 - 产物只以本次 launch 生成的为准；不要复用别的运行留下的 `generated/`。
-- 不要驱动 `just sandbox-loop` 起的服务端，它牵入个人订阅；本地图只用 `verify.js` 在 VM 内直接起 sing-box。
+- 不要驱动 `just sandbox-loop` 起的服务端，它牵入个人订阅；本地图只用 `verify.js` 在容器内直接起 sing-box。
 
 ## Driving conventions
 
 - 每条 recipe 都从同一份 `$RUN` 证据目录出发；`launch` 一次，之后 `doctor` + `drive` 可重复执行。
 - 把命令当字面量执行，不要改写 tag 名、路径或引号。
 - 产物断言一律以 `sing-box rule-set decompile` 后的 JSON 为准，不以文件名、大小或本地文本猜测为准。
-- 内核断言（D3）只在 VM 内跑；宿主机上起 `sing-box run` 需要 TUN 与 sudo，会破坏在用网络，禁止。
+- 内核断言（D3）只在沙箱容器内跑；宿主机上起 `sing-box run` 需要 TUN 与特权，会破坏在用网络，禁止。
 
 ## Proof and skip reporting
 
@@ -24,7 +24,7 @@
 - 内核证明包含 `kernel.log` 里的 `match[N] rule_set=<tag>` 与两条路径（命中 / 未命中）的结果。
 - 记录每条断言使用的 tag 与入口。
 - 跳过某个入口点时报告尝试的命令与未满足的前置条件，不要当成已验证。
-- 闸门产物不可达（HTTP 非 200）或 VM 不可达视为未通过或阻塞，不能按通过处理。
+- 闸门产物不可达（HTTP 非 200）或沙箱容器不可用视为未通过或阻塞，不能按通过处理。
 
 ## Feature entry contract
 
@@ -41,4 +41,4 @@
 - [内部 YAML AST 编译](./custom-yaml.md)：`custom/*.yaml` → AST → 三端产物（含 logical 树、no-resolve）。
 - [设置-底模契约](./manifest-contract.md)：平台模板、`shared.yaml` 与 `settings.yaml` 生成的三份底模与磁盘一致，引用的规则名必须存在。
 - [DNS 伴生产物](./dns-companion.md)：`-dns` 规则集的产出与省略规则。
-- [沙箱内核命中](./sandbox-kernel.md)：VM 内 sing-box 加载 `.srs` 并按规则路由。
+- [沙箱内核命中](./sandbox-kernel.md)：容器内 sing-box 加载 `.srs` 并按规则路由。

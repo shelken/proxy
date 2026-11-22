@@ -11,7 +11,7 @@ static REQUEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 定位内核可执行文件：优先 `SING_BOX`，否则 PATH 上的 `sing-box`。
 ///
-/// 抽成独立函数而非内联在调用点：沙箱里内核装在 /opt/proxy-test/bin 不在 PATH 上，
+/// 抽成独立函数而非内联在调用点：部分环境内核不在 PATH 上，
 /// 与 justfile 的 `SING_BOX` 约定一致。
 pub fn resolve_singbox_binary() -> std::ffi::OsString {
     resolve_singbox_from(std::env::var_os("SING_BOX"))
@@ -148,9 +148,8 @@ pub fn kernel_check(cfg: &Value) -> Result<(), String> {
 
 /// e2e 测试的内核门禁：返回 `Some(原因)` 表示应跳过，`None` 表示可用。
 ///
-/// 显式设置了 `SING_BOX` 却不可用时**不跳过**：沙箱里内核装在
-/// `/opt/proxy-test/bin` 不在 PATH，全靠这个变量定位，静默跳过会让 e2e
-/// 覆盖率降级且无人察觉——那正是这些测试存在的意义。只有「未显式设置
+/// 显式设置了 `SING_BOX` 却不可用时**不跳过**：部分运行环境内核不在 PATH 上，
+/// 全靠这个变量定位，静默跳过会让 e2e 覆盖率降级且无人察觉——那正是这些测试存在的意义。只有「未显式设置
 /// 且 PATH 上也没有」才允许跳过（开发机上没装内核的常见情形）。
 #[cfg(test)]
 pub(crate) fn kernel_unavailable_reason() -> Option<String> {

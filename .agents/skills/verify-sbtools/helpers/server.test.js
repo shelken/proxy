@@ -3,7 +3,7 @@
 // 环境合约（由协调者注入，缺一即失败，不静默跳过）：
 //   SBTOOLS_BIN  被测 sbtools 二进制绝对路径
 //   SING_BOX     sing-box 内核绝对路径（server 子进程经环境继承）
-// 运行位置：Linux aarch64 Lima proxy-test 的独立 unshare --net --mount --pid namespace，
+// 运行位置：Linux 隔离容器的独立 unshare --net --mount --pid namespace，
 // 只有 lo 接口；本文件所有网络仅 127.0.0.1，所有密钥/配置/订阅均为合成数据。
 // 每次真实 CLI / 端点执行都记入 results 数组，afterAll 落盘 results-server.json 到 cwd。
 
@@ -12,7 +12,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const SBTOOLS = process.env.SBTOOLS_BIN;
-const SING_BOX = process.env.SING_BOX || "/opt/proxy-test/bin/sing-box";
+const SING_BOX = process.env.SING_BOX || "sing-box";
 
 // 固定端口：本组独占 namespace，无其他组服务；28099 永不监听（证明 encode 本地先校验）。
 const PORT_MAIN = 28081;

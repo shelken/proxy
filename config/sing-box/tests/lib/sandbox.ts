@@ -1,12 +1,11 @@
-// 在 VM 内驱动 sing-box，供沙箱测试断言路由决策。
+// 在容器沙箱内驱动 sing-box，供沙箱测试断言路由决策。
 //
 // 观测面是 debug 日志：sing-box 每做一次路由决策就打一行
 //   router: match[N] rule_set=<tag> => route(<outbound>)
 // 测试从日志里解析裁决结果。
 
-export const SING_BOX = process.env.SING_BOX || "/opt/proxy-test/bin/sing-box";
+export const SING_BOX = process.env.SING_BOX || "sing-box";
 
-// /host-home 是只读挂载，sing-box 的 -D 与 cache.db 都需要可写位置。
 export const WORK = "/work/sing-box";
 
 export interface SandboxOptions {
@@ -25,9 +24,9 @@ export interface SandboxHandle {
 export function startSandbox(options: SandboxOptions = {}): SandboxHandle {
   const { configPath } = options;
   const targetConfig = configPath || `${WORK}/config.json`;
-  const configArgs = ["-c", targetConfig];
+  const prefix = process.getuid?.() === 0 ? [] : ["sudo", "-n"];
   const proc = Bun.spawn(
-    ["sudo", "-n", SING_BOX, "run", "-D", WORK, ...configArgs],
+    [...prefix, SING_BOX, "run", "-D", WORK, "-c", targetConfig],
     { stdout: "pipe", stderr: "pipe" },
   );
 

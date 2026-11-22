@@ -1,0 +1,13 @@
+# 网络规则测试沙箱镜像：Alpine + 官方 sing-box + Bun + 网络诊断工具。
+#
+# 这些测试会创建 TUN 设备、改写路由表，必须在独立 Linux 网络命名空间内运行。
+# 内核版本由 .mise.toml 声明，通过 --build-arg SING_BOX_VERSION 传入；不设默认值。
+ARG SING_BOX_VERSION
+FROM ghcr.io/sagernet/sing-box:v${SING_BOX_VERSION} AS singbox
+FROM oven/bun:1-alpine AS bun
+
+FROM alpine:3.24
+RUN apk add --no-cache ca-certificates tzdata iproute2 curl bind-tools openssl python3
+COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+WORKDIR /work

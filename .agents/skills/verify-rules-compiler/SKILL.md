@@ -5,11 +5,11 @@ description: 验证规则编译管道（外部 meta-rules-dat 镜像 + 内部 cu
 
 # 验证 rules-compiler
 
-在开发机运行；内核行为断言在 `proxy-test` Lima VM 内完成。先读 [功能地图](features/README.md)，再选择用例。部分组通过不能称为全部功能通过。
+在开发机运行；内核行为断言在隔离沙箱容器内完成。先读 [功能地图](features/README.md)，再选择用例。部分组通过不能称为全部功能通过。
 
 ## Launch
 
-前置：Bun、`limactl`、运行中的 `proxy-test` VM（`just vm-start`）。VM 需有 `/opt/proxy-test/bin/sing-box` 与仓库挂载（`$HOME` 映射到只读的 `/host-home`）。缺一即停止并报告，不安装、不拉镜像。
+前置：Bun、OrbStack/Docker（`scripts/sandbox.ts` 按需拉起）。缺一即停止并报告。
 
 编译在宿主完成且会联网拉上游清单，所以 Launch 需要网络。
 
@@ -28,7 +28,7 @@ launch 执行 `bun scripts/rules-compile.ts build --all`，并把 commit、`sett
 bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js doctor --out "$RUN"
 ```
 
-核对 manifest 就绪、HEAD 未漂移、产物哈希未变、`rules-compile.ts check` 契约通过、VM 可达且 VM 内 sing-box 与仓库挂载可见。任一失败就停，先修再 drive。
+核对 manifest 就绪、HEAD 未漂移、产物哈希未变、`rules-compile.ts check` 契约通过、沙箱镜像可用。任一失败就停，先修再 drive。
 
 ## Drive
 
@@ -39,9 +39,9 @@ bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js drive -
 四组断言：
 
 - **D1 三端产物形态**：抽样 tag 的 `.srs` / `.yaml` / `.list` 存在且非空；clash 产物以 `payload:` 开头。
-- **D2 语义（VM 内）**：`sing-box rule-set decompile` 把 `.srs` 反编译为 JSON，断言内部 AST 的 logical 树、`no-resolve` 在 sing-box 端被剥离、外部镜像的 IP 段规模。
+- **D2 语义（沙箱内）**：`sing-box rule-set decompile` 把 `.srs` 反编译为 JSON，断言内部 AST 的 logical 树、`no-resolve` 在 sing-box 端被剥离、外部镜像的 IP 段规模。
 - **D4 DNS 伴生产物**：internal 有 `-dns.json` + `-dns.srs`、geosite 伴生与主产物字节相同且无中间 JSON、geoip 不产伴生；`Lan-dns` 反编译后只含 domain 类字段（`Lan` 主产物作对照组）。
-- **D3 内核命中（VM 内）**：起 sing-box 加载生成的 `.srs`，断言 `javdb.com` 命中 `rule_set=Adult` 被 block、`example.com` 未命中走 `final=direct`。
+- **D3 内核命中（沙箱内）**：起 sing-box 加载生成的 `.srs`，断言 `javdb.com` 命中 `rule_set=Adult` 被 block、`example.com` 未命中走 `final=direct`。
 
 全流程入口（launch → doctor → drive → cleanup）：
 
@@ -68,7 +68,7 @@ bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js all
 bun --no-env-file .agents/skills/verify-rules-compiler/helpers/verify.js cleanup --out "$RUN"
 ```
 
-只终止自己启动的 sing-box（按 `/work/rule-verify/config.json` 路径匹配，用 `rule-verif[y]` 正则避免 `pkill -f` 命中本身），并删除 VM 临时目录。证据不删。`all` 与每次失败迭代后都会执行 cleanup。
+清理临时 staging 目录；沙箱容器退出即自动销毁，证据保留。`all` 与每次失败迭代后都会执行 cleanup。
 
 ## Helpers
 

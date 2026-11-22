@@ -9,7 +9,7 @@ description: 验证 sbtools 的 CLI 与 HTTP 服务。用于新二进制验收�
 
 ## Launch
 
-前置工具为 Bun、Cargo、Docker、Lima 和运行中的 `proxy-test` VM。Docker 已有 `rust:1-bookworm` 镜像，宿主 Cargo registry 已缓存依赖。VM 已有 `/opt/proxy-test/bin/bun`、`/opt/proxy-test/bin/sing-box`、Python、OpenSSL、curl 和 iproute2。VM 用户必须有无密码 sudo，可执行 `unshare`。缺少工具或缓存就停止，报告缺项，不安装、不拉镜像。
+前置工具为 Bun、Cargo、OrbStack/Docker（`scripts/sandbox.ts` 按需拉起并构建沙箱/编译镜像），宿主 Cargo registry 已缓存依赖。缺少工具或缓存就停止，报告缺项。
 
 从仓库根运行：
 
@@ -18,9 +18,9 @@ RUN=".sandbox-artifacts/verification/$(date -u +%Y%m%dT%H%M%SZ)"
 bun --no-env-file .agents/skills/verify-sbtools/helpers/verify.js launch --out "$RUN"
 ```
 
-入口复制公开构建输入，离线构建 macOS 与 Linux 二进制，记录提交号、输入指纹和二进制 SHA-256。`manifest.json` 的 `phase` 为 `ready` 才能继续。不要使用版本号相同的旧二进制替代新构建。
+入口复制公开构建输入，离线构建 macOS 与 Linux musl 二进制，记录提交号、输入指纹和二进制 SHA-256。`manifest.json` 的 `phase` 为 `ready` 才能继续。不要使用版本号相同的旧二进制替代新构建。
 
-每次运行使用唯一 VM 目录。离线、服务端和合成观测组各有独立网络、挂载及 PID 命名空间，只有 loopback，无默认路由。公网组仅在 VM 内运行，不创建 TUN、不更改 VM 路由。所有节点、订阅、HOME 和配置由用例生成。公网访问为公开模板与 `example.com`。
+每次运行使用独立容器。离线、服务端和合成观测组使用 `--network none` 加上独立挂载及 PID 命名空间，只有 loopback，无默认路由。公网组仅在容器内运行，不创建 TUN、不更改路由。所有节点、订阅、HOME 和配置由用例生成。公网访问为公开模板与 `example.com`。
 
 不要直接运行默认的 `just sandbox-loop`，它会读取个人配置。不要读取私人配置或 `.env`。不要连接宿主机 9090。只替换 HOME 不算网络隔离。
 
@@ -50,7 +50,7 @@ bun --no-env-file .agents/skills/verify-sbtools/helpers/verify.js drive --out "$
 bun --no-env-file .agents/skills/verify-sbtools/helpers/verify.js all
 ```
 
-`--source` 指定另一份代码，`--vm` 指定已有 VM，`--build-dir` 指定可复用构建缓存。入口每次仍执行构建，不把缓存产物视为已验证。
+`--source` 指定另一份代码，`--build-dir` 指定可复用构建缓存。入口每次仍执行构建，不把缓存产物视为已验证。
 
 ## Evidence
 
@@ -68,10 +68,10 @@ CLI 记录命令、stdout、stderr 和退出码。HTTP 记录请求方法、端�
 bun --no-env-file .agents/skills/verify-sbtools/helpers/verify.js cleanup --out "$RUN"
 ```
 
-用例只终止自己启动的进程。PID 命名空间退出时回收其子进程。入口删除自己的 VM 目录和自己创建的构建缓存，保留证据。launch 或 drive 出错后也执行 cleanup。清理后检查 manifest 与结果文件仍存在。
+用例只终止自己启动的进程。临时容器与 PID 命名空间退出时回收其子进程。入口删除自己创建的构建缓存，保留证据。launch 或 drive 出错后也执行 cleanup。清理后检查 manifest 与结果文件仍存在。
 
 ## Helpers
 
-`helpers/verify.js` 是开发机入口。`helpers/isolate.py` 由入口在 VM 中执行，验证网络隔离后启动 Bun。`helpers/*.test.js` 直接调用实际二进制和官方内核。只有 `mac` 组在 macOS 宿主运行，由入口设置被测路径；其余测试不要在宿主机直接执行。
+`helpers/verify.js` 是开发机入口。`helpers/isolate.py` 由入口在容器中执行，验证网络隔离后启动 Bun。`helpers/*.test.js` 直接调用实际二进制和官方内核。只有 `mac` 组在 macOS 宿主运行，由入口设置被测路径；其余测试不要在宿主机直接执行。
 
 通过 `/maintain-verification-skill` 同步功能地图和用例。

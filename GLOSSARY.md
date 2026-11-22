@@ -3,7 +3,7 @@
 ## 词汇表
 
 **开发机**
-拉取本仓库、参与开发的机器，具备 Bun、mise、sing-box CLI、Lima 沙箱等完整工具链，`just` 命令面向此环境
+拉取本仓库、参与开发的机器，具备 Bun、mise、sing-box CLI、OrbStack/Docker 沙箱等完整工具链，`just` 命令面向此环境
 
 **设备**
 运行 sbtools 的 arm Mac，唯一前置条件为 sbtools 二进制，不要求本仓库工作区、Bun 或内核 CLI

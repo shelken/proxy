@@ -42,7 +42,7 @@ flowchart TD
 
     subgraph S4 ["4. 运行环境消费"]
         MG --> SFM["SFM (Remote Profile)\n按间隔自动拉取"]
-        MG --> SANDBOX["Lima VM 隔离沙箱 (回归测试 / 路由探测)"]
+        MG --> SANDBOX["OrbStack 隔离容器沙箱 (回归测试 / 路由探测)"]
     end
 ```
 
@@ -84,20 +84,20 @@ DNS 查询先匹配本地与国内规则，未匹配的 A 查询使用 FakeIP（
 ```mermaid
 sequenceDiagram
     participant Dev as 开发与配置调整
-    participant CI as CI (release-sbtools)
+    participant BLD as 本地容器构建 (rust:1-alpine)
     participant ASM as 装配引擎 (服务端 sbtools)
-    participant VM as Lima VM 沙箱 (proxy-test)
+    participant BOX as 隔离沙箱容器 (OrbStack)
     participant Probe as 探针 (just trace)
 
-    Dev->>CI: 推分支，取 HEAD 的 Linux 产物
-    CI-->>Dev: sbtools-aarch64-unknown-linux-musl
-    Dev->>VM: 拷入二进制与规则产物
-    Dev->>ASM: VM 内起服务端 (客户端 encode 生成订阅 URL)
+    Dev->>BLD: 增量编译当前工作区 sbtools (musl)
+    BLD-->>Dev: .sandbox-artifacts/sbtools
+    Dev->>BOX: 拷入二进制与规则产物 (独立网络命名空间)
+    Dev->>ASM: 容器内起服务端 (客户端 encode 生成订阅 URL)
     ASM-->>Dev: /sub 返回真实装配产物 (解密 -> 装配 -> 官方 CLI 合并)
-    Dev->>VM: 后处理为可运行配置并启动内核
+    Dev->>BOX: 后处理为可运行配置并启动内核
     Dev->>Probe: 发起目标探测 (如 api.openai.com)
-    Probe->>VM: 向 127.0.0.1:2080 注入请求
-    VM-->>Probe: 捕获内核日志 (嗅探 -> 规则 -> 策略组 -> 物理出口)
+    Probe->>BOX: 向 127.0.0.1:2080 注入请求
+    BOX-->>Probe: 捕获内核日志 (嗅探 -> 规则 -> 策略组 -> 物理出口)
     Probe-->>Dev: 输出链路审计报告 (0 污染宿主网络)
 ```
 
