@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.5](https://github.com/shelken/proxy/compare/v0.8.4...v0.8.5) - 2026-11-22
+
+### Added
+
+- *(sing-box)* 新增 socks 二跳节点支持、tr 分流及容器化沙箱重构 ([#184](https://github.com/shelken/proxy/pull/184))
+
+### Other
+
+- *(deps)* update dependency bun to v1.4.5 ([#181](https://github.com/shelken/proxy/pull/181))
+
 ## [0.8.4](https://github.com/shelken/proxy/compare/v0.8.3...v0.8.4) - 2026-11-08
 
 ### Fixed
