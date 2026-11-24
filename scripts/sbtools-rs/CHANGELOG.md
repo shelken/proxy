@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.6](https://github.com/shelken/proxy/compare/v0.8.5...v0.8.6) - 2026-11-24
+
+### Fixed
+
+- *(sbtools)* remove hardcoded template policy overrides and close server validation gaps ([#187](https://github.com/shelken/proxy/pull/187))
+- *(sing-box)* 停用 urltest 断流、放宽测速周期并将国内直连 DNS 切为阿里 DoH ([#185](https://github.com/shelken/proxy/pull/185))
+
 ## [0.8.5](https://github.com/shelken/proxy/compare/v0.8.4...v0.8.5) - 2026-11-22
 
 ### Added
