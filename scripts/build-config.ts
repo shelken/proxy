@@ -91,13 +91,16 @@ export function assemble(settings: Settings, shared: Shared, platform: Doc) {
   doc.route.rules = resolveRuleSets(doc.route.rules, settings, shared, companions, claimed);
   doc.dns.rules = resolveRuleSets(doc.dns.rules, settings, shared, companions);
   return include(doc, {
-    groups: Object.entries(settings.groups).map(([tag, { options, ...native }]) => ({
-      type: "selector",
-      tag,
-      outbounds: options,
-      ...native,
-      interrupt_exist_connections: true,
-    })),
+    groups: Object.entries(settings.groups).map(([tag, { options, ...native }]) => {
+      const type = native.type ?? "selector";
+      return {
+        type,
+        tag,
+        outbounds: options,
+        ...native,
+        ...(type === "selector" ? { interrupt_exist_connections: true } : {}),
+      };
+    }),
     "rule-sets": [
       ...[...companions].map((n) => ruleSetBlock(`${n}-dns`, rulesUrl(`${settings.byName.get(n)!.artifact}-dns`))),
       ...settings.rules.map((r) => ruleSetBlock(r.name, r.kind === "url" ? r.source : rulesUrl(r.artifact))),

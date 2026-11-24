@@ -253,7 +253,7 @@ fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, S
             {
                 obj.remove("default");
             }
-            if out.get("interrupt_exist_connections").is_none() {
+            if out["type"] == "selector" && out.get("interrupt_exist_connections").is_none() {
                 out["interrupt_exist_connections"] = json!(true);
             }
             Some(out)
@@ -517,11 +517,21 @@ mod tests {
                 .all(|g| !g["outbounds"].as_array().is_some_and(Vec::is_empty)),
             "任何策略组都不应为空: {groups:?}"
         );
+        let selectors: Vec<&&Value> = groups.iter().filter(|g| g["type"] == "selector").collect();
+        let urltests: Vec<&&Value> = groups.iter().filter(|g| g["type"] == "urltest").collect();
+        assert!(!selectors.is_empty(), "应至少装配出一个 selector 策略组");
+        assert!(!urltests.is_empty(), "应至少装配出一个 urltest 策略组");
         assert!(
-            groups
+            selectors
                 .iter()
                 .all(|g| g["interrupt_exist_connections"] == true),
-            "所有装配出的策略组都必须具备 interrupt_exist_connections: true: {groups:?}"
+            "所有 selector 策略组都必须具备 interrupt_exist_connections: true: {selectors:?}"
+        );
+        assert!(
+            urltests
+                .iter()
+                .all(|g| g.get("interrupt_exist_connections") != Some(&json!(true))),
+            "urltest 自动测速组不得开启 interrupt_exist_connections: {urltests:?}"
         );
         assert!(
             groups.iter().any(|g| g["tag"] == "jp"),
