@@ -261,6 +261,18 @@ describe("template.json structural verification", () => {
     expect(ruleSetDl?.interval).toBe("30m0s");
   });
 
+  test("dns-direct-cn 使用直连阿里 DoH（不走代理、不走明文 UDP 53）", () => {
+    const cn = (template.dns?.servers ?? []).find(
+      (s: Record<string, unknown>) => s.tag === "dns-direct-cn",
+    );
+    expect(cn).toBeDefined();
+    expect(cn.type).toBe("https");
+    expect(cn.server).toBe("223.5.5.5");
+    expect(cn.detour).toBeUndefined();
+    expect(cn.tls?.enabled).toBe(true);
+    expect(cn.tls?.server_name).toBe("dns.alidns.com");
+  });
+
   test("tun 保持双栈，fakeip 只发 v4（无 inet6_range）", () => {
     const tun = template.inbounds.find((i) => i.type === "tun");
     expect(tun.address.some((addr: string) => addr.includes(":"))).toBe(true);

@@ -8,7 +8,10 @@ log:
   level: info
 
 dns-servers:
-  - { type: udp, tag: dns-direct-cn, server: 223.5.5.5 }
+  - type: https
+    tag: dns-direct-cn
+    server: 223.5.5.5
+    tls: { enabled: true, server_name: dns.alidns.com }
   - type: https
     tag: dns-proxy
     server: 1.1.1.1
