@@ -82,9 +82,9 @@ fn is_detoured_node(node: &Value) -> bool {
         .is_some_and(|d| !d.is_empty())
 }
 
-/// 节点全集 → 反回环直连规则：域名保持原样，IP 字面量生成对应 CIDR。
+/// 节点全集 + 底模直连出站标签 → 反回环直连规则：域名保持原样，IP 字面量生成对应 CIDR。
 /// 带 detour 的二跳节点通过上游代理拨号，跳过直连规则，避免把中继服务器强制直连。
-pub fn generate_node_direct_rule(nodes: &[Value]) -> Option<Value> {
+pub fn generate_node_direct_rule(nodes: &[Value], outbound_tag: &str) -> Option<Value> {
     let mut domains: Vec<String> = Vec::new();
     let mut cidrs: Vec<String> = Vec::new();
     for node in nodes {
@@ -125,8 +125,29 @@ pub fn generate_node_direct_rule(nodes: &[Value]) -> Option<Value> {
     if !cidrs.is_empty() {
         rule.insert("ip_cidr".into(), json!(cidrs));
     }
-    rule.insert("outbound".into(), json!("direct"));
+    rule.insert("outbound".into(), json!(outbound_tag));
     Some(Value::Object(rule))
+}
+
+fn is_policy_group(ob: &Value) -> bool {
+    matches!(ob["type"].as_str(), Some("selector" | "urltest"))
+}
+
+/// 底模直连出站标签：优先 `tag == "direct"` 的 `direct` 出站，否则取首个 `type == "direct"` 的非空标签。
+pub fn direct_outbound_tag(template: &Value) -> Option<&str> {
+    let outbounds = template["outbounds"].as_array()?;
+    let mut first = None;
+    for tag in outbounds
+        .iter()
+        .filter(|o| o["type"].as_str() == Some("direct"))
+        .filter_map(|o| o["tag"].as_str().filter(|t| !t.is_empty()))
+    {
+        if tag == "direct" {
+            return Some(tag);
+        }
+        first.get_or_insert(tag);
+    }
+    first
 }
 
 /// 正则字符串 → regex（TS 版 (?i) 前缀语义对齐）。非法正则必须报错：
@@ -141,10 +162,11 @@ fn compile_pattern(item: &str) -> Result<regex::Regex, String> {
     .map_err(|e| format!("策略组过滤模式 '{item}' 不是合法正则: {e}"))
 }
 
-/// 展开单个策略组的占位成员列表：组引用与精确节点 tag 原样保留，正则仅匹配一跳节点。
+/// 展开单个策略组的占位成员列表：静态出站/endpoint、组引用与精确节点 tag 原样保留，正则仅匹配一跳节点。
 fn expand_selector_pool(
     sel: &Value,
     direct_tags: &[&str],
+    static_tags: &std::collections::HashSet<&str>,
     all_node_tags: &std::collections::HashSet<&str>,
     group_tags: &std::collections::HashSet<&str>,
 ) -> Result<(String, Vec<String>), String> {
@@ -154,7 +176,9 @@ fn expand_selector_pool(
         let Some(item_str) = item.as_str() else {
             continue;
         };
-        if item_str == "direct" || all_node_tags.contains(item_str) || group_tags.contains(item_str)
+        if static_tags.contains(item_str)
+            || all_node_tags.contains(item_str)
+            || group_tags.contains(item_str)
         {
             expanded.push(item_str.to_string());
             continue;
@@ -181,14 +205,20 @@ fn expand_selector_pool(
 /// 一跳节点参与正则展开（如 `.*`、地区正则）与精确引用；二跳节点（带 `detour`）
 /// 仅能通过精确 tag 显式引入，避免被 `.*` 拉进通用出口或上游分组造成成环。
 ///
-/// 判活是「能否传递地落到具体节点」：只有直接含节点 / direct，或引用到已判活的组，才算活。
-/// 迭代到不再变化（最小不动点），保证剔除空组后不留悬空引用。
+/// 判活是「能否传递地落到具体节点/静态出站/endpoint」：迭代到最小不动点，
+/// 保证剔除空组后不留悬空引用；其余字段原样透传底模，服务端绝不回填或改写策略开关。
 fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, String> {
-    let declared: Vec<&Value> = template["outbounds"].as_array().map_or_default(|a| {
-        a.iter()
-            .filter(|o| o["type"] == "selector" || o["type"] == "urltest")
-            .collect()
-    });
+    let declared: Vec<&Value> = template["outbounds"]
+        .as_array()
+        .map_or_default(|a| a.iter().filter(|o| is_policy_group(o)).collect());
+    let static_tags: std::collections::HashSet<&str> = template["outbounds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|o| !is_policy_group(o))
+        .chain(template["endpoints"].as_array().into_iter().flatten())
+        .filter_map(|o| o["tag"].as_str())
+        .collect();
     let all_node_tags: std::collections::HashSet<&str> =
         nodes.iter().filter_map(|n| n["tag"].as_str()).collect();
     let direct_tags: Vec<&str> = nodes
@@ -196,13 +226,15 @@ fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, S
         .filter(|n| !is_detoured_node(n))
         .filter_map(|n| n["tag"].as_str())
         .collect();
-    let is_node_or_direct = |item: &str| item == "direct" || all_node_tags.contains(item);
+    let is_terminal = |item: &str| static_tags.contains(item) || all_node_tags.contains(item);
     let group_tags: std::collections::HashSet<&str> =
         declared.iter().filter_map(|s| s["tag"].as_str()).collect();
 
     let pools: Vec<(String, Vec<String>)> = declared
         .iter()
-        .map(|sel| expand_selector_pool(sel, &direct_tags, &all_node_tags, &group_tags))
+        .map(|sel| {
+            expand_selector_pool(sel, &direct_tags, &static_tags, &all_node_tags, &group_tags)
+        })
         .collect::<Result<Vec<_>, String>>()?;
 
     let mut alive: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -212,10 +244,7 @@ fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, S
             if alive.contains(tag) {
                 continue;
             }
-            if refs
-                .iter()
-                .any(|r| is_node_or_direct(r) || alive.contains(r))
-            {
+            if refs.iter().any(|r| is_terminal(r) || alive.contains(r)) {
                 alive.insert(tag.clone());
                 changed = true;
             }
@@ -235,7 +264,7 @@ fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, S
                     .find(|(t, _)| t == tag)
                     .map_or_default(|(_, refs)| {
                         refs.iter()
-                            .filter(|r| is_node_or_direct(r) || alive.contains(*r))
+                            .filter(|r| is_terminal(r) || alive.contains(*r))
                             .cloned()
                             .collect()
                     });
@@ -253,46 +282,32 @@ fn populate_selectors(template: &Value, nodes: &[Value]) -> Result<Vec<Value>, S
             {
                 obj.remove("default");
             }
-            if out["type"] == "selector" && out.get("interrupt_exist_connections").is_none() {
-                out["interrupt_exist_connections"] = json!(true);
-            }
             Some(out)
         })
         .collect::<Vec<Value>>();
     Ok(declared_result)
 }
 
-/// 订阅抓取函数类型。抽成别名以免在结构体字段里内联复杂类型。
-pub type SubscriptionFetcher = Box<dyn Fn(&str) -> Result<String, String>>;
-
-#[derive(Default)]
-pub struct AssembleInput {
-    /// `|` 分隔的源列表：订阅 URL 与私有节点 URI 任意混合。
-    pub sources: String,
-    /// 订阅抓取注入点（测试用）。
-    pub fetch_subscription: Option<SubscriptionFetcher>,
-}
-
-/// 解析全部源 → 节点全集（私有节点保序前插，机场订阅原序追加）。
-/// 这是"所有节点确定"的唯一时点：反回环规则必须在此之后、装配之前生成。
-pub fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>, String> {
-    let mut private_nodes: Vec<Value> = Vec::new();
+/// 结构化源列表 → 节点全集（私有节点保序前插，机场订阅原序追加）。
+/// 直接接收分离的 `subs` 与 `node_uris`，避免拼字符串再拆分误截断含 `|` 的节点名或 URL。
+pub fn collect_nodes<F>(
+    subs: &[String],
+    node_uris: &[String],
+    mut fetch_subscription: F,
+) -> Result<Vec<Value>, String>
+where
+    F: FnMut(&str) -> Result<String, String>,
+{
+    let mut private_nodes: Vec<Value> = Vec::with_capacity(node_uris.len());
     let mut airport_nodes: Vec<Value> = Vec::new();
     let mut unsupported_queries = BTreeMap::new();
 
-    for source in sources.split('|').map(str::trim).filter(|s| !s.is_empty()) {
-        if source.starts_with("http://") || source.starts_with("https://") {
-            let body = match &input.fetch_subscription {
-                Some(f) => f(source)?,
-                None => crate::template::http_get(source)?,
-            };
-            airport_nodes.extend(parse_subscription_body(&body, &mut unsupported_queries)?);
-        } else {
-            private_nodes.push(crate::node::parse_node_uri(
-                source,
-                &mut unsupported_queries,
-            )?);
-        }
+    for uri in node_uris.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        private_nodes.push(crate::node::parse_node_uri(uri, &mut unsupported_queries)?);
+    }
+    for url in subs.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let body = fetch_subscription(url)?;
+        airport_nodes.extend(parse_subscription_body(&body, &mut unsupported_queries)?);
     }
 
     let mut nodes = private_nodes;
@@ -339,13 +354,14 @@ fn dfs_outbound_cycle<'a>(
     Ok(())
 }
 
-/// 校验所有出站的 `detour` 目标存在且整个出站依赖图无环（selector/urltest 成员 + node.detour）。
+/// 校验所有出站与 endpoint 的 `detour` 目标存在且整个出站依赖图无环。
 fn validate_outbound_graph(
     outbounds: &[Value],
+    endpoints: &[Value],
     available: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     let mut edges: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
-    for ob in outbounds {
+    for ob in outbounds.iter().chain(endpoints.iter()) {
         let Some(tag) = ob["tag"].as_str() else {
             continue;
         };
@@ -358,7 +374,7 @@ fn validate_outbound_graph(
             }
             deps.push(detour);
         }
-        if matches!(ob["type"].as_str(), Some("selector" | "urltest"))
+        if is_policy_group(ob)
             && let Some(members) = ob["outbounds"].as_array()
         {
             for member in members.iter().filter_map(Value::as_str) {
@@ -379,12 +395,113 @@ fn validate_outbound_graph(
     Ok(())
 }
 
+fn rewrite_dangling_ref(
+    slot: &mut Value,
+    available: &std::collections::HashSet<String>,
+    fallback: &str,
+    desc: &str,
+) {
+    if let Some(orig) = slot.as_str()
+        && !orig.is_empty()
+        && !available.contains(orig)
+    {
+        let orig = orig.to_string();
+        crate::logging::warn(&format!(
+            "{desc} '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
+        ));
+        *slot = Value::from(fallback);
+    }
+}
+
+fn rewrite_dangling_outbound_refs(
+    template: &mut Value,
+    available: &std::collections::HashSet<String>,
+    fallback: &str,
+) {
+    for server in template["dns"]["servers"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        let tag = server["tag"].as_str().unwrap_or("?").to_string();
+        if let Some(detour) = server.get_mut("detour") {
+            rewrite_dangling_ref(
+                detour,
+                available,
+                fallback,
+                &format!("dns server '{tag}' 的 detour"),
+            );
+        }
+    }
+    for client in template["http_clients"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        let tag = client["tag"].as_str().unwrap_or("?").to_string();
+        if let Some(detour) = client.get_mut("detour") {
+            rewrite_dangling_ref(
+                detour,
+                available,
+                fallback,
+                &format!("http_client '{tag}' 的 detour"),
+            );
+        }
+    }
+    if let Some(detour) = template
+        .get_mut("ntp")
+        .and_then(|ntp| ntp.get_mut("detour"))
+    {
+        rewrite_dangling_ref(detour, available, fallback, "ntp 的 detour");
+    }
+    if let Some(detour) = template
+        .get_mut("experimental")
+        .and_then(|exp| exp.get_mut("clash_api"))
+        .and_then(|api| api.get_mut("external_ui_download_detour"))
+    {
+        rewrite_dangling_ref(
+            detour,
+            available,
+            fallback,
+            "clash_api 的 external_ui_download_detour",
+        );
+    }
+    if let Some(route) = template.get_mut("route") {
+        if let Some(final_tag) = route.get_mut("final") {
+            rewrite_dangling_ref(final_tag, available, fallback, "route.final");
+        }
+        for rule_set in route["rule_set"].as_array_mut().into_iter().flatten() {
+            let tag = rule_set["tag"].as_str().unwrap_or("?").to_string();
+            if let Some(detour) = rule_set.get_mut("download_detour") {
+                rewrite_dangling_ref(
+                    detour,
+                    available,
+                    fallback,
+                    &format!("rule_set '{tag}' 的 download_detour"),
+                );
+            }
+        }
+        for rule in route["rules"].as_array_mut().into_iter().flatten() {
+            if let Some(outbound) = rule.get_mut("outbound") {
+                rewrite_dangling_ref(outbound, available, fallback, "路由规则的出站");
+            }
+        }
+    }
+}
+
 /// 节点全集 + 底模 → 填充完 outbounds 的完整配置（纯内存，零网络）。
 pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
-    // 远程底模可能缺这一层；缺失时直接报错，避免产出的配置静默丢掉全部策略组
-    if !template["outbounds"].is_array() {
+    let Some(raw_outbounds) = template["outbounds"].as_array() else {
         return Err("底模缺少 outbounds 数组".into());
-    }
+    };
+    let direct_tag = direct_outbound_tag(template)
+        .ok_or("底模缺少 type 为 direct 的直连出站")?
+        .to_string();
+    let static_outbounds: Vec<Value> = raw_outbounds
+        .iter()
+        .filter(|o| !is_policy_group(o))
+        .cloned()
+        .collect();
 
     let reserved = reserved_tags(template);
     let mut nodes = nodes;
@@ -392,14 +509,11 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
 
     let selectors = populate_selectors(template, &nodes)?;
 
-    let mut outbounds = vec![json!({"type": "direct", "tag": "direct"})];
+    let mut outbounds = static_outbounds;
     outbounds.extend(nodes);
     outbounds.extend(selectors);
     template["outbounds"] = Value::Array(outbounds);
 
-    // 组可能因订阅无匹配节点被整组跳过；DNS detour 与路由规则直指它时悬空，内核会 FATAL。
-    // 回退链：proxy → direct（direct 由装配必插入，兜底恒存在）。
-    // endpoint（如 iOS 的 ts-ep）与 outbound 共用标签空间，同样是合法出站目标，不能算「无节点」。
     let available: std::collections::HashSet<String> = ["outbounds", "endpoints"]
         .iter()
         .filter_map(|k| template[*k].as_array())
@@ -407,51 +521,49 @@ pub fn finalize(template: &mut Value, nodes: Vec<Value>) -> Result<(), String> {
         .filter_map(|o| o["tag"].as_str())
         .map(str::to_string)
         .collect();
+    let endpoints = template["endpoints"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
     if let Some(all_outbounds) = template["outbounds"].as_array() {
-        validate_outbound_graph(all_outbounds, &available)?;
+        validate_outbound_graph(all_outbounds, endpoints, &available)?;
     }
-    let fallback = if available.contains("proxy") {
-        "proxy"
-    } else {
-        "direct"
-    };
-    for server in template["dns"]["servers"]
-        .as_array_mut()
-        .into_iter()
-        .flatten()
-    {
-        let tag = server["tag"].as_str().unwrap_or("?").to_string();
-        if let Some(detour) = server.get_mut("detour")
-            && detour.as_str().is_some_and(|t| !available.contains(t))
-        {
-            let orig = detour.as_str().unwrap_or_default().to_string();
-            crate::logging::warn(&format!(
-                "dns server '{tag}' 的 detour '{orig}' 指向的组无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
-            ));
-            *detour = Value::from(fallback);
-        }
-    }
-    for rule in template["route"]["rules"]
-        .as_array_mut()
-        .into_iter()
-        .flatten()
-    {
-        if let Some(outbound) = rule.get_mut("outbound")
-            && outbound.as_str().is_some_and(|t| !available.contains(t))
-        {
-            let orig = outbound.as_str().unwrap_or_default().to_string();
-            crate::logging::warn(&format!(
-                "路由规则的出站 '{orig}' 无节点已剔除，回退 '{fallback}'（不改写内核会 FATAL）"
-            ));
-            *outbound = Value::from(fallback);
-        }
-    }
+
+    let fallback = template["route"]["final"]
+        .as_str()
+        .filter(|t| available.contains(*t))
+        .or_else(|| available.contains("proxy").then_some("proxy"))
+        .unwrap_or(&direct_tag)
+        .to_string();
+    rewrite_dangling_outbound_refs(template, &available, &fallback);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type SubscriptionFetcher = Box<dyn Fn(&str) -> Result<String, String>>;
+
+    struct AssembleInput {
+        sources: String,
+        fetch_subscription: Option<SubscriptionFetcher>,
+    }
+
+    fn collect_nodes(sources: &str, input: &AssembleInput) -> Result<Vec<Value>, String> {
+        let mut subs = Vec::new();
+        let mut node_uris = Vec::new();
+        for source in sources.split('|').map(str::trim).filter(|s| !s.is_empty()) {
+            if source.starts_with("http://") || source.starts_with("https://") {
+                subs.push(source.to_string());
+            } else {
+                node_uris.push(source.to_string());
+            }
+        }
+        super::collect_nodes(&subs, &node_uris, |url| match &input.fetch_subscription {
+            Some(f) => f(url),
+            None => crate::template::http_get(url),
+        })
+    }
 
     /// 回归：(?i) 前缀必须保留大小写不敏感语义。
     /// 修复前 strip 掉前缀后直接编译，小写节点名（hk-02 等）全部漏匹配。
@@ -638,8 +750,10 @@ mod tests {
         };
 
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let rule = generate_node_direct_rule(&nodes).expect("应生成反回环规则");
+        let rule = generate_node_direct_rule(&nodes, "direct").expect("应生成反回环规则");
         assert_eq!(rule["outbound"], "direct");
+        let custom = generate_node_direct_rule(&nodes, "direct-wan").expect("应生成自定义出站规则");
+        assert_eq!(custom["outbound"], "direct-wan");
         let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
         for expected in ["192.0.2.1/32", "2001:db8::1/128"] {
             assert!(
@@ -708,7 +822,7 @@ mod tests {
             fetch_subscription: Some(Box::new(|_| Ok(String::new()))),
         };
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
-        let rule = generate_node_direct_rule(&nodes).expect("应生成反回环规则");
+        let rule = generate_node_direct_rule(&nodes, "direct").expect("应生成反回环规则");
         let cidrs = rule["ip_cidr"].as_array().expect("应含 ip_cidr");
         assert_eq!(
             cidrs.len(),
@@ -1103,7 +1217,8 @@ mod tests {
         };
         let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
 
-        let direct_rule = generate_node_direct_rule(&nodes).expect("一跳节点应生成反回环规则");
+        let direct_rule =
+            generate_node_direct_rule(&nodes, "direct").expect("一跳节点应生成反回环规则");
         assert!(
             direct_rule.get("domain").is_none(),
             "带 detour 的节点域名不得进 00-direct，实际: {direct_rule}"
@@ -1178,5 +1293,142 @@ mod tests {
         let cycle_nodes = collect_nodes(&cycle_input.sources, &cycle_input).expect("节点解析");
         let err = finalize(&mut cycle_tpl, cycle_nodes).expect_err("依赖成环必须报错");
         assert!(err.contains("出站依赖成环"), "实际: {err}");
+    }
+
+    #[test]
+    fn selector_without_interrupt_is_not_mutated() {
+        let mut tpl = json!({
+            "outbounds": [
+                {"type": "direct", "tag": "direct"},
+                {"type": "selector", "tag": "keep-true", "outbounds": [".*"], "interrupt_exist_connections": true},
+                {"type": "selector", "tag": "no-interrupt", "outbounds": [".*"]},
+                {"type": "urltest", "tag": "auto", "outbounds": [".*"]}
+            ],
+            "dns": {"servers": []},
+            "route": {"rules": []}
+        });
+        let input = input_with_fetcher("hy2://pass@192.0.2.1:8388#hk-01", "");
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().unwrap();
+        let find = |tag: &str| outbounds.iter().find(|o| o["tag"] == tag).unwrap();
+        assert_eq!(
+            find("keep-true")["interrupt_exist_connections"],
+            json!(true)
+        );
+        assert!(
+            find("no-interrupt")
+                .get("interrupt_exist_connections")
+                .is_none(),
+            "服务端不得向未声明 interrupt_exist_connections 的 selector 回填字段"
+        );
+        assert!(
+            find("auto").get("interrupt_exist_connections").is_none(),
+            "urltest 不得被回填 interrupt_exist_connections"
+        );
+    }
+
+    #[test]
+    fn static_outbounds_and_endpoints_are_preserved_in_finalize_and_selectors() {
+        let mut tpl = json!({
+            "endpoints": [{"type": "tailscale", "tag": "ts-ep"}],
+            "outbounds": [
+                {"type": "direct", "tag": "direct", "routing_mark": 255},
+                {"type": "direct", "tag": "direct-wan", "bind_interface": "eth0"},
+                {"type": "selector", "tag": "corp", "outbounds": ["ts-ep", "direct-wan", "direct"]}
+            ],
+            "dns": {"servers": []},
+            "route": {"rules": []}
+        });
+        let input = input_with_fetcher("hy2://pass@192.0.2.1:8388#hk-01", "");
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        let outbounds = tpl["outbounds"].as_array().unwrap();
+        let find = |tag: &str| outbounds.iter().find(|o| o["tag"] == tag);
+        assert_eq!(
+            find("direct").expect("direct 应保留")["routing_mark"],
+            json!(255),
+            "底模 direct 的自定义字段不得被抹除"
+        );
+        assert_eq!(
+            find("direct-wan").expect("额外静态出站 direct-wan 应保留")["bind_interface"],
+            json!("eth0")
+        );
+        assert_eq!(
+            find("corp").expect("corp 组应保留")["outbounds"],
+            json!(["ts-ep", "direct-wan", "direct"])
+        );
+
+        let mut no_direct = json!({
+            "outbounds": [{"type": "selector", "tag": "proxy", "outbounds": [".*"]}],
+            "dns": {"servers": []},
+            "route": {"rules": []}
+        });
+        let nodes2 = collect_nodes(&input.sources, &input).expect("节点解析");
+        let err = finalize(&mut no_direct, nodes2).expect_err("缺少 direct 出站的底模必须报错");
+        assert!(err.contains("direct"), "实际: {err}");
+    }
+
+    #[test]
+    fn dangling_refs_fallback_covers_all_fields_and_respects_route_final() {
+        let mut tpl = json!({
+            "outbounds": [
+                {"type": "direct", "tag": "direct-wan"},
+                {"type": "selector", "tag": "main-out", "outbounds": [".*"]},
+                {"type": "urltest", "tag": "empty-group", "outbounds": ["^NOMATCH$"]}
+            ],
+            "dns": {"servers": [{"type": "https", "tag": "dns-p", "detour": "empty-group"}]},
+            "http_clients": [{"tag": "rs-dl", "detour": "empty-group"}],
+            "ntp": {"enabled": true, "server": "time.apple.com", "detour": "empty-group"},
+            "experimental": {"clash_api": {"external_ui_download_detour": "empty-group"}},
+            "route": {
+                "final": "main-out",
+                "rule_set": [{"type": "remote", "tag": "rs", "url": "https://example.com/a.srs", "download_detour": "empty-group"}],
+                "rules": [{"domain": ["example.com"], "outbound": "empty-group"}]
+            }
+        });
+        let input = input_with_fetcher("hy2://pass@192.0.2.1:8388#hk-01", "");
+        let nodes = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut tpl, nodes).expect("装配");
+
+        assert_eq!(tpl["dns"]["servers"][0]["detour"], json!("main-out"));
+        assert_eq!(tpl["http_clients"][0]["detour"], json!("main-out"));
+        assert_eq!(tpl["ntp"]["detour"], json!("main-out"));
+        assert_eq!(
+            tpl["experimental"]["clash_api"]["external_ui_download_detour"],
+            json!("main-out")
+        );
+        assert_eq!(
+            tpl["route"]["rule_set"][0]["download_detour"],
+            json!("main-out")
+        );
+        assert_eq!(tpl["route"]["rules"][0]["outbound"], json!("main-out"));
+
+        let mut dangling_final = json!({
+            "outbounds": [
+                {"type": "direct", "tag": "direct-wan"},
+                {"type": "urltest", "tag": "empty-final", "outbounds": ["^NOMATCH$"]}
+            ],
+            "dns": {"servers": []},
+            "route": {"final": "empty-final", "rules": []}
+        });
+        let nodes2 = collect_nodes(&input.sources, &input).expect("节点解析");
+        finalize(&mut dangling_final, nodes2).expect("装配");
+        assert_eq!(dangling_final["route"]["final"], json!("direct-wan"));
+
+        let mut ep_bad_detour = json!({
+            "endpoints": [{"type": "wireguard", "tag": "wg-ep", "detour": "empty-group"}],
+            "outbounds": [
+                {"type": "direct", "tag": "direct"},
+                {"type": "urltest", "tag": "empty-group", "outbounds": ["^NOMATCH$"]}
+            ],
+            "dns": {"servers": []},
+            "route": {"rules": []}
+        });
+        let nodes3 = collect_nodes(&input.sources, &input).expect("节点解析");
+        let err = finalize(&mut ep_bad_detour, nodes3).expect_err("endpoint 缺失 detour 必须报错");
+        assert!(err.contains("empty-group"), "实际: {err}");
     }
 }

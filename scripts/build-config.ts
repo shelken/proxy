@@ -97,8 +97,8 @@ export function assemble(settings: Settings, shared: Shared, platform: Doc) {
         type,
         tag,
         outbounds: options,
-        ...native,
         ...(type === "selector" ? { interrupt_exist_connections: true } : {}),
+        ...native,
       };
     }),
     "rule-sets": [

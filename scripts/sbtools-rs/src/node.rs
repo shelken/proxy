@@ -72,6 +72,14 @@ fn decode_userinfo_password(u: &url::Url) -> String {
     percent_decode(raw)
 }
 
+fn extract_host(u: &url::Url, proto: &str, raw: &str) -> Result<String, String> {
+    u.host_str()
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']'))
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{proto} URI 缺少服务器地址：{raw}"))
+}
+
 /// hysteria2:// 或 hy2:// → sing-box hysteria2 出站。
 pub fn parse_hysteria2(
     raw: &str,
@@ -83,16 +91,21 @@ pub fn parse_hysteria2(
         &["sni", "insecure", "obfs", "obfs-password"],
         unsupported_queries,
     );
-    let tag = tag_from_hash(&u, "selfhost");
+    let host = extract_host(&u, "hysteria2", raw)?;
     let auth = decode_userinfo_password(&u);
+    if auth.is_empty() {
+        return Err(format!("hysteria2 URI 缺少密码：{raw}"));
+    }
     let port: u16 = u.port().unwrap_or(443);
-    let sni = query_get(&u, "sni").unwrap_or_else(|| u.host_str().unwrap_or("").to_string());
+    let default_tag = format!("Hysteria2 {host}:{port}");
+    let tag = tag_from_hash(&u, &default_tag);
+    let sni = query_get(&u, "sni").unwrap_or_else(|| host.clone());
     let insecure = query_get(&u, "insecure").as_deref() == Some("1");
 
     let mut outbound = json!({
         "type": "hysteria2",
         "tag": tag,
-        "server": u.host_str().unwrap_or(""),
+        "server": host,
         "server_port": port,
         "password": auth,
         "tls": {
@@ -129,11 +142,9 @@ pub fn parse_anytls(
         ],
         unsupported_queries,
     );
-    let default_tag = format!(
-        "AnyTLS {}:{}",
-        u.host_str().unwrap_or(""),
-        u.port().unwrap_or(443)
-    );
+    let host = extract_host(&u, "anytls", raw)?;
+    let port: u16 = u.port().unwrap_or(443);
+    let default_tag = format!("AnyTLS {host}:{port}");
     let tag = tag_from_hash(&u, &default_tag);
     let password = decode_userinfo_password(&u);
     if password.is_empty() {
@@ -163,8 +174,8 @@ pub fn parse_anytls(
     let mut outbound = json!({
         "type": "anytls",
         "tag": tag,
-        "server": u.host_str().unwrap_or(""),
-        "server_port": u.port().unwrap_or(443),
+        "server": host,
+        "server_port": port,
         "password": password,
         "tls": Value::Object(tls),
     });
@@ -276,11 +287,7 @@ pub fn parse_socks(
         &["detour", "network"],
         unsupported_queries,
     );
-    let host = u
-        .host_str()
-        .map(|h| h.trim_start_matches('[').trim_end_matches(']'))
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| format!("socks URI 缺少服务器地址：{raw}"))?;
+    let host = extract_host(&u, "socks", raw)?;
     let port: u16 = u.port().unwrap_or(1080);
     let default_tag = format!("SOCKS {host}:{port}");
     let tag = tag_from_hash(&u, &default_tag);
@@ -365,15 +372,28 @@ mod tests {
         assert_eq!(node["tls"]["insecure"], json!(false));
     }
 
-    /// hysteria2 缺省端口回落 443，缺省 tag 回落 selfhost。
+    /// hysteria2 缺省端口回落 443，缺省 tag 回落协议与地址（不硬编码策略组名）。
     #[test]
     fn hy2_defaults_when_uri_omits_port_and_tag() {
         let node = parse_node_uri("hysteria2://pass@192.0.2.9", &mut BTreeMap::new())
             .expect("hy2 解析失败");
         assert_eq!(node["server_port"], json!(443));
-        assert_eq!(node["tag"], json!("selfhost"));
+        assert_eq!(node["tag"], json!("Hysteria2 192.0.2.9:443"));
         // sni 缺省取 host
         assert_eq!(node["tls"]["server_name"], json!("192.0.2.9"));
+
+        let v6 = parse_node_uri("hy2://pass@[2001:db8::1]:8388#v6", &mut BTreeMap::new())
+            .expect("hy2 IPv6 解析失败");
+        assert_eq!(v6["server"], json!("2001:db8::1"));
+        assert_eq!(v6["tls"]["server_name"], json!("2001:db8::1"));
+
+        let err_pw = parse_node_uri("hy2://@192.0.2.9:443#t", &mut BTreeMap::new())
+            .expect_err("hy2 缺密码应报错");
+        assert!(err_pw.contains("密码"), "实际: {err_pw}");
+
+        let anytls_v6 = parse_node_uri("anytls://pass@[2001:db8::2]:8443#v6", &mut BTreeMap::new())
+            .expect("anytls IPv6 解析失败");
+        assert_eq!(anytls_v6["server"], json!("2001:db8::2"));
     }
 
     /// anytls 出站字段映射：端口、TLS SNI，且密码为空时必须报错而不是产出空密码节点。
