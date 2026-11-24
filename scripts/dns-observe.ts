@@ -174,7 +174,7 @@ async function main(): Promise<void> {
         rounds: ROUNDS,
         dns_upstreams: {
           intl_doh_via: "dns-auto(urltest 四正则)",
-          cn: "223.5.5.5 直连",
+          cn: "223.5.5.5 DoH (dns.alidns.com) 直连",
           lan: "系统上游(禁乐观缓存)",
         },
         groups: Object.fromEntries(Object.keys(DOMAINS).map((g) => [g, agg(g)])),

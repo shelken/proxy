@@ -240,14 +240,37 @@ describe("template.json structural verification", () => {
     expect([...targets].filter((tag) => !declared.has(tag))).toEqual([]);
   });
 
-  test("enables interrupt_exist_connections on all selector and urltest groups", () => {
-    const groups = (template.outbounds ?? []).filter(
-      (o: Record<string, unknown>) => o.type === "selector" || o.type === "urltest",
-    );
-    expect(groups.length).toBeGreaterThan(0);
-    for (const group of groups) {
+  test("仅 selector 组开启 interrupt_exist_connections，urltest 组不开启且测速周期已放宽", () => {
+    const outbounds = (template.outbounds ?? []) as Array<Record<string, unknown>>;
+    const selectors = outbounds.filter((o) => o.type === "selector");
+    const urltests = outbounds.filter((o) => o.type === "urltest");
+    expect(selectors.length).toBeGreaterThan(0);
+    expect(urltests.length).toBeGreaterThan(0);
+    for (const group of selectors) {
       expect(group.interrupt_exist_connections).toBe(true);
     }
+    for (const group of urltests) {
+      expect(group.interrupt_exist_connections).not.toBe(true);
+    }
+
+    const dnsAuto = urltests.find((o) => o.tag === "dns-auto");
+    expect(dnsAuto?.interval).toBe("5m0s");
+    expect(dnsAuto?.tolerance).toBe(100);
+
+    const ruleSetDl = urltests.find((o) => o.tag === "rule-set-dl-group");
+    expect(ruleSetDl?.interval).toBe("30m0s");
+  });
+
+  test("dns-direct-cn 使用直连阿里 DoH（不走代理、不走明文 UDP 53）", () => {
+    const cn = (template.dns?.servers ?? []).find(
+      (s: Record<string, unknown>) => s.tag === "dns-direct-cn",
+    );
+    expect(cn).toBeDefined();
+    expect(cn.type).toBe("https");
+    expect(cn.server).toBe("223.5.5.5");
+    expect(cn.detour).toBeUndefined();
+    expect(cn.tls?.enabled).toBe(true);
+    expect(cn.tls?.server_name).toBe("dns.alidns.com");
   });
 
   test("tun 保持双栈，fakeip 只发 v4（无 inet6_range）", () => {

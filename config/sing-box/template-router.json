@@ -5,9 +5,13 @@
   "dns": {
     "servers": [
       {
-        "type": "udp",
+        "type": "https",
         "tag": "dns-direct-cn",
-        "server": "223.5.5.5"
+        "server": "223.5.5.5",
+        "tls": {
+          "enabled": true,
+          "server_name": "dns.alidns.com"
+        }
       },
       {
         "type": "https",
@@ -132,9 +136,8 @@
         "(?i)(新加坡|坡|狮城|SG|Singapore)"
       ],
       "url": "https://www.gstatic.com/generate_204",
-      "interval": "1m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "interval": "5m0s",
+      "tolerance": 100
     },
     {
       "type": "urltest",
@@ -144,9 +147,8 @@
         ".*"
       ],
       "url": "https://www.gstatic.com/generate_204",
-      "interval": "1m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "interval": "30m0s",
+      "tolerance": 50
     },
     {
       "type": "selector",
@@ -177,8 +179,7 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "tolerance": 50
     },
     {
       "type": "urltest",
@@ -188,8 +189,7 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "tolerance": 50
     },
     {
       "type": "urltest",
@@ -199,8 +199,7 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "tolerance": 50
     },
     {
       "type": "urltest",
@@ -210,8 +209,7 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "tolerance": 50
     },
     {
       "type": "urltest",
@@ -221,8 +219,7 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "tolerance": 50
     },
     {
       "type": "urltest",
@@ -232,8 +229,7 @@
       ],
       "url": "http://www.gstatic.com/generate_204",
       "interval": "10m0s",
-      "tolerance": 50,
-      "interrupt_exist_connections": true
+      "tolerance": 50
     },
     {
       "type": "selector",
