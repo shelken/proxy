@@ -234,7 +234,11 @@ fn is_blocked_v4(ip: std::net::Ipv4Addr) -> bool {
 }
 
 fn is_blocked_v6(ip: std::net::Ipv6Addr) -> bool {
-    ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local()
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
+        || ip.to_ipv4_mapped().is_some_and(is_blocked_v4)
 }
 
 #[cfg(test)]
@@ -284,6 +288,9 @@ mod tests {
             "https://169.254.169.254/latest/meta-data/", // 云元数据端点
             "https://[::1]/t.json",
             "https://[fd00::1]/t.json",
+            "https://[fe80::1]/t.json",
+            "https://[::ffff:127.0.0.1]/t.json",
+            "https://[::ffff:169.254.169.254]/latest/meta-data/",
             "https://0.0.0.0/t.json",
         ] {
             let err = validate_template_url(url).unwrap_err();

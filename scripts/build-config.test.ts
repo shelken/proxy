@@ -416,4 +416,15 @@ describe("变异验证：真实语义契约必须拒绝坏产物", () => {
     rules.splice(rules.findIndex((r) => r.clash_mode === "global") + 1, 0, reject);
     expect(() => assertRejectBeforeClashMode(rules)).toThrow();
   });
+
+  test("settings.yaml 显式关闭 selector 的 interrupt_exist_connections 不被默认覆盖", () => {
+    const path = tempSettings((d) => {
+      d.groups.selfhost.interrupt_exist_connections = false;
+    });
+    const doc = assemble(loadSettings(shared, path), shared, platforms.mac);
+    const selfhost = doc.outbounds.find((o: any) => o.tag === "selfhost");
+    const proxy = doc.outbounds.find((o: any) => o.tag === "proxy");
+    expect(selfhost.interrupt_exist_connections).toBe(false);
+    expect(proxy.interrupt_exist_connections).toBe(true);
+  });
 });

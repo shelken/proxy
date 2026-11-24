@@ -159,7 +159,7 @@ IP server      → ip_cidr（v4 /32、v6 /128）
 
 ### 实例复用
 
-服务端直接复用客户端的装配管线（`collect_nodes` / `finalize` / `populate_selectors`），因此「节点标签分配、策略组展开、空组跳过」在两个形态下语义一致。策略组匹配不到节点时整组跳过并告警，同时剪掉其它组对它的引用（含 `default`），并将指向该组的路由规则与 DNS detour 回退到 `proxy`（再回退 `direct`），避免产物留下悬空 tag 触发 sing-box `dependency[...] not found` 致命错误；底模自带的 `endpoints`（如 iOS 的 `ts-ep`）与出站共用标签空间但不属于无节点分组，保持原样不回退
+服务端直接复用装配管线（`collect_nodes` / `finalize` / `populate_selectors`），底模声明的静态出站与 `endpoints`（如 `direct` 及其自定义字段、iOS 的 `ts-ep`）原样保留并可被策略组直接引用，策略组其它字段按底模原样透传（不擅自回填 `interrupt_exist_connections`）。策略组匹配不到节点时整组跳过并告警，同时剪掉其它组对它的引用（含 `default`），并将指向该组的悬空出站引用（路由规则、`route.final`、DNS / `http_clients` / `ntp` detour、`rule_set.download_detour`、`clash_api.external_ui_download_detour`）依次回退到 `route.final`、`proxy` 或底模直连出站，避免产物留下悬空 tag 触发 sing-box `dependency[...] not found` 致命错误
 
 ## 6. 合并机制
 
@@ -237,7 +237,7 @@ sbtools encode -s https://sub.example.com
 
 ### 7.2 overlay 的安全边界
 
-密钥永不出本机，但 overlay 会送到服务端并在那里被 CLI 解析。sing-box 的 `merge` 会**读取服务器本地文件并内联进结果**，因此以下字段在客户端就被拒绝（含 ECH 等嵌套位置）
+密钥永不出本机，但 overlay 会送到服务端并在那里被 CLI 解析。sing-box 的 `merge` 会**读取服务器本地文件并内联进结果**，因此以下字段在客户端 `encode` 与服务端 `parse_payload` 均被拒绝（含 ECH 等嵌套位置）
 
 ```text
 certificate_path

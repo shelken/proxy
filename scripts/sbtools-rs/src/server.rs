@@ -1,6 +1,6 @@
 //! 服务端：`sbtools server` — 解密客户端载荷、装配节点、调用官方 sing-box CLI 合并并响应。
 
-use crate::assemble::{self, AssembleInput};
+use crate::assemble;
 use crate::crypto;
 use crate::kernel;
 use crate::logging::{self, Level};
@@ -30,26 +30,43 @@ struct Payload {
     template_url: Option<String>,
 }
 
-/// 解析解密后的 JSON 载荷。结构由客户端 `config.rs::validate` 保证，仍做防御性校验。
+fn parse_string_list(v: &Value, field: &str) -> Result<Vec<String>, String> {
+    match &v[field] {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("载荷 {field}[{i}] 必须是字符串"))
+            })
+            .collect(),
+        _ => Err(format!("载荷 {field} 必须是字符串数组")),
+    }
+}
+
+/// 解析解密后的 JSON 载荷。公钥经 `/pubkey` 公开，客户端校验可被绕过，服务端必须独立执行完整安全校验。
 fn parse_payload(plaintext: &[u8]) -> Result<Payload, String> {
     let v: Value =
         serde_json::from_slice(plaintext).map_err(|e| format!("载荷 JSON 解析失败: {e}"))?;
     if !v.is_object() {
         return Err("载荷顶层必须是 JSON Object".into());
     }
-    let subs: Vec<String> = v["subs"].as_array().map_or_default(|a| {
-        a.iter()
-            .filter_map(|s| s.as_str().map(str::to_string))
-            .collect()
-    });
-    let nodes: Vec<String> = v["nodes"].as_array().map_or_default(|a| {
-        a.iter()
-            .filter_map(|s| s.as_str().map(str::to_string))
-            .collect()
-    });
+    let subs = parse_string_list(&v, "subs")?;
+    for (i, sub) in subs.iter().enumerate() {
+        let trimmed = sub.trim();
+        if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+            return Err(format!("载荷 subs[{i}] 必须是 http(s) URL"));
+        }
+    }
+    let nodes = parse_string_list(&v, "nodes")?;
     let overlay = match &v["overlay"] {
         Value::Null => None,
-        ov if ov.is_object() => Some(ov.clone()),
+        ov if ov.is_object() => {
+            crate::config::reject_path_fields(ov).map_err(|e| format!("overlay 校验失败: {e}"))?;
+            Some(ov.clone())
+        }
         other => return Err(format!("overlay 顶层必须是 JSON Object，当前: {other}")),
     };
     let template_url = match &v["template_url"] {
@@ -78,21 +95,16 @@ fn parse_payload(plaintext: &[u8]) -> Result<Payload, String> {
 fn assemble_base(
     payload: &Payload,
 ) -> Result<(Value, Option<Value>, template::TemplateSource), String> {
-    let mut sources: Vec<String> = Vec::with_capacity(payload.subs.len() + payload.nodes.len());
-    sources.extend(payload.subs.iter().cloned());
-    sources.extend(payload.nodes.iter().cloned());
-
-    let input = AssembleInput {
-        sources: sources.join("|"),
-        fetch_subscription: Some(Box::new(fetch_subscription_bounded)),
-    };
-    let nodes = assemble::collect_nodes(&input.sources, &input)
+    let nodes = assemble::collect_nodes(&payload.subs, &payload.nodes, fetch_subscription_bounded)
         .map_err(|e| format!("节点解析失败: {e}"))?;
 
     let (mut tpl, source) = template::load_template(payload.template_url.as_deref())
         .map_err(|e| format!("底模加载失败: {e}"))?;
-    let direct_layer =
-        assemble::generate_node_direct_rule(&nodes).map(|rule| json!({"route": {"rules": [rule]}}));
+    let direct_tag = assemble::direct_outbound_tag(&tpl)
+        .unwrap_or("direct")
+        .to_string();
+    let direct_layer = assemble::generate_node_direct_rule(&nodes, &direct_tag)
+        .map(|rule| json!({"route": {"rules": [rule]}}));
     assemble::finalize(&mut tpl, nodes).map_err(|e| format!("策略组装配失败: {e}"))?;
     Ok((tpl, direct_layer, source))
 }
@@ -678,5 +690,57 @@ mod tests {
         let v2: Value = serde_json::from_str(&merged2).unwrap();
         assert_eq!(v2["log"]["level"], json!("debug"));
         assert!(v2["inbounds"].is_array(), "底模入站不应被 overlay 抹掉");
+    }
+
+    #[test]
+    fn parse_payload_rejects_overlay_forbidden_path_fields_and_bad_subs() {
+        for overlay in [
+            json!({"outbounds": [{"type": "ssh", "tag": "x", "private_key_path": "/etc/passwd"}]}),
+            json!({"inbounds": [{"type": "http", "tls": {"certificate_path": "/etc/passwd"}}]}),
+            json!({"outbounds": [{"type": "anytls", "tls": {"ech": {"config_path": "/etc/passwd"}}}]}),
+        ] {
+            let payload = json!({
+                "subs": [],
+                "nodes": ["hy2://pass@192.0.2.1:8388#a"],
+                "overlay": overlay,
+            });
+            let err = parse_payload(&serde_json::to_vec(&payload).unwrap())
+                .expect_err("服务端必须拒绝含路径字段的 overlay");
+            assert!(err.contains("禁用字段"), "实际: {err}");
+        }
+
+        let bad_sub = json!({
+            "subs": ["file:///etc/passwd"],
+            "nodes": [],
+        });
+        let err = parse_payload(&serde_json::to_vec(&bad_sub).unwrap())
+            .expect_err("服务端必须拒绝非 http(s) 订阅 URL");
+        assert!(err.contains("http"), "实际: {err}");
+
+        let non_str = json!({
+            "subs": [],
+            "nodes": [123],
+        });
+        let err = parse_payload(&serde_json::to_vec(&non_str).unwrap())
+            .expect_err("nodes 含非字符串项必须报错");
+        assert!(err.contains("nodes"), "实际: {err}");
+    }
+
+    #[test]
+    fn node_tag_with_pipe_survives_server_assembly() {
+        let payload = Payload {
+            subs: vec![],
+            nodes: vec!["hy2://pass@192.0.2.1:8388#香港|IEPL".into()],
+            overlay: None,
+            template_url: None,
+        };
+        let (base, _, _) = assemble_base(&payload).expect("含竖线的节点标签不应被截断");
+        let tags: Vec<&str> = base["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| o["tag"].as_str())
+            .collect();
+        assert!(tags.contains(&"香港|IEPL"), "实际 tags: {tags:?}");
     }
 }
