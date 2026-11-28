@@ -1,0 +1,53 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "graph.facebook.com",
+        "graph.oculus.com",
+        "graph.fbpigeon.com",
+        "b-graph.facebook.com",
+        "b-graph-fallback.facebook.com",
+        "graph-fallback.facebook.com",
+        "z-m-graph.facebook.com",
+        "graph.m-freeway.com",
+        "meta.graph.meta.com",
+        "realitylabs-graph.facebook.com",
+        "edge-mqtt.facebook.com",
+        "mqtt-mini.facebook.com",
+        "portal.fb.com",
+        "gateway.facebook.com",
+        "rupload.facebook.com",
+        "shortwave.facebook.com",
+        "ep1.facebook.com",
+        "ep2.facebook.com",
+        "ep6.facebook.com",
+        "ep7.facebook.com",
+        "ep8.facebook.com",
+        "ep9.facebook.com",
+        "beacons.gvt2.com",
+        "beacons.gcp.gvt2.com",
+        "beacons5.gvt2.com"
+      ]
+    },
+    {
+      "domain_suffix": [
+        "binoculus.com",
+        "buyoculus.com",
+        "ocul.us",
+        "oculus-china.com",
+        "oculus2014.com",
+        "oculus3d.com",
+        "oculusblog.com",
+        "oculusbrand.com",
+        "oculuscasino.net",
+        "oculusconnect.com",
+        "oculusdiving.com",
+        "oculusforbusiness.com",
+        "oculusrift.com",
+        "oculusvr.com",
+        "powersunitedvr.com"
+      ]
+    }
+  ]
+}

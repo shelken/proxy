@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        "mega.nz",
+        "mega.io",
+        "mega.co.nz"
+      ]
+    }
+  ]
+}
